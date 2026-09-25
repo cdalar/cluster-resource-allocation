@@ -1,0 +1,29 @@
+# Read-only access needed by discover.py. Bind to the user/service account that runs discovery.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resource-discovery-read
+rules:
+- apiGroups: [""]
+  resources: [nodes, namespaces, pods, resourcequotas, limitranges]
+  verbs: [get, list]
+- apiGroups: [autoscaling]
+  resources: [horizontalpodautoscalers]
+  verbs: [get, list]
+- apiGroups: [metrics.k8s.io]
+  resources: [pods]
+  verbs: [get, list]
+---
+# Prometheus queries through the API server service proxy (Rancher Monitoring)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resource-discovery-prometheus
+  namespace: cattle-monitoring-system
+rules:
+- apiGroups: [""]
+  resources: [services/proxy]
+  resourceNames: ["http:rancher-monitoring-prometheus:9090"]
+  verbs: [get]
+# On the Rancher local cluster only (for --rancher-local-context), additionally:
+#   apiGroups: [management.cattle.io], resources: [projects, clusters], verbs: [get, list]

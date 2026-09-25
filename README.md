@@ -16,6 +16,12 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 | [Open questions](docs/open-questions.md) | Items to resolve during discovery |
 | [ADRs](docs/adr/) | Architecture decision records |
 
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace |
+
 ## Status
 
 Draft — design phase.

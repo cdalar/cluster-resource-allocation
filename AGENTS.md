@@ -31,3 +31,5 @@ several namespaces each), plus some AKS clusters.
   After changing the chart: `helm lint charts/cluster-resource-report`.
 - Keep `discovery/README.md`, `discovery/rbac.yaml` and the chart (values, RBAC, README) in sync with the code.
 - Test against a throwaway cluster, never against production kubeconfig contexts.
+- CI (`.github/workflows/image.yml`) builds the image on pushes to `main` that touch `discovery/` or `charts/`.
+  Releases are tags `vX.Y.Z` that must match `appVersion` in `charts/cluster-resource-report/Chart.yaml`.

@@ -15,15 +15,46 @@ The dashboard shows:
 
 The page is self-contained, with no CDN or external assets, so it works in air-gapped clusters.
 
-## 1. Build and push the image
+## 1. Image
 
-The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the discovery code.
+The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the discovery code, built for
+`linux/amd64` and `linux/arm64`.
+
+### Built by CI
+
+`.github/workflows/image.yml` runs the unit tests and `helm lint`, then builds the image and pushes it to
+`ghcr.io/cdalar/cluster-resource-report`:
+
+| Trigger | Image tags |
+|---|---|
+| Push to `main` that touches `discovery/`, `charts/` or the workflow | `main`, `sha-<short-sha>` |
+| Git tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest` |
+| Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
+
+To release, set `appVersion` (and `version`) in `Chart.yaml`, push that commit, then tag it:
+`git tag v0.1.0 && git push origin v0.1.0`. The workflow fails if the tag and `appVersion` differ. The chart's
+default image tag is its `appVersion`.
+
+The repository is private, so the GHCR package is private too. Clusters pulling from GHCR need a pull secret, for
+example with a token that has `read:packages`:
+
+```bash
+kubectl -n resource-report create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<token>
+helm upgrade --install ... --set 'imagePullSecrets[0].name=ghcr-pull'
+```
+
+Most on-prem clusters pull from an internal registry instead. In that case, mirror the image
+(e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.1.0 registry.example.com/platform/cluster-resource-report:0.1.0`)
+and set `image.repository`.
+
+### Build locally
 
 ```bash
 cd discovery
 docker build -t registry.example.com/platform/cluster-resource-report:0.1.0 .
 docker push registry.example.com/platform/cluster-resource-report:0.1.0
-# other architecture: docker buildx build --platform linux/arm64 ...   (KUBECTL_VERSION is a build arg)
+# KUBECTL_VERSION is a build arg
 ```
 
 ## 2. Install
@@ -32,7 +63,7 @@ docker push registry.example.com/platform/cluster-resource-report:0.1.0
 helm upgrade --install resource-report charts/cluster-resource-report \
   -n resource-report --create-namespace \
   --set image.repository=registry.example.com/platform/cluster-resource-report \
-  --set image.tag=0.1.0
+  --set image.tag=0.1.0          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
 ```
 
 On a Rancher-managed cluster you can also install it from the Rancher UI (Apps → Charts, from a Git or Helm repo),

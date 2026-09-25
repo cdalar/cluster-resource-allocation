@@ -22,6 +22,12 @@ rules:
   - apiGroups: [metrics.k8s.io]
     resources: [pods]
     verbs: [get, list]
+  {{- if .Values.rancher.isLocalCluster }}
+  # Rancher local cluster: Project and cluster display names
+  - apiGroups: [management.cattle.io]
+    resources: [projects, clusters]
+    verbs: [get, list]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

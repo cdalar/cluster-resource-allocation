@@ -25,5 +25,5 @@ rules:
   resources: [services/proxy]
   resourceNames: ["http:rancher-monitoring-prometheus:9090"]
   verbs: [get]
-# On the Rancher local cluster only (for --rancher-local-context), additionally:
+# On the Rancher local cluster only (for --rancher-local-context / --rancher-local-self), additionally:
 #   apiGroups: [management.cattle.io], resources: [projects, clusters], verbs: [get, list]

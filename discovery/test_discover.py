@@ -66,6 +66,14 @@ class Classify(unittest.TestCase):
         self.assertEqual(classify("payments-api", "payments", True, rx), "tenant")
         self.assertEqual(classify("default", "", False, rx), "unassigned")
 
+    def test_rancher_bookkeeping_namespaces_are_system(self):
+        from discover import DEFAULT_SYSTEM_NS_REGEX
+        rx = re.compile(DEFAULT_SYSTEM_NS_REGEX)
+        for name in ("local", "p-7678f", "local-p-7678f", "c-m-474nq8vf", "c-m-474nq8vf-p-lcjjj", "user-lvdk5",
+                     "u-37ezc6vbwo"):
+            self.assertEqual(classify(name, "", False, rx), "system", name)
+        self.assertEqual(classify("local-payments", "", False, rx), "unassigned")
+
 
 class Aggregate(unittest.TestCase):
     def test_projects_and_efficiency(self):
@@ -87,6 +95,30 @@ class Aggregate(unittest.TestCase):
         out = aggregate_projects([r])
         self.assertEqual(out[0]["project_key"], "ns:legacy")
         self.assertEqual(out[0]["project"], "(no project) legacy")
+
+
+class RancherLocalSelf(unittest.TestCase):
+    def run_collect(self, argv):
+        from unittest import mock
+        import discover
+        args = discover.build_parser().parse_args(argv)
+        with mock.patch.object(discover, "load_rancher_projects", return_value=({}, {})) as load, \
+                mock.patch.object(discover, "collect_cluster", return_value=([], {"cluster": "x"})):
+            discover.collect(args)
+        return load
+
+    def test_reads_names_from_the_scanned_cluster(self):
+        self.run_collect(["--rancher-local-self"]).assert_called_once_with(None, None)
+        self.run_collect(["--rancher-local-self", "--context", "rancher"]).assert_called_once_with("rancher", None)
+
+    def test_not_loaded_without_a_source(self):
+        self.run_collect([]).assert_not_called()
+
+    def test_rejects_ambiguous_combinations(self):
+        for argv in (["--rancher-local-self", "--context", "a", "--context", "b"],
+                     ["--rancher-local-self", "--rancher-local-context", "local"]):
+            with self.assertRaises(ValueError):
+                self.run_collect(argv)
 
 
 class LogCapture(unittest.TestCase):

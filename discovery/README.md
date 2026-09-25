@@ -19,6 +19,9 @@ Read-only. Needs only Python 3.8+ and `kubectl` — no extra packages.
 # Same, but the Rancher local cluster via its own kubeconfig file (downloaded from Rancher)
 ./discover.py --context onprem-prod-01 --rancher-local-kubeconfig ~/Downloads/local.yaml
 
+# Scanning the Rancher local cluster itself: read the names from it
+./discover.py --context rancher-local --rancher-local-self
+
 # AKS cluster not managed by Rancher: group namespaces by a label instead of Rancher Project
 ./discover.py --context aks-prod --project-label project
 
@@ -39,7 +42,7 @@ Rancher access.
 | Kubernetes API | nodes (allocatable), namespaces (Rancher project), pods (requests/limits), ResourceQuotas, LimitRanges, HPAs | Yes |
 | metrics-server | usage snapshot ("now") | Optional |
 | Prometheus (default: Rancher Monitoring via API server service proxy) | CPU/memory usage avg / P95 / max and peak requests over `--window` | Optional |
-| Rancher local cluster (`--rancher-local-context` and/or `--rancher-local-kubeconfig`) | Project and cluster display names | Optional |
+| Rancher local cluster (`--rancher-local-context` and/or `--rancher-local-kubeconfig`, or `--rancher-local-self` when scanning it) | Project and cluster display names | Optional |
 
 Permissions: see [`rbac.yaml`](rbac.yaml).
 
@@ -116,3 +119,5 @@ python3 -m unittest -v test_discover test_server
 The script was verified end-to-end on a k3s cluster with fake Rancher Project objects, a kube-prometheus-stack
 installed under Rancher Monitoring's service name, and fixture workloads (sidecars, init containers,
 BestEffort, pending, HPA, existing quota/LimitRange).
+It was also run against a real Rancher v2.15.2: the dashboard on the Rancher local cluster (k3s, with
+`rancher.isLocalCluster`) and on an imported k3s cluster, with stream Projects on both.

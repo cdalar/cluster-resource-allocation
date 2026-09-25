@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+---
+# Read-only, cluster-wide: what discover.py reads
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, resourcequotas, limitranges]
+    verbs: [get, list]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "crr.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "crr.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if include "crr.promProxy" . }}
+---
+# Prometheus queries through the API server service proxy, limited to that one service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "crr.fullname" . }}-prometheus
+  namespace: {{ include "crr.promNamespace" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    resourceNames: [{{ include "crr.promServiceName" . | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "crr.fullname" . }}-prometheus
+  namespace: {{ include "crr.promNamespace" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "crr.fullname" . }}-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "crr.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

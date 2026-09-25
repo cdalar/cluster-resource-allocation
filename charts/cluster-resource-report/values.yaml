@@ -1,0 +1,90 @@
+# Image built from discovery/Dockerfile. Push it to a registry your clusters can pull from.
+image:
+  repository: ghcr.io/cdalar/cluster-resource-report
+  tag: ""            # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Display name of this cluster. Default: Rancher cluster name (if rancher.localKubeconfigSecret is set),
+# otherwise "in-cluster".
+clusterName: ""
+
+collection:
+  interval: 30m      # time between collections
+  window: 7d         # Prometheus usage history window (Rancher Monitoring keeps ~10d by default)
+  step: 5m           # Prometheus subquery resolution; use 15m on large clusters
+  projectLabel: ""   # namespace label to group by when there is no Rancher Project (e.g. non-Rancher AKS)
+  systemNamespaceRegex: ""   # override the built-in list of platform/system namespaces
+
+prometheus:
+  enabled: true
+  # Reached through the API server service proxy: <namespace>/<scheme>:<service>:<port>.
+  # The chart grants services/proxy on exactly this service. Default: Rancher Monitoring.
+  service: cattle-monitoring-system/http:rancher-monitoring-prometheus:9090
+  # Or a direct URL (then `service` is not used and no proxy permission is created)
+  url: ""
+  # Optional bearer token for `url`, from an existing secret
+  tokenSecret:
+    name: ""
+    key: token
+
+rancher:
+  # Existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
+  # Rancher Project / cluster display names instead of IDs (p-xxxxx). Needs read on
+  # projects.management.cattle.io and clusters.management.cattle.io.
+  localKubeconfigSecret:
+    name: ""
+    key: kubeconfig
+  localContext: ""   # context inside that kubeconfig (default: its current-context)
+
+service:
+  type: ClusterIP
+  port: 80
+
+# The dashboard has no login of its own. Prefer access through the Rancher service proxy or
+# kubectl port-forward (see NOTES); if you enable an ingress, put authentication in front of it.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: resource-report.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Keep the latest report across pod restarts. Without it, a new pod starts with an empty dashboard
+# until the first collection finishes.
+persistence:
+  enabled: false
+  storageClass: ""
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi    # raise for clusters with many thousands of pods
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+priorityClassName: ""
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

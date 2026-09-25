@@ -79,6 +79,27 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(out[0]["namespaces"], 2)
         self.assertAlmostEqual(out[0]["cpu_requests"], 4.0)
         self.assertEqual(out[0]["cpu_request_efficiency_pct"], 25.0)
+        self.assertEqual(out[0]["project_key"], "c-1:p-1")
+
+    def test_namespace_without_project_is_its_own_project(self):
+        r = {k: 0.0 for k in NS_NUMERIC}
+        r.update(cluster="c1", category="unassigned", project_id="", project="", namespace="legacy")
+        out = aggregate_projects([r])
+        self.assertEqual(out[0]["project_key"], "ns:legacy")
+        self.assertEqual(out[0]["project"], "(no project) legacy")
+
+
+class LogCapture(unittest.TestCase):
+    def test_collect_captures_only_its_own_thread(self):
+        import threading
+        import discover
+        lines = []
+        discover._log_local.sink = lines
+        t = threading.Thread(target=discover.log, args=("from another thread",))
+        t.start(); t.join()
+        discover.log("from this thread")
+        discover._log_local.sink = None
+        self.assertEqual(lines, ["from this thread"])
 
 
 if __name__ == "__main__":

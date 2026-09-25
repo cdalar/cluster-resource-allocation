@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -43,8 +44,14 @@ _SUFFIXES = [
 ]
 
 
+_log_local = threading.local()   # per-thread capture of log lines during collect()
+
+
 def log(msg):
-    print(msg, file=sys.stderr)
+    print(msg, file=sys.stderr, flush=True)
+    sink = getattr(_log_local, "sink", None)
+    if sink is not None:
+        sink.append(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +223,19 @@ def classify(ns_name, project_name, has_project, system_re):
     return "tenant" if has_project else "unassigned"
 
 
+def context_label(context):
+    """Name for a kubectl context; None means the current context, or the in-cluster service account."""
+    if context:
+        return context
+    try:
+        return kubectl(None, ["config", "current-context"]).strip() or "in-cluster"
+    except KubectlError:
+        return "in-cluster"
+
+
 def collect_cluster(context, args, rancher_projects, rancher_clusters):
-    log(f"[{context}] collecting")
+    label = context_label(context)
+    log(f"[{label}] collecting")
     nodes = kget(context, "nodes", all_namespaces=False)
     namespaces = kget(context, "namespaces", all_namespaces=False)
     pods = kget(context, "pods")
@@ -248,7 +266,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                    category=classify(name, project_name, bool(project_id), system_re))
         ns_rows[name] = row
 
-    cluster_name = rancher_clusters.get(rancher_cluster_id, context) if rancher_cluster_id else context
+    cluster_name = args.cluster_name or rancher_clusters.get(rancher_cluster_id) or label
     for row in ns_rows.values():
         row["cluster"] = cluster_name
 
@@ -296,7 +314,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                 row["cpu_usage_now"] += parse_quantity(c["usage"].get("cpu"))
                 row["mem_usage_now_gib"] += parse_quantity(c["usage"].get("memory")) / GIB
     except (KubectlError, json.JSONDecodeError) as e:
-        log(f"[{context}] metrics-server unavailable, skipping usage snapshot: {first_line(e)}")
+        log(f"[{label}] metrics-server unavailable, skipping usage snapshot: {first_line(e)}")
 
     # Prometheus history
     prom_coverage_days = ""
@@ -306,9 +324,9 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
             lowest = prom.scalar("min(prometheus_tsdb_lowest_timestamp_seconds)")
             if lowest:
                 prom_coverage_days = round((datetime.now(timezone.utc).timestamp() - lowest) / 86400, 1)
-                log(f"[{context}] prometheus has {prom_coverage_days} days of data (window {args.window})")
+                log(f"[{label}] prometheus has {prom_coverage_days} days of data (window {args.window})")
                 if prom_coverage_days < window_days(args.window):
-                    log(f"[{context}] WARNING: less history than --window; P95/max cover only available data")
+                    log(f"[{label}] WARNING: less history than --window; P95/max cover only available data")
             for key, q in prom_queries(args.window, args.step).items():
                 col = key + ("_gib" if key.startswith("mem_") else "")
                 div = GIB if key.startswith("mem_") else 1
@@ -316,7 +334,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                     if ns in ns_rows:
                         ns_rows[ns][col] = v / div
         except (KubectlError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
-            log(f"[{context}] prometheus unavailable, skipping history: {first_line(e)}")
+            log(f"[{label}] prometheus unavailable, skipping history: {first_line(e)}")
 
     # kube-state-metrics only exports app-container requests, so the Prometheus peak misses init/sidecar
     # containers; never report a peak below the current effective requests.
@@ -324,7 +342,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
         row["cpu_requests_peak"] = max(row["cpu_requests_peak"], row["cpu_requests"])
         row["mem_requests_peak_gib"] = max(row["mem_requests_peak_gib"], row["mem_requests_gib"])
 
-    cluster_row = summarize_cluster(cluster_name, context, nodes, ns_rows.values(), prom_coverage_days)
+    cluster_row = summarize_cluster(cluster_name, label, nodes, ns_rows.values(), prom_coverage_days)
     return list(ns_rows.values()), cluster_row
 
 
@@ -418,6 +436,7 @@ def aggregate_projects(ns_rows):
         key = (r["cluster"], r["project_id"] or f"ns:{r['namespace']}")
         a = agg.setdefault(key, {
             "cluster": r["cluster"], "category": r["category"], "project_id": r["project_id"],
+            "project_key": key[1],
             "project": r["project"] or f"(no project) {r['namespace']}", "namespaces": 0,
             **{k: 0.0 for k in PROJECT_NUMERIC},
         })
@@ -482,10 +501,12 @@ def print_summary(clusters, projects, top):
                       f"{p['mem_usage_p95_gib'] or p['mem_usage_now_gib']:>8.2f}")
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--context", action="append", default=[],
-                    help="kubectl context to scan (repeatable). Default: current context")
+                    help="kubectl context to scan (repeatable). Default: current context, or in-cluster")
+    ap.add_argument("--cluster-name",
+                    help="display name for the cluster (default: Rancher cluster name, else the context name)")
     ap.add_argument("--rancher-local-context",
                     help="context of the Rancher local (management) cluster, to resolve Project display names")
     ap.add_argument("--rancher-local-kubeconfig",
@@ -502,48 +523,78 @@ def main():
     ap.add_argument("--step", default="5m", help="subquery resolution (default: 5m)")
     ap.add_argument("--system-ns-regex", default=DEFAULT_SYSTEM_NS_REGEX,
                     help="namespaces treated as platform/system")
+    return ap
+
+
+def collect(args):
+    """Run one collection over all contexts. Returns a report dict; raises ValueError on bad arguments."""
+    lines = []
+    _log_local.sink = lines
+    started = datetime.now(timezone.utc)
+    try:
+        local_kubeconfig = (os.path.expanduser(args.rancher_local_kubeconfig)
+                            if args.rancher_local_kubeconfig else None)
+        if local_kubeconfig and not os.path.isfile(local_kubeconfig):
+            raise ValueError(f"--rancher-local-kubeconfig: file not found: {local_kubeconfig}")
+
+        rancher_projects, rancher_clusters = {}, {}
+        if args.rancher_local_context or local_kubeconfig:
+            try:
+                rancher_projects, rancher_clusters = load_rancher_projects(args.rancher_local_context,
+                                                                           local_kubeconfig)
+                log(f"loaded {len(rancher_projects)} Rancher projects, {len(rancher_clusters)} clusters")
+            except KubectlError as e:
+                log(f"could not read Rancher projects: {first_line(e)}")
+
+        all_ns, all_clusters = [], []
+        for ctx in args.context or [None]:
+            try:
+                ns_rows, cluster_row = collect_cluster(ctx, args, rancher_projects, rancher_clusters)
+            except KubectlError as e:
+                log(f"[{ctx or 'current'}] FAILED: {first_line(e)}")
+                continue
+            all_ns.extend(ns_rows)
+            all_clusters.append(cluster_row)
+    finally:
+        _log_local.sink = None
+
+    all_ns.sort(key=lambda r: (r["cluster"], r["category"], r["project"], r["namespace"]))
+    finished = datetime.now(timezone.utc)
+    return {
+        "collected_at": finished.isoformat(timespec="seconds"),
+        "duration_s": round((finished - started).total_seconds(), 1),
+        "settings": {"window": args.window, "step": args.step, "prometheus": args.prometheus},
+        "clusters": all_clusters,
+        "projects": aggregate_projects(all_ns),
+        "namespaces": all_ns,
+        "log": lines,
+    }
+
+
+def write_report_csvs(report, out):
+    os.makedirs(out, exist_ok=True)
+    write_csv(os.path.join(out, "namespaces.csv"), NS_FIELDS, report["namespaces"])
+    write_csv(os.path.join(out, "projects.csv"), PROJECT_FIELDS, report["projects"])
+    write_csv(os.path.join(out, "clusters.csv"), CLUSTER_FIELDS, report["clusters"])
+
+
+def main():
+    ap = build_parser()
     ap.add_argument("--out", default="discovery-output", help="output directory (default: discovery-output)")
     ap.add_argument("--top", type=int, default=15, help="projects per cluster in console summary")
     args = ap.parse_args()
 
-    contexts = args.context or [kubectl(None, ["config", "current-context"]).strip()]
-
-    local_kubeconfig = os.path.expanduser(args.rancher_local_kubeconfig) if args.rancher_local_kubeconfig else None
-    if local_kubeconfig and not os.path.isfile(local_kubeconfig):
-        log(f"--rancher-local-kubeconfig: file not found: {local_kubeconfig}")
+    try:
+        report = collect(args)
+    except ValueError as e:
+        log(str(e))
         return 2
-
-    rancher_projects, rancher_clusters = {}, {}
-    if args.rancher_local_context or local_kubeconfig:
-        try:
-            rancher_projects, rancher_clusters = load_rancher_projects(args.rancher_local_context, local_kubeconfig)
-            log(f"loaded {len(rancher_projects)} Rancher projects, {len(rancher_clusters)} clusters")
-        except KubectlError as e:
-            log(f"could not read Rancher projects: {first_line(e)}")
-
-    all_ns, all_clusters = [], []
-    for ctx in contexts:
-        try:
-            ns_rows, cluster_row = collect_cluster(ctx, args, rancher_projects, rancher_clusters)
-        except KubectlError as e:
-            log(f"[{ctx}] FAILED: {first_line(e)}")
-            continue
-        all_ns.extend(ns_rows)
-        all_clusters.append(cluster_row)
-
-    if not all_clusters:
+    if not report["clusters"]:
         log("no cluster data collected")
         return 1
 
-    projects = aggregate_projects(all_ns)
-    all_ns.sort(key=lambda r: (r["cluster"], r["category"], r["project"], r["namespace"]))
-
-    os.makedirs(args.out, exist_ok=True)
-    write_csv(os.path.join(args.out, "namespaces.csv"), NS_FIELDS, all_ns)
-    write_csv(os.path.join(args.out, "projects.csv"), PROJECT_FIELDS, projects)
-    write_csv(os.path.join(args.out, "clusters.csv"), CLUSTER_FIELDS, all_clusters)
-
-    print_summary(all_clusters, projects, args.top)
+    write_report_csvs(report, args.out)
+    print_summary(report["clusters"], report["projects"], args.top)
     print(f"\nCSV written to {args.out}/ (namespaces.csv, projects.csv, clusters.csv)")
     return 0
 

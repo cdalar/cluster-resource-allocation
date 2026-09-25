@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cluster-resource-report
+description: Collects resource requests, limits and usage per Rancher Project and namespace, and serves a web dashboard.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [kubernetes, rancher, resource-quota, capacity, showback]

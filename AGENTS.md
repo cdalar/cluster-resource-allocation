@@ -18,14 +18,16 @@ several namespaces each), plus some AKS clusters.
 |---|---|
 | `docs/` | Design and process docs (numbered), `open-questions.md` |
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
-| `discovery/` | `discover.py`: read-only baseline of requests, limits and usage per cluster / project / namespace |
+| `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage |
+| `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 
 ## Conventions
 
 - Docs are Markdown and keep the existing structure: numbered files, tables for comparisons, Mermaid for diagrams.
   Update `README.md` when adding a doc or tool, and `docs/open-questions.md` when a question is answered or raised.
-- `discovery/discover.py` uses the Python standard library and `kubectl` only; no third-party packages.
-  It must stay read-only against clusters.
-- Run tests after changing the script: `cd discovery && python3 -m unittest -v test_discover`.
-- Keep `discovery/README.md` (columns, options, caveats) and `discovery/rbac.yaml` in sync with the script.
+- `discovery/` code uses the Python standard library and `kubectl` only; no third-party packages.
+  It must stay read-only against clusters. The dashboard page is self-contained (no CDN) for air-gapped clusters.
+- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server`.
+  After changing the chart: `helm lint charts/cluster-resource-report`.
+- Keep `discovery/README.md`, `discovery/rbac.yaml` and the chart (values, RBAC, README) in sync with the code.
 - Test against a throwaway cluster, never against production kubeconfig contexts.

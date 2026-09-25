@@ -1,10 +1,11 @@
 # Image for the in-cluster collector + dashboard (server.py). Build context: discovery/
 FROM alpine:3.22 AS kubectl
 ARG KUBECTL_VERSION=v1.37.1
-ARG TARGETARCH=amd64
-RUN apk add --no-cache curl \
- && curl -fsSLo /kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
- && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl.sha256")  /kubectl" | sha256sum -c - \
+# set by BuildKit per target platform; amd64 for the legacy builder
+ARG TARGETARCH
+RUN ARCH="${TARGETARCH:-amd64}" && apk add --no-cache curl \
+ && curl -fsSLo /kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
+ && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl.sha256")  /kubectl" | sha256sum -c - \
  && chmod 0755 /kubectl
 
 FROM python:3.13-slim

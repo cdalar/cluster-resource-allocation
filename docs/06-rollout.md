@@ -12,6 +12,9 @@ coordinated with the requests/limits initiative.
 - Collect budgets per project and cost data for unit rates.
 - Check existing tooling: Rancher Monitoring, policy engine, GitOps (Fleet/Argo/Flux), Terraform.
 
+Tooling: [`discovery/discover.py`](../discovery/README.md) collects requests, limits, usage and standards
+compliance per cluster / Rancher Project / namespace.
+
 Output: baseline report + answers to [open questions](open-questions.md).
 
 ## Phase 1 — Visibility (observe only)

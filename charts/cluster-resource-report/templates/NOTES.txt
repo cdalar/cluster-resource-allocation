@@ -1,0 +1,22 @@
+The resource report is collecting every {{ .Values.collection.interval }}. The first collection starts right away.
+
+Open the dashboard:
+
+  # Port-forward
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "crr.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080/
+
+  # Or through Rancher (uses your Rancher login; <cluster-id> is e.g. c-m-xxxxx):
+  https://<rancher-host>/k8s/clusters/<cluster-id>/api/v1/namespaces/{{ .Release.Namespace }}/services/http:{{ include "crr.fullname" . }}:{{ .Values.service.port }}/proxy/
+{{- if .Values.ingress.enabled }}
+
+  # Ingress (make sure authentication is in front of it):
+  {{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+  {{- end }}
+{{- end }}
+{{- if and .Values.prometheus.enabled (not .Values.prometheus.url) }}
+
+Usage history is read from {{ .Values.prometheus.service }} via the API server proxy.
+If the dashboard shows "prometheus unavailable", check that Rancher Monitoring is installed or set prometheus.service / prometheus.url.
+{{- end }}

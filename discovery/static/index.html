@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cluster Resource Report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --track: #efeee9;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --accent-ink: #1c5cab;
+  --hover: rgba(11,11,11,0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --track: #262624;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --accent-ink: #86b6ef;
+    --hover: rgba(255,255,255,0.05);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface-1: #1a1a19;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255,255,255,0.10);
+  --track: #262624;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --accent-ink: #86b6ef;
+  --hover: rgba(255,255,255,0.05);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.muted { color: var(--text-muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input[type=search] {
+  font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--hover); }
+button:disabled { opacity: .5; cursor: default; }
+a { color: var(--accent-ink); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.banner { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); margin-bottom: 12px; font-size: 13px; }
+.banner ul { margin: 4px 0 0; padding-left: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .unit { font-size: 14px; font-weight: 400; color: var(--text-secondary); }
+.tile .note { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; margin-bottom: 16px; }
+.section { margin-bottom: 16px; }
+.section-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 16px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; background: var(--surface-1); cursor: pointer; user-select: none; font-size: 13px; }
+.chip input { margin: 0; }
+svg { display: block; max-width: 100%; height: auto; }
+svg text { fill: var(--text-secondary); font-size: 12px; }
+svg .val { fill: var(--text-primary); font-variant-numeric: tabular-nums; }
+svg .tick { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.hit { fill: transparent; cursor: default; }
+.hit:hover, .hit:focus { fill: var(--hover); outline: none; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child, th.l, td.l { text-align: left; }
+th { font-weight: 600; color: var(--text-secondary); cursor: pointer; position: sticky; top: 0; background: var(--surface-1); }
+th[aria-sort]::after { content: " ▾"; color: var(--text-muted); }
+th[aria-sort="ascending"]::after { content: " ▴"; }
+td { font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--hover); }
+tr.clickable { cursor: pointer; }
+tr.selected { background: var(--hover); }
+.flag { display: inline-flex; align-items: center; gap: 4px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+#tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; min-width: 160px; }
+#tooltip .t { color: var(--text-secondary); margin-bottom: 4px; }
+#tooltip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+#tooltip .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+#tooltip .k i { width: 12px; height: 2px; display: inline-block; }
+#tooltip b { font-variant-numeric: tabular-nums; }
+.loading { opacity: .55; transition: opacity .2s; }
+@media (max-width: 520px) { .tile .value { font-size: 22px; } .tiles { grid-template-columns: 1fr 1fr; } #search { flex: 1 1 100%; } }
+.grid2 > .card, .card { min-width: 0; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header>
+    <div>
+      <h1>Cluster resource report</h1>
+      <div class="sub" id="meta">Loading…</div>
+    </div>
+    <div class="actions">
+      <select id="cluster" aria-label="Cluster" hidden></select>
+      <button id="refresh" type="button">Collect now</button>
+      <span class="sub">CSV:
+        <a href="download/projects.csv">projects</a> ·
+        <a href="download/namespaces.csv">namespaces</a> ·
+        <a href="download/clusters.csv">clusters</a>
+      </span>
+      <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div id="banners"></div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card section">
+    <div class="section-head">
+      <div><h2>Cluster capacity by requests</h2><div class="sub">Scheduled requests vs. allocatable of schedulable nodes</div></div>
+      <div class="legend" id="capLegend"></div>
+    </div>
+    <div id="capacity"></div>
+  </div>
+
+  <div class="filters" role="group" aria-label="Filters">
+    <label class="chip"><input type="checkbox" value="tenant" checked> Tenant</label>
+    <label class="chip"><input type="checkbox" value="unassigned" checked> Unassigned</label>
+    <label class="chip"><input type="checkbox" value="system"> System</label>
+    <input type="search" id="search" placeholder="Filter projects / namespaces" aria-label="Filter projects and namespaces">
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>CPU by project</h2><div class="sub">vCPU · top 15 by requests</div></div>
+        <div class="legend" id="cpuLegend"></div>
+      </div>
+      <div id="cpuChart"></div>
+    </div>
+    <div class="card">
+      <div class="section-head">
+        <div><h2>Memory by project</h2><div class="sub">GiB · top 15 by requests</div></div>
+        <div class="legend" id="memLegend"></div>
+      </div>
+      <div id="memChart"></div>
+    </div>
+  </div>
+
+  <div class="card section">
+    <div class="section-head">
+      <div><h2>Projects</h2><div class="sub">Click a project to show its namespaces below</div></div>
+    </div>
+    <div class="table-wrap"><table id="projectsTable"></table></div>
+  </div>
+
+  <div class="card section">
+    <div class="section-head">
+      <div><h2>Namespaces</h2><div class="sub" id="nsSub">All namespaces matching the filters</div></div>
+      <button id="clearProject" type="button" hidden>Show all projects</button>
+    </div>
+    <div class="table-wrap"><table id="nsTable"></table></div>
+  </div>
+
+  <p class="sub">Requests are effective pod requests (incl. init/sidecar containers and overhead), as counted by the scheduler and ResourceQuota.
+  "Used" is P95 over the window when Prometheus is available, otherwise the current metrics-server snapshot.
+  Efficiency = used / requested.</p>
+</div>
+<div id="tooltip" role="tooltip"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const state = { data: null, status: null, cluster: null, cats: new Set(["tenant", "unassigned"]), q: "", project: null,
+                sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1] } };
+
+// ---------- formatting ----------
+const nf = (d) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
+const f0 = nf(0), f1 = nf(1), f2 = nf(2);
+function num(v, digits) {
+  if (v === "" || v === null || v === undefined) return "–";
+  const n = Number(v);
+  if (!isFinite(n)) return "–";
+  return (digits === 0 ? f0 : digits === 1 ? f1 : f2).format(n);
+}
+function smart(v) { return Math.abs(v) >= 100 ? f0.format(v) : Math.abs(v) >= 10 ? f1.format(v) : f2.format(v); }
+function ago(iso) {
+  if (!iso) return "never";
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c !== null && c !== undefined) e.append(c);
+  return e;
+}
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  return e;
+}
+const usedLabel = () => (hasPrometheus() ? "Used (P95)" : "Used (now)");
+function hasPrometheus() {
+  const c = currentClusterRow();
+  return c && c.prometheus_days_of_data !== "" && c.prometheus_days_of_data !== undefined;
+}
+const cpuUsed = (r) => (hasPrometheus() ? r.cpu_usage_p95 : r.cpu_usage_now);
+const memUsed = (r) => (hasPrometheus() ? r.mem_usage_p95_gib : r.mem_usage_now_gib);
+
+// ---------- tooltip ----------
+const tip = $("#tooltip");
+function showTip(evt, title, rows) {
+  tip.replaceChildren(el("div", { class: "t", text: title }),
+    ...rows.map(([color, label, value]) => el("div", { class: "r" },
+      el("span", { class: "k" }, color ? el("i", { style: `background:${color}` }) : null, label),
+      el("b", { text: value }))));
+  tip.style.display = "block";
+  moveTip(evt);
+}
+function moveTip(evt) {
+  let x, y;
+  if (evt.clientX !== undefined && evt.type !== "focus") { x = evt.clientX; y = evt.clientY; }
+  else { const b = evt.target.getBoundingClientRect(); x = b.left + b.width / 2; y = b.top; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - w - 8, x + 12) + "px";
+  tip.style.top = Math.max(8, y - h - 12) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+function attachTip(node, fn) {
+  node.setAttribute("tabindex", "0");
+  node.addEventListener("pointerenter", (e) => fn(e));
+  node.addEventListener("pointermove", moveTip);
+  node.addEventListener("pointerleave", hideTip);
+  node.addEventListener("focus", (e) => fn(e));
+  node.addEventListener("blur", hideTip);
+}
+
+// ---------- data selection ----------
+function currentClusterRow() {
+  if (!state.data) return null;
+  return state.data.clusters.find((c) => c.cluster === state.cluster) || state.data.clusters[0];
+}
+function matchesQuery(...fields) {
+  if (!state.q) return true;
+  return fields.some((f) => String(f || "").toLowerCase().includes(state.q));
+}
+function filteredProjects() {
+  return state.data.projects.filter((p) => p.cluster === state.cluster && state.cats.has(p.category) &&
+    (p.pods_running + p.pods_pending > 0 || p.cpu_requests > 0) &&
+    (matchesQuery(p.project, p.project_id) ||
+     state.data.namespaces.some((n) => n.cluster === p.cluster && nsProjectKey(n) === projectKey(p) && matchesQuery(n.namespace))));
+}
+function projectKey(p) { return p.project_key; }
+function nsProjectKey(n) { return n.project_id || `ns:${n.namespace}`; }
+function filteredNamespaces() {
+  return state.data.namespaces.filter((n) => n.cluster === state.cluster && state.cats.has(n.category) &&
+    (state.project ? nsProjectKey(n) === state.project : true) &&
+    (state.project || matchesQuery(n.namespace, n.project)));
+}
+
+// ---------- rendering ----------
+function renderMeta() {
+  const r = state.data, st = state.status;
+  const parts = [];
+  const c = currentClusterRow();
+  if (c) parts.push(c.cluster);
+  if (r) parts.push(`collected ${ago(r.collected_at)} (${new Date(r.collected_at).toLocaleString()})`);
+  if (r) parts.push(`window ${r.settings.window}`);
+  if (st && st.state === "collecting") parts.push("collecting now…");
+  else if (st && st.next_run) parts.push(`next ${new Date(st.next_run).toLocaleTimeString()}`);
+  $("#meta").textContent = parts.join(" · ") || "No report yet";
+  $("#refresh").disabled = !st || !st.collect_enabled || st.state === "collecting";
+}
+
+function statusBanner(kind, title, items) {
+  const color = { critical: "var(--status-critical)", serious: "var(--status-serious)", warning: "var(--status-warning)", good: "var(--status-good)" }[kind];
+  const icon = { critical: "✕", serious: "!", warning: "!", good: "✓" }[kind];
+  const b = el("div", { class: "banner", role: kind === "critical" ? "alert" : "status" },
+    el("span", { class: "flag", "aria-hidden": "true" }, el("span", { class: "dot", style: `background:${color}` }), icon),
+    el("div", {}, el("strong", { text: title }), items && items.length ? el("ul", {}, ...items.map((t) => el("li", { text: t }))) : null));
+  return b;
+}
+function renderBanners() {
+  const out = [];
+  const st = state.status, r = state.data;
+  if (st && st.last_error) out.push(statusBanner("critical", "Last collection failed — showing the previous report", [st.last_error]));
+  if (!r && st && st.state === "collecting") out.push(statusBanner("warning", "First collection is running. This page refreshes automatically."));
+  if (r && r.log && r.log.length) {
+    const relevant = r.log.filter((w) => /unavailable|WARNING|FAILED|could not/.test(w));
+    if (relevant.length) out.push(statusBanner("warning", "Collection warnings", relevant));
+  }
+  $("#banners").replaceChildren(...out);
+}
+
+function tile(label, value, unit, note, status) {
+  const v = el("div", { class: "value" }, value, unit ? el("span", { class: "unit", text: " " + unit }) : null);
+  const n = note ? el("div", { class: "note" }) : null;
+  if (n && status) {
+    const color = { serious: "var(--status-serious)", good: "var(--status-good)", warning: "var(--status-warning)" }[status];
+    n.append(el("span", { class: "flag" }, el("span", { class: "dot", style: `background:${color}` }), note));
+  } else if (n) n.textContent = note;
+  return el("div", { class: "card tile" }, el("div", { class: "label", text: label }), v, n);
+}
+function renderTiles() {
+  const c = currentClusterRow();
+  if (!c) { $("#tiles").replaceChildren(); return; }
+  const cpuSched = c.cpu_requests_total - c.cpu_requests_pending, memSched = c.mem_requests_gib_total - c.mem_requests_pending_gib;
+  const nsUsage = state.data.namespaces.filter((n) => n.cluster === c.cluster);
+  const cpuU = nsUsage.reduce((a, n) => a + (cpuUsed(n) || 0), 0), memU = nsUsage.reduce((a, n) => a + (memUsed(n) || 0), 0);
+  const missing = c.containers_no_cpu_request + c.containers_no_mem_request > 0;
+  const pctMissing = c.containers ? Math.round(100 * c.containers_no_cpu_request / c.containers) : 0;
+  $("#tiles").replaceChildren(
+    tile("Allocatable (schedulable nodes)", smart(c.alloc_cpu_schedulable), "vCPU", `${smart(c.alloc_mem_gib_schedulable)} GiB · ${c.nodes_schedulable} of ${c.nodes} nodes`),
+    tile("CPU requested", `${num(c.cpu_requests_pct_of_schedulable, 0)}%`, "", `${smart(cpuSched)} of ${smart(c.alloc_cpu_schedulable)} vCPU`),
+    tile("Memory requested", `${num(c.mem_requests_pct_of_schedulable, 0)}%`, "", `${smart(memSched)} of ${smart(c.alloc_mem_gib_schedulable)} GiB`),
+    tile(usedLabel(), smart(cpuU), "vCPU", `${smart(memU)} GiB memory`),
+    tile("Containers without CPU request", f0.format(c.containers_no_cpu_request), "",
+      missing ? `${pctMissing}% of ${f0.format(c.containers)} · ${f0.format(c.containers_no_mem_limit)} without memory limit` : `all ${f0.format(c.containers)} set`,
+      missing ? "serious" : "good"),
+    tile("Pending requests", smart(c.cpu_requests_pending), "vCPU", `${smart(c.mem_requests_pending_gib)} GiB · not scheduled`,
+      c.cpu_requests_pending > 0 ? "warning" : null),
+    tile("Unassigned namespaces", f0.format(c.namespaces_unassigned), "", "not in any Rancher Project",
+      c.namespaces_unassigned > 0 ? "warning" : null),
+  );
+}
+
+function legend(target, items) {
+  $(target).replaceChildren(...items.map(([color, label]) =>
+    el("span", {}, el("i", { class: "sw", style: `background:${color}` }), label)));
+}
+
+// rounded data-end (right side) bar, square at the baseline
+function barPath(x, y, w, h, r) {
+  if (w <= 0) return "";
+  r = Math.min(r, w, h / 2);
+  return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+// clean axis: step in {1, 2, 5} x 10^n, max rounded up to a whole step
+function niceScale(maxv, n = 4) {
+  if (!(maxv > 0)) return { max: 1, step: 0.25 };
+  const raw = maxv / n, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+  const step = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  return { max: Math.ceil(maxv / step - 1e-9) * step, step };
+}
+function widthOf(box, fallback) { return Math.max(280, Math.floor(box.clientWidth || fallback)); }
+
+function renderCapacity() {
+  const c = currentClusterRow();
+  const box = $("#capacity");
+  if (!c) { box.replaceChildren(); return; }
+  const colors = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+  const names = ["Tenant", "System", "Unassigned"];
+  legend("#capLegend", [[colors[0], "Tenant"], [colors[1], "System"], [colors[2], "Unassigned"], ["var(--track)", "Free"]]);
+  const pend = (cat, res) => state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category === cat)
+    .reduce((a, n) => a + (res === "cpu" ? n.cpu_requests_pending : n.mem_requests_pending_gib), 0);
+  const rows = [
+    ["CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable],
+    ["Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable],
+  ];
+  const W = widthOf(box, 1000), narrow = W < 640;
+  const labelW = narrow ? 0 : 70, rightW = narrow ? 0 : 210, barH = 22;
+  const rowH = narrow ? 64 : 40, barY = narrow ? 18 : 6;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${rows.length * rowH}`, width: W, height: rows.length * rowH, role: "img", "aria-label": "Cluster capacity by requests" });
+  rows.forEach(([name, unit, alloc, parts, pctOfAlloc], i) => {
+    const y = i * rowH + barY, plotW = W - labelW - rightW;
+    const total = parts.reduce((a, b) => a + Math.max(b, 0), 0);
+    const scale = plotW / Math.max(alloc, total, 1e-9);
+    const t = sv("text", { x: 0, y: narrow ? y - 6 : y + barH / 2 + 4 }); t.textContent = name; svg.append(t);
+    svg.append(sv("rect", { x: labelW, y, width: Math.max(alloc, total) * scale, height: barH, rx: 4, fill: "var(--track)" }));
+    let x = labelW;
+    parts.forEach((v, k) => {
+      if (v <= 0) return;
+      const w = Math.max(v * scale - 2, 1);
+      const isLast = parts.slice(k + 1).every((z) => z <= 0);
+      svg.append(isLast ? sv("path", { d: barPath(x, y, w, barH, 4), fill: colors[k] })
+                        : sv("rect", { x, y, width: w, height: barH, fill: colors[k] }));
+      const hit = sv("rect", { x, y: y - 4, width: w + 2, height: barH + 8, class: "hit" });
+      attachTip(hit, (e) => showTip(e, `${name} · ${names[k]}`, [[colors[k], "Requested", `${smart(v)} ${unit}`], [null, "Share of allocatable", `${num(100 * v / (alloc || 1), 1)}%`]]));
+      svg.append(hit);
+      x += v * scale;
+    });
+    if (total > alloc && alloc > 0) {   // allocatable marker when requests exceed schedulable capacity
+      const ax = labelW + alloc * scale;
+      svg.append(sv("line", { x1: ax, x2: ax, y1: y - 4, y2: y + barH + 4, stroke: "var(--text-primary)", "stroke-width": 2 }));
+    }
+    const free = alloc - total;
+    const lbl = sv("text", narrow ? { x: 0, y: y + barH + 16, class: "val" } : { x: W, y: y + barH / 2 + 4, "text-anchor": "end", class: "val" });
+    lbl.textContent = `${num(pctOfAlloc, 0)}% · ` + (free >= 0 ? `${smart(free)} ${unit} free` : `over by ${smart(-free)} ${unit}`);
+    svg.append(lbl);
+  });
+  box.replaceChildren(svg);
+}
+
+function renderProjectChart(target, legendTarget, reqKey, usedFn, unit) {
+  const box = $(target);
+  const colors = ["var(--series-1)", "var(--series-2)"];
+  legend(legendTarget, [[colors[0], "Requested"], [colors[1], usedLabel()]]);
+  const rows = filteredProjects().slice().sort((a, b) => b[reqKey] - a[reqKey]).slice(0, 15);
+  if (!rows.length) { box.replaceChildren(el("div", { class: "empty", text: "No projects match the filters" })); return; }
+  const W = widthOf(box, 560);
+  const labelW = Math.min(150, Math.round(W * 0.34)), valW = 48, barH = 9, gap = 2, rowH = 30, axisH = 18;
+  const maxChars = Math.floor((labelW - 8) / 7.4);
+  const { max, step } = niceScale(Math.max(...rows.map((r) => Math.max(r[reqKey], usedFn(r) || 0))));
+  const plotW = W - labelW - valW, H = rows.length * rowH + axisH;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": `${unit} requested and used by project` });
+  for (let v = 0; v <= max + step / 2; v += step) {
+    const x = labelW + plotW * v / max;
+    svg.append(sv("line", { x1: x, x2: x, y1: 0, y2: rows.length * rowH, stroke: "var(--grid)", "stroke-width": 1 }));
+    const t = sv("text", { x, y: H - 4, "text-anchor": "middle", class: "tick" }); t.textContent = smart(v); svg.append(t);
+  }
+  svg.append(sv("line", { x1: labelW, x2: labelW, y1: 0, y2: rows.length * rowH, stroke: "var(--axis)", "stroke-width": 1 }));
+  rows.forEach((r, i) => {
+    const y = i * rowH + (rowH - 2 * barH - gap) / 2;
+    const req = r[reqKey], used = usedFn(r) || 0;
+    const name = r.project.length > maxChars ? r.project.slice(0, maxChars - 1) + "…" : r.project;
+    const t = sv("text", { x: labelW - 8, y: y + barH + 4, "text-anchor": "end" }); t.textContent = name; svg.append(t);
+    svg.append(sv("path", { d: barPath(labelW, y, req / max * plotW, barH, 4), fill: colors[0] }));
+    svg.append(sv("path", { d: barPath(labelW, y + barH + gap, used / max * plotW, barH, 4), fill: colors[1] }));
+    const v = sv("text", { x: labelW + Math.max(req, used) / max * plotW + 6, y: y + barH + 4, class: "val" });
+    v.textContent = smart(req); svg.append(v);
+    const hit = sv("rect", { x: 0, y: i * rowH, width: W, height: rowH, class: "hit" });
+    attachTip(hit, (e) => showTip(e, r.project, [
+      [colors[0], "Requested", `${smart(req)} ${unit}`],
+      [colors[1], usedLabel(), `${smart(used)} ${unit}`],
+      [null, "Efficiency", req ? `${num(100 * used / req, 0)}%` : "–"],
+      [null, "Namespaces", f0.format(r.namespaces)]]));
+    hit.addEventListener("click", () => selectProject(projectKey(r)));
+    svg.insertBefore(hit, svg.firstChild);
+  });
+  box.replaceChildren(svg);
+}
+
+function effCell(req, used) {
+  if (!req) return el("td", { text: "–" });
+  const pct = 100 * used / req;
+  const td = el("td");
+  if (pct < 30) td.append(el("span", { class: "flag", title: "Low: requests much higher than use" },
+    el("span", { class: "dot", style: "background:var(--status-warning)" }), `${num(pct, 0)}% low`));
+  else td.textContent = `${num(pct, 0)}%`;
+  return td;
+}
+function countCell(v, status) {
+  const td = el("td");
+  if (v > 0 && status) td.append(el("span", { class: "flag" }, el("span", { class: "dot", style: `background:var(--status-${status})` }), f0.format(v)));
+  else td.textContent = v ? f0.format(v) : "0";
+  return td;
+}
+
+function renderTable(table, key, cols, rows, onRow) {
+  const [sk, sd] = state.sort[key];
+  const sorted = rows.slice().sort((a, b) => {
+    const col = cols.find((c) => c.k === sk);
+    const va = col && col.v ? col.v(a) : a[sk], vb = col && col.v ? col.v(b) : b[sk];
+    if (typeof va === "string" || typeof vb === "string") return sd * String(va).localeCompare(String(vb));
+    return sd * ((va || 0) - (vb || 0));
+  });
+  const head = el("tr", {}, ...cols.map((c) => {
+    const th = el("th", { class: c.l ? "l" : "", scope: "col", text: c.h, title: c.title || "" });
+    if (c.k === sk) th.setAttribute("aria-sort", sd > 0 ? "ascending" : "descending");
+    th.addEventListener("click", () => { state.sort[key] = [c.k, c.k === sk ? -sd : (c.l ? 1 : -1)]; render(); });
+    return th;
+  }));
+  const body = sorted.length ? sorted.map((r) => {
+    const tr = el("tr", {}, ...cols.map((c) => c.cell ? c.cell(r) : el("td", { class: c.l ? "l" : "", text: c.fmt ? c.fmt(r) : r[c.k] })));
+    if (onRow) onRow(tr, r);
+    return tr;
+  }) : [el("tr", {}, el("td", { colspan: cols.length, class: "empty", text: "Nothing matches the filters" }))];
+  table.replaceChildren(el("thead", {}, head), el("tbody", {}, ...body));
+}
+
+const commonCols = () => [
+  { k: "cpu_requests", h: "CPU req", fmt: (r) => smart(r.cpu_requests), title: "vCPU requested (effective)" },
+  { k: "cpu_used", h: hasPrometheus() ? "CPU P95" : "CPU now", v: cpuUsed, fmt: (r) => smart(cpuUsed(r) || 0) },
+  { k: "cpu_eff", h: "CPU eff.", v: (r) => r.cpu_requests ? (cpuUsed(r) || 0) / r.cpu_requests : 0, cell: (r) => effCell(r.cpu_requests, cpuUsed(r) || 0) },
+  { k: "cpu_requests_peak", h: "CPU req peak", fmt: (r) => smart(r.cpu_requests_peak) },
+  { k: "mem_requests_gib", h: "Mem req GiB", fmt: (r) => smart(r.mem_requests_gib) },
+  { k: "mem_used", h: hasPrometheus() ? "Mem P95" : "Mem now", v: memUsed, fmt: (r) => smart(memUsed(r) || 0) },
+  { k: "mem_eff", h: "Mem eff.", v: (r) => r.mem_requests_gib ? (memUsed(r) || 0) / r.mem_requests_gib : 0, cell: (r) => effCell(r.mem_requests_gib, memUsed(r) || 0) },
+  { k: "mem_limits_gib", h: "Mem limit GiB", fmt: (r) => smart(r.mem_limits_gib) },
+  { k: "pods_running", h: "Pods", fmt: (r) => f0.format(r.pods_running) },
+  { k: "pods_pending", h: "Pending", cell: (r) => countCell(r.pods_pending, "warning") },
+  { k: "containers_no_cpu_request", h: "No CPU req", title: "Containers without CPU request", cell: (r) => countCell(r.containers_no_cpu_request, "serious") },
+  { k: "containers_no_mem_limit", h: "No mem limit", title: "Containers without memory limit", cell: (r) => countCell(r.containers_no_mem_limit, "serious") },
+  { k: "pods_besteffort", h: "BestEffort", title: "Pods without any requests/limits", cell: (r) => countCell(r.pods_besteffort, "serious") },
+];
+
+function renderProjectsTable() {
+  const cols = [
+    { k: "project", h: "Project", l: true },
+    { k: "category", h: "Category", l: true },
+    { k: "namespaces", h: "NS", fmt: (r) => f0.format(r.namespaces) },
+    ...commonCols(),
+  ];
+  renderTable($("#projectsTable"), "projects", cols, filteredProjects(), (tr, r) => {
+    tr.classList.add("clickable");
+    if (state.project === projectKey(r)) tr.classList.add("selected");
+    tr.addEventListener("click", () => selectProject(state.project === projectKey(r) ? null : projectKey(r)));
+  });
+}
+function renderNsTable() {
+  const cols = [
+    { k: "namespace", h: "Namespace", l: true },
+    { k: "project", h: "Project", l: true, fmt: (r) => r.project || "–" },
+    ...commonCols(),
+    { k: "resourcequotas", h: "Quota", title: "ResourceQuota objects", fmt: (r) => f0.format(r.resourcequotas) },
+    { k: "limitranges", h: "LimitRange", fmt: (r) => f0.format(r.limitranges) },
+    { k: "hpas", h: "HPA", fmt: (r) => f0.format(r.hpas) },
+  ];
+  renderTable($("#nsTable"), "ns", cols, filteredNamespaces());
+  const p = state.project && state.data.projects.find((x) => x.cluster === state.cluster && projectKey(x) === state.project);
+  $("#nsSub").textContent = p ? `Namespaces of project ${p.project}` : "All namespaces matching the filters";
+  $("#clearProject").hidden = !state.project;
+}
+function selectProject(key) {
+  state.project = key;
+  render();
+  if (key) $("#nsTable").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderClusterSelect() {
+  const sel = $("#cluster");
+  const names = state.data ? state.data.clusters.map((c) => c.cluster) : [];
+  sel.hidden = names.length < 2;
+  if (!names.includes(state.cluster)) state.cluster = names[0] || null;
+  sel.replaceChildren(...names.map((n) => { const o = el("option", { value: n, text: n }); if (n === state.cluster) o.selected = true; return o; }));
+}
+
+function render() {
+  renderMeta();
+  renderBanners();
+  if (!state.data) return;
+  renderClusterSelect();
+  renderTiles();
+  renderCapacity();
+  renderProjectChart("#cpuChart", "#cpuLegend", "cpu_requests", cpuUsed, "vCPU");
+  renderProjectChart("#memChart", "#memLegend", "mem_requests_gib", memUsed, "GiB");
+  renderProjectsTable();
+  renderNsTable();
+}
+
+// ---------- data loading ----------
+let lastCollected = null;
+async function load() {
+  $("#app").classList.add("loading");
+  try {
+    const res = await fetch("api/report", { cache: "no-store" });
+    const body = await res.json();
+    state.status = body.status;
+    if (body.report && body.report.collected_at !== lastCollected) {
+      state.data = body.report;
+      lastCollected = body.report.collected_at;
+    }
+    render();
+  } catch (e) {
+    $("#meta").textContent = `Could not load report: ${e.message}`;
+  } finally {
+    $("#app").classList.remove("loading");
+  }
+  const busy = state.status && state.status.state === "collecting";
+  setTimeout(load, busy || !state.data ? 5000 : 60000);
+}
+
+$("#refresh").addEventListener("click", async () => {
+  $("#refresh").disabled = true;
+  await fetch("api/refresh", { method: "POST" });
+  if (state.status) state.status.state = "collecting";
+  renderMeta();
+});
+$("#cluster").addEventListener("change", (e) => { state.cluster = e.target.value; state.project = null; render(); });
+document.querySelectorAll(".filters input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
+  if (cb.checked) state.cats.add(cb.value); else state.cats.delete(cb.value);
+  render();
+}));
+$("#search").addEventListener("input", (e) => { state.q = e.target.value.trim().toLowerCase(); state.project = null; render(); });
+$("#clearProject").addEventListener("click", () => selectProject(null));
+$("#theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("theme", root.dataset.theme); } catch (e) { /* storage unavailable */ }
+});
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+load();
+</script>
+</body>
+</html>

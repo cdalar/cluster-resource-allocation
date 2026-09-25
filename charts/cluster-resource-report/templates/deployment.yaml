@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single collector; also required for a ReadWriteOnce volume
+  selector:
+    matchLabels:
+      {{- include "crr.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "crr.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "crr.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: report
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --listen=0.0.0.0:8080
+            - --data-dir=/data
+            - --interval={{ .Values.collection.interval }}
+            - --window={{ .Values.collection.window }}
+            - --step={{ .Values.collection.step }}
+            {{- with .Values.clusterName }}
+            - --cluster-name={{ . }}
+            {{- end }}
+            {{- with .Values.collection.projectLabel }}
+            - --project-label={{ . }}
+            {{- end }}
+            {{- with .Values.collection.systemNamespaceRegex }}
+            - --system-ns-regex={{ . }}
+            {{- end }}
+            {{- if not .Values.prometheus.enabled }}
+            - --prometheus=none
+            {{- else if .Values.prometheus.url }}
+            - --prom-url={{ .Values.prometheus.url }}
+            {{- else }}
+            - --prom-service={{ .Values.prometheus.service }}
+            {{- end }}
+            {{- if .Values.rancher.localKubeconfigSecret.name }}
+            - --rancher-local-kubeconfig=/etc/rancher-local/kubeconfig
+            {{- with .Values.rancher.localContext }}
+            - --rancher-local-context={{ . }}
+            {{- end }}
+            {{- end }}
+          {{- if and .Values.prometheus.enabled .Values.prometheus.url .Values.prometheus.tokenSecret.name }}
+          env:
+            - name: PROM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.prometheus.tokenSecret.name }}
+                  key: {{ .Values.prometheus.tokenSecret.key }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.rancher.localKubeconfigSecret.name }}
+            - name: rancher-local
+              mountPath: /etc/rancher-local
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "crr.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.rancher.localKubeconfigSecret.name }}
+        - name: rancher-local
+          secret:
+            secretName: {{ .Values.rancher.localKubeconfigSecret.name }}
+            items:
+              - key: {{ .Values.rancher.localKubeconfigSecret.key }}
+                path: kubeconfig
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

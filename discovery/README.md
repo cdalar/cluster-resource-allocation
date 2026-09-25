@@ -95,10 +95,22 @@ and compare Σ quotas with `alloc_*_schedulable` × the headroom ratio for the e
 - Windows and subqueries over large clusters can be heavy for Prometheus; use a coarser `--step` (e.g. `15m`) if
   queries time out.
 
+## In-cluster dashboard
+
+`server.py` runs the same collection on a schedule inside a cluster and serves a web dashboard, a JSON API and
+CSV downloads. Deploy it with the Helm chart in [`charts/cluster-resource-report`](../charts/cluster-resource-report/README.md),
+which uses the image built from this directory's `Dockerfile`.
+
+To look at a saved report locally without cluster access:
+
+```bash
+python3 server.py --no-collect --data-dir <dir-with-report.json> --listen 127.0.0.1:8080
+```
+
 ## Tests
 
 ```bash
-python3 -m unittest -v test_discover
+python3 -m unittest -v test_discover test_server
 ```
 
 The script was verified end-to-end on a k3s cluster with fake Rancher Project objects, a kube-prometheus-stack

@@ -20,7 +20,8 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 
 | Tool | Purpose |
 |---|---|
-| [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace |
+| [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace (CLI) |
+| [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster |
 
 ## Status
 

@@ -16,6 +16,9 @@ Read-only. Needs only Python 3.8+ and `kubectl` — no extra packages.
 ./discover.py --context onprem-prod-01 --context onprem-test-01 --context aks-prod \
               --rancher-local-context local --window 7d --out baseline-2026-09
 
+# Same, but the Rancher local cluster via its own kubeconfig file (downloaded from Rancher)
+./discover.py --context onprem-prod-01 --rancher-local-kubeconfig ~/Downloads/local.yaml
+
 # AKS cluster not managed by Rancher: group namespaces by a label instead of Rancher Project
 ./discover.py --context aks-prod --project-label project
 
@@ -36,7 +39,7 @@ Rancher access.
 | Kubernetes API | nodes (allocatable), namespaces (Rancher project), pods (requests/limits), ResourceQuotas, LimitRanges, HPAs | Yes |
 | metrics-server | usage snapshot ("now") | Optional |
 | Prometheus (default: Rancher Monitoring via API server service proxy) | CPU/memory usage avg / P95 / max and peak requests over `--window` | Optional |
-| Rancher local cluster (`--rancher-local-context`) | Project and cluster display names | Optional |
+| Rancher local cluster (`--rancher-local-context` and/or `--rancher-local-kubeconfig`) | Project and cluster display names | Optional |
 
 Permissions: see [`rbac.yaml`](rbac.yaml).
 

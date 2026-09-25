@@ -110,8 +110,9 @@ class KubectlError(Exception):
     pass
 
 
-def kubectl(context, args, timeout=120):
-    cmd = ["kubectl"] + (["--context", context] if context else []) + args
+def kubectl(context, args, timeout=120, kubeconfig=None):
+    cmd = (["kubectl"] + (["--kubeconfig", kubeconfig] if kubeconfig else [])
+           + (["--context", context] if context else []) + args)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -121,9 +122,9 @@ def kubectl(context, args, timeout=120):
     return p.stdout
 
 
-def kget(context, resource, all_namespaces=True):
+def kget(context, resource, all_namespaces=True, kubeconfig=None):
     args = ["get", resource, "-o", "json"] + (["-A"] if all_namespaces else [])
-    return json.loads(kubectl(context, args)).get("items", [])
+    return json.loads(kubectl(context, args, kubeconfig=kubeconfig)).get("items", [])
 
 
 class Prometheus:
@@ -179,13 +180,14 @@ def prom_queries(window, step):
     }
 
 
-def load_rancher_projects(local_context):
+def load_rancher_projects(local_context=None, local_kubeconfig=None):
     """Map "<cluster-id>:<project-id>" -> project display name, and cluster-id -> cluster display name."""
     projects, clusters = {}, {}
-    for p in kget(local_context, "projects.management.cattle.io"):
+    for p in kget(local_context, "projects.management.cattle.io", kubeconfig=local_kubeconfig):
         md = p["metadata"]
         projects[f"{md['namespace']}:{md['name']}"] = p.get("spec", {}).get("displayName", md["name"])
-    for c in kget(local_context, "clusters.management.cattle.io", all_namespaces=False):
+    for c in kget(local_context, "clusters.management.cattle.io", all_namespaces=False,
+                  kubeconfig=local_kubeconfig):
         clusters[c["metadata"]["name"]] = c.get("spec", {}).get("displayName", c["metadata"]["name"])
     return projects, clusters
 
@@ -486,6 +488,9 @@ def main():
                     help="kubectl context to scan (repeatable). Default: current context")
     ap.add_argument("--rancher-local-context",
                     help="context of the Rancher local (management) cluster, to resolve Project display names")
+    ap.add_argument("--rancher-local-kubeconfig",
+                    help="kubeconfig file of the Rancher local cluster (instead of, or together with, "
+                         "--rancher-local-context; without a context its current-context is used)")
     ap.add_argument("--project-label",
                     help="namespace label to group by when there is no Rancher Project (e.g. on non-Rancher AKS)")
     ap.add_argument("--prometheus", choices=["auto", "none"], default="auto",
@@ -503,10 +508,15 @@ def main():
 
     contexts = args.context or [kubectl(None, ["config", "current-context"]).strip()]
 
+    local_kubeconfig = os.path.expanduser(args.rancher_local_kubeconfig) if args.rancher_local_kubeconfig else None
+    if local_kubeconfig and not os.path.isfile(local_kubeconfig):
+        log(f"--rancher-local-kubeconfig: file not found: {local_kubeconfig}")
+        return 2
+
     rancher_projects, rancher_clusters = {}, {}
-    if args.rancher_local_context:
+    if args.rancher_local_context or local_kubeconfig:
         try:
-            rancher_projects, rancher_clusters = load_rancher_projects(args.rancher_local_context)
+            rancher_projects, rancher_clusters = load_rancher_projects(args.rancher_local_context, local_kubeconfig)
             log(f"loaded {len(rancher_projects)} Rancher projects, {len(rancher_clusters)} clusters")
         except KubectlError as e:
             log(f"could not read Rancher projects: {first_line(e)}")

@@ -59,7 +59,9 @@ spec:
             {{- else }}
             - --prom-service={{ .Values.prometheus.service }}
             {{- end }}
-            {{- if .Values.rancher.localKubeconfigSecret.name }}
+            {{- if .Values.rancher.isLocalCluster }}
+            - --rancher-local-self
+            {{- else if .Values.rancher.localKubeconfigSecret.name }}
             - --rancher-local-kubeconfig=/etc/rancher-local/kubeconfig
             {{- with .Values.rancher.localContext }}
             - --rancher-local-context={{ . }}

@@ -5,7 +5,8 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Display name of this cluster. Default: Rancher cluster name (if rancher.localKubeconfigSecret is set),
+# Display name of this cluster. Default: Rancher cluster name (if rancher.isLocalCluster or
+# rancher.localKubeconfigSecret is set),
 # otherwise "in-cluster".
 clusterName: ""
 
@@ -29,7 +30,10 @@ prometheus:
     key: token
 
 rancher:
-  # Existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
+  # Set to true when installing on the Rancher local (management) cluster itself: project/cluster names
+  # are read from this cluster (grants read on projects/clusters.management.cattle.io), no secret needed.
+  isLocalCluster: false
+  # Downstream clusters: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
   # Rancher Project / cluster display names instead of IDs (p-xxxxx). Needs read on
   # projects.management.cattle.io and clusters.management.cattle.io.
   localKubeconfigSecret:

@@ -32,7 +32,7 @@ RANCHER_PROJECT_ANNOTATION = "field.cattle.io/projectId"  # "<cluster-id>:<proje
 DEFAULT_SYSTEM_NS_REGEX = (
     r"^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|cis-operator-system|"
     r"longhorn-system|gatekeeper-system|kyverno|cert-manager|ingress-nginx|"
-    r"app-routing-system|local|p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+)$"
+    r"app-routing-system|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+)$"
 )
 
 DEFAULT_PROM_SERVICE = "cattle-monitoring-system/http:rancher-monitoring-prometheus:9090"
@@ -512,6 +512,9 @@ def build_parser():
     ap.add_argument("--rancher-local-kubeconfig",
                     help="kubeconfig file of the Rancher local cluster (instead of, or together with, "
                          "--rancher-local-context; without a context its current-context is used)")
+    ap.add_argument("--rancher-local-self", action="store_true",
+                    help="the scanned cluster is the Rancher local cluster: read Project/cluster names from it "
+                         "(no separate kubeconfig needed)")
     ap.add_argument("--project-label",
                     help="namespace label to group by when there is no Rancher Project (e.g. on non-Rancher AKS)")
     ap.add_argument("--prometheus", choices=["auto", "none"], default="auto",
@@ -537,11 +540,17 @@ def collect(args):
         if local_kubeconfig and not os.path.isfile(local_kubeconfig):
             raise ValueError(f"--rancher-local-kubeconfig: file not found: {local_kubeconfig}")
 
+        local_context = args.rancher_local_context
+        if args.rancher_local_self:
+            if local_context or local_kubeconfig or len(args.context) > 1:
+                raise ValueError("--rancher-local-self scans a single cluster; with several contexts or another "
+                                 "Rancher local cluster use --rancher-local-context / --rancher-local-kubeconfig")
+            local_context = args.context[0] if args.context else None
+
         rancher_projects, rancher_clusters = {}, {}
-        if args.rancher_local_context or local_kubeconfig:
+        if args.rancher_local_self or local_context or local_kubeconfig:
             try:
-                rancher_projects, rancher_clusters = load_rancher_projects(args.rancher_local_context,
-                                                                           local_kubeconfig)
+                rancher_projects, rancher_clusters = load_rancher_projects(local_context, local_kubeconfig)
                 log(f"loaded {len(rancher_projects)} Rancher projects, {len(rancher_clusters)} clusters")
             except KubectlError as e:
                 log(f"could not read Rancher projects: {first_line(e)}")

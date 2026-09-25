@@ -82,6 +82,9 @@ helm upgrade --install ... --set rancher.localKubeconfigSecret.name=rancher-loca
 Use a token with read-only access to `projects.management.cattle.io` and `clusters.management.cattle.io`.
 Without it, the dashboard still works and shows project IDs.
 
+On the Rancher local cluster itself no secret is needed: `--set rancher.isLocalCluster=true` reads the names
+from that cluster and adds read access to those two resources to the chart's ClusterRole.
+
 ## 3. Open the dashboard
 
 The app has **no login of its own**. Recommended ways to open it, in order:
@@ -99,7 +102,7 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 |---|---|---|
 | `image.repository` / `image.tag` | `ghcr.io/cdalar/cluster-resource-report` / appVersion | Image built from `discovery/Dockerfile` |
 | `imagePullSecrets` | `[]` | For a private registry |
-| `clusterName` | `""` | Display name; default is the Rancher cluster name (with `rancher.localKubeconfigSecret`) or `in-cluster` |
+| `clusterName` | `""` | Display name; default is the Rancher cluster name (with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`) or `in-cluster` |
 | `collection.interval` | `30m` | Time between collections; the dashboard also has a "Collect now" button |
 | `collection.window` / `collection.step` | `7d` / `5m` | Prometheus usage window and resolution; use `step: 15m` on large clusters |
 | `collection.projectLabel` | `""` | Namespace label to group by when there are no Rancher Projects (e.g. AKS outside Rancher) |
@@ -107,6 +110,7 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 | `prometheus.enabled` | `true` | `false` = no usage history (metrics-server snapshot only) |
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |
+| `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately |

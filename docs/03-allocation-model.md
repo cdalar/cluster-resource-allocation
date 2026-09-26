@@ -78,6 +78,65 @@ overhead (control plane tier, load balancers, disks, egress, monitoring). Same C
 A project with a €3,000/month prod budget could, for example, get 60 vCPU (€1,500) + 240 GiB (€1,500).
 The CPU/memory mix is chosen by the project based on its workload profile.
 
+## Reference rates
+
+Starting values for the unit rates, used as defaults in the
+[allocation planner](../guides/allocation-planner.md#platforms-and-unit-rates) (as of September 2026, EUR per month).
+The AKS figures are market prices; the on-prem figures are an estimate with stated assumptions. Both are placeholders
+until finance publishes the organisation's own rates (open question Q7).
+
+| Platform | per vCPU | per GiB | Basis |
+|---|---|---|---|
+| AKS, pay-as-you-go | 24.68 | 3.01 | Azure list price |
+| **AKS, 1-year reservation** (planner default) | **14.84** | **1.82** | Azure list price |
+| AKS, 3-year reservation | 9.53 | 1.17 | Azure list price |
+| **On-prem, full cost** (planner default) | **10.60** | **1.23** | Estimate below |
+| On-prem, without platform team | 6.16 | 0.71 | Estimate below |
+
+### AKS: derived from Azure's price list
+
+AKS charges for the node VMs (plus an optional cluster tier), so the rates come from VM prices:
+
+1. **Prices:** [Azure Retail Prices API](https://prices.azure.com/api/retail/prices), `currencyCode='EUR'`,
+   region `westeurope`, `serviceName eq 'Virtual Machines'`, Linux (product names without *Windows*), without spot,
+   low-priority and dev/test prices. Families Dsv5, Dasv5, Dsv6, Dasv6 (4 GiB per vCPU) and Esv5, Easv5, Esv6,
+   Easv6 (8 GiB per vCPU), standard sizes from 2 to 64 vCPU. Monthly = hourly × 730; reservations = term price ÷ 12
+   or ÷ 36.
+2. **CPU / memory split:** for each same-size D/E pair, E has 4 GiB per vCPU more at the same vCPU count, so
+   per GiB = (E − D) ÷ (4 × vCPUs) and per vCPU = D ÷ vCPUs − 4 × per GiB. The 28 pairs agree closely
+   (pay-as-you-go: 22.25–25.86 per vCPU, 2.58–3.06 per GiB); the table uses the medians
+   (24.14 / 2.80, 1 year 14.51 / 1.69, 3 years 9.32 / 1.09 per VM vCPU / GiB).
+3. **Per allocatable unit:** quota is planned against allocatable capacity, and AKS reserves part of each node
+   ([node resource reservations](https://learn.microsoft.com/azure/aks/node-resource-reservations)): on a
+   D8s_v5 (8 vCPU, 32 GiB, 110 max pods) 180 m CPU kube-reserved and 20 MB × 110 + 50 MB memory plus a 100 Mi
+   eviction threshold, leaving 97.8 % of CPU and 93 % of memory. VM rates ÷ these shares = the table.
+
+Notes: Germany West Central costs the same as West Europe, North Europe about 7 % less. With Azure CNI Overlay's
+default of 250 pods per node, memory allocatable drops to about 84 % (memory rate about 11 % higher). Not included:
+the AKS Standard tier (uptime SLA, 0.0859 per cluster-hour, about 63 per cluster and month), node OS disks, load
+balancers, public IPs and egress. The 1-year reservation is the default because the workloads are long-running
+services; use pay-as-you-go or 3 years if the node pools are bought that way.
+
+### On-prem: estimated total cost per node
+
+Market data doesn't exist for the organisation's own data centre, so this is a cost model per Kubernetes node
+(bare metal) with assumptions to replace by real figures:
+
+| Cost per node and month | EUR | Assumption |
+|---|---|---|
+| Server hardware | 417 | 2 sockets, 64 cores / 128 threads, 512 GiB, NVMe, 25 GbE, 5-year warranty: 25,000 over 60 months |
+| Power | 131 | 600 W average × PUE 1.5 × 0.20 per kWh |
+| Rack space, network, cabling | 100 | share per node |
+| Rancher Prime / SUSE subscription, OS support | 150 | per node |
+| Shared services | 50 | monitoring, logging, backup, registry |
+| Platform team | 611 | 2 FTE × 110,000 a year over a 30-node estate |
+| **Total** | **1,459** | |
+
+Sellable capacity: 126 vCPU / 496 GiB allocatable (128 threads / 512 GiB minus OS and kubelet), of which 75 % can be
+sold as quota after N+1 and headroom = 94.5 vCPU / 372 GiB. The cost is split between CPU and memory in the market
+price ratio (1 vCPU costs as much as 8.6 GiB, from the AKS medians), which gives **10.60 per vCPU and 1.23 per
+GiB**. The platform team is the largest item; without it the rates are 6.16 / 0.71.
+
 ## Headroom and overcommit
 
 Quota is only a *guarantee* if the sum of all project quotas fits into the cluster.

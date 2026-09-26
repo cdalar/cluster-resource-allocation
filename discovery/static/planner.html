@@ -75,6 +75,13 @@ td { font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 16px; margin-top: 12px; }
 .note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.reference { margin-top: 18px; border-top: 1px solid var(--grid); padding-top: 14px; }
+.reference p { margin: 4px 0 8px; color: var(--text-secondary); font-size: 13px; max-width: 110ch; }
+.reference ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
+.reference table { width: auto; min-width: min(420px, 100%); }
+.reference td, .reference th, .settings-grid th { white-space: normal; }
+.reference td:not(:first-child) { white-space: nowrap; }
+.grid2-ref { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 20px; }
 .empty { color: var(--text-muted); padding: 16px 0; text-align: center; }
 .status { font-size: 13px; color: var(--text-secondary); }
 .status.error { color: var(--status-critical); }
@@ -122,6 +129,7 @@ details summary { cursor: pointer; }
           <div class="note">Node failures: how many of the cluster's largest nodes may fail with every project's quota still fitting (N+1 = 1). Defaults from docs/03 (prod N+1, headroom) and docs/02 S3 (memory limit = request in prod, up to 2× elsewhere).</div>
         </div>
       </div>
+      <div id="reference" class="reference"></div>
     </details>
   </div>
 
@@ -299,6 +307,7 @@ function evaluate() {
 // ---- rendering ----
 function render() {
   renderSettings();
+  renderReference();
   renderClusters();
   renderProjects();
   recompute();
@@ -306,6 +315,45 @@ function render() {
 
 function numberInput(value, onchange, attrs = {}) {
   return h("input", {type: "number", min: "0", step: attrs.step || "any", value: value ?? "", "aria-label": attrs.label, oninput: (e) => onchange(e.target.value)});
+}
+
+function renderReference() {
+  const ref = data.reference;
+  if (!ref) { $("reference").replaceChildren(); return; }
+  const cur = ref.currency;
+  const use = (platform, rates, label) => plan.settings.platforms[platform] && h("button", {type: "button", class: "small",
+    title: `set the ${platform} rates to ${label}`, onclick: () => {
+      Object.assign(plan.settings.platforms[platform], {cpu_rate: rates.cpu_rate, mem_rate: rates.mem_rate});
+      markDirty(); renderSettings(); renderProjects(); recompute(); setStatus(`${platform} rates set to ${label} — save to keep them`);
+    }}, "Use");
+  const rate = (r) => `${r.cpu_rate.toFixed(2)} / ${r.mem_rate.toFixed(2)}`;
+  $("reference").replaceChildren(
+    h("h3", {}, `Where the default rates come from (${ref.as_of}, ${cur} per month)`),
+    h("p", {}, "The defaults are a starting point: AKS from Microsoft's public price list, on-prem from a cost estimate. Replace them with the rates finance publishes; ", h("i", {}, "Use"), " copies a row into the rates above (then save)."),
+    h("div", {class: "grid2-ref"},
+      h("div", {},
+        h("b", {}, "AKS — market prices"),
+        h("p", {}, ref.aks.method),
+        h("div", {class: "table-wrap"}, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Option"), h("th", {}, "per vCPU"), h("th", {}, "per GiB"), h("th", {}))),
+          h("tbody", {}, ref.aks.options.map((o) => h("tr", {},
+            h("td", {}, o.name, o.default ? h("span", {class: "muted"}, " (default)") : ""),
+            h("td", {}, o.cpu_rate.toFixed(2)), h("td", {}, o.mem_rate.toFixed(2)),
+            h("td", {}, use("aks", o, o.name))))))),
+        h("ul", {}, ref.aks.notes.map((n) => h("li", {}, n)))),
+      h("div", {},
+        h("b", {}, "On-prem — estimate"),
+        h("p", {}, ref.onprem.method),
+        h("div", {class: "table-wrap"}, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Cost per node and month (assumption)"), h("th", {}, cur))),
+          h("tbody", {}, ref.onprem.items.map(([label, v]) => h("tr", {}, h("td", {}, label), h("td", {}, v.toLocaleString()))),
+            h("tr", {}, h("td", {}, h("b", {}, "Total")), h("td", {}, h("b", {}, ref.onprem.total.toLocaleString())))))),
+        h("p", {}, `Sold as quota: ${ref.onprem.capacity}; ${ref.onprem.split}.`),
+        h("div", {class: "table-wrap"}, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", {}, "Result"), h("th", {}, "per vCPU / per GiB"), h("th", {}))),
+          h("tbody", {},
+            h("tr", {}, h("td", {}, "Full cost", h("span", {class: "muted"}, " (default)")), h("td", {}, rate(ref.onprem.rates)), h("td", {}, use("onprem", ref.onprem.rates, "the full-cost estimate"))),
+            h("tr", {}, h("td", {}, "Without platform team"), h("td", {}, rate(ref.onprem.without_team)), h("td", {}, use("onprem", ref.onprem.without_team, "the estimate without platform team")))))))));
 }
 
 function renderSettings() {

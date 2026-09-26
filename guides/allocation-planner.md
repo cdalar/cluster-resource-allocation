@@ -62,27 +62,30 @@ The label shown after every amount, e.g. `EUR`. It is a label only; nothing is c
 
 ### Platforms and unit rates
 
-A platform groups clusters that cost the same to run, e.g. `onprem` and `aks`. Each has two rates:
+A platform groups clusters that cost the same to run, e.g. `onprem` and `aks`. Each has two rates: the monthly
+price of 1 vCPU and of 1 GiB of **requested** quota.
 
-| Parameter | Meaning | Default |
-| --- | --- | --- |
-| per vCPU | Monthly price of 1 CPU of **requested** quota | 25 |
-| per GiB memory | Monthly price of 1 GiB of **requested** memory quota | 6.25 |
+| Platform | per vCPU | per GiB | Where the default comes from |
+| --- | --- | --- | --- |
+| `aks` | 14.84 | 1.82 | Azure's public price list, West Europe, 1-year reservation, per allocatable unit |
+| `onprem` | 10.60 | 1.23 | Cost estimate of one on-prem node (total cost of ownership) with stated assumptions |
 
-Cost of a quota on a cluster = CPU × rate per vCPU + memory GiB × rate per GiB, using that cluster's platform. The
-defaults are the illustrative numbers from the [allocation model](../docs/03-allocation-model.md#unit-rates); replace them
-with the rates finance publishes. **Add platform** creates another one; **Remove** clears it from the clusters that
-used it.
+Cost of a quota on a cluster = CPU × rate per vCPU + memory GiB × rate per GiB, using that cluster's platform.
+**The defaults are a starting point, not your prices:** replace them with the rates finance publishes. The page
+explains both under *Where the default rates come from* (inside **Rates and rules**): the AKS method with
+pay-as-you-go, 1-year and 3-year options, and every on-prem cost assumption; **Use** copies a row into the rates.
+The full derivation is in the [allocation model](../docs/03-allocation-model.md#reference-rates).
+**Add platform** creates another one; **Remove** clears it from the clusters that used it.
 
 ### Environments
 
 Each environment carries three rules:
 
-| Parameter | Meaning | prod | acc | test | dev |
-| --- | --- | --- | --- | --- | --- |
-| node failures to tolerate | How many of a cluster's largest nodes may fail with all project quota still fitting (N+1 = 1) | 1 | 0 | 0 | 0 |
-| max Σ quota / allocatable | The most a cluster of this environment may hand out as project quota, as a share of its allocatable capacity | 80 % | 100 % | 100 % | 150 % |
-| memory limit = request × | Factor for the `limits.memory` written in the export | 1.0 | 2.0 | 2.0 | 2.0 |
+| Parameter | Meaning | prod | test | dev |
+| --- | --- | --- | --- | --- |
+| node failures to tolerate | How many of a cluster's largest nodes may fail with all project quota still fitting (N+1 = 1) | 1 | 0 | 0 |
+| max Σ quota / allocatable | The most a cluster of this environment may hand out as project quota, as a share of its allocatable capacity | 80 % | 100 % | 150 % |
+| memory limit = request × | Factor for the `limits.memory` written in the export | 1.0 | 2.0 | 2.0 |
 
 - **Node failures to tolerate** is the N+1 rule of the [allocation model](../docs/03-allocation-model.md#headroom-and-overcommit):
   with 1, a prod cluster must still fit every project's quota after its largest node fails. It is checked
@@ -92,7 +95,8 @@ Each environment carries three rules:
 - **Memory limit factor** follows resource standard S3 ([02](../docs/02-resource-standards.md)): memory limit equals the
   request in prod, and may be up to twice the request elsewhere.
 
-Environment names are free text; **Add environment** creates more, e.g. `staging`.
+Environment names are free text; **Add environment** creates more, e.g. `acc` (acceptance: the pre-production
+stage where a release is accepted before prod, also called UAT or staging) with the same rules as test.
 
 ## Parameters: clusters
 
@@ -249,9 +253,9 @@ The path to an applied quota:
 
 The payments stream has a budget of 400 EUR a month and runs on a prod cluster `prod-01` (4 nodes of 4 CPU /
 16 GiB, so 16 CPU / 64 GiB allocatable; platform components request 1 CPU / 4 GiB) and a test cluster `test-01`.
-Rates are the defaults: 25 per vCPU, 6.25 per GiB.
+For round numbers the example uses rates of 25 per vCPU and 6.25 per GiB (not the shipped defaults).
 
-1. **Rates and rules:** keep the defaults (prod tolerates 1 node failure), or enter the published rates.
+1. **Rates and rules:** set the `onprem` rates to 25 / 6.25 for this example (prod tolerates 1 node failure).
 2. **Clusters:** set `prod-01` to environment *prod*, platform *onprem*; set `test-01` to *test*, *onprem*.
 3. **Platform reserve:** `prod-01` is not the planner's own cluster, so enter 1 / 4 from its dashboard's *System*
    requests. The limit for projects becomes **11 CPU / 44 GiB (N+1)**: 16 − 4 − 1 CPU and 64 − 16 − 4 GiB, both

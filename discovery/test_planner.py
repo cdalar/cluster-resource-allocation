@@ -37,8 +37,15 @@ def inventory(nodes=NODES):
     return planner.parse_inventory(CLUSTERS, PROJECTS, nodes)
 
 
+def fixed_rates(raw):
+    """Test rates independent of the shipped defaults: 25 per vCPU, 6.25 per GiB on every platform."""
+    for p in raw["settings"]["platforms"].values():
+        p.update(cpu_rate=25.0, mem_rate=6.25)
+    return raw
+
+
 def plan_with(**projects):
-    raw = planner.empty_state()
+    raw = fixed_rates(planner.empty_state())
     raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem"}}
     raw["projects"] = projects
     return planner.validate_state(raw)
@@ -68,6 +75,8 @@ class Validate(unittest.TestCase):
     def test_defaults_are_valid(self):
         plan = planner.validate_state(planner.empty_state())
         self.assertIn("prod", plan["settings"]["envs"])
+        self.assertEqual(plan["settings"]["platforms"]["onprem"], {"cpu_rate": 10.60, "mem_rate": 1.23})
+        self.assertEqual(plan["settings"]["platforms"]["aks"], {"cpu_rate": 14.84, "mem_rate": 1.82})
         self.assertEqual(plan["settings"]["envs"]["prod"]["mem_limit_factor"], 1.0)
 
     def test_rejects_bad_input(self):
@@ -88,6 +97,18 @@ class Validate(unittest.TestCase):
     def test_budget_may_be_empty(self):
         plan = plan_with(payments={"monthly_budget": None, "allocations": {}})
         self.assertIsNone(plan["projects"]["payments"]["monthly_budget"])
+
+
+class RateReference(unittest.TestCase):
+    """The reference shown on the page must match the shipped defaults it explains."""
+
+    def test_defaults_match_the_reference(self):
+        ref, defaults = planner.RATE_REFERENCE, planner.DEFAULT_SETTINGS["platforms"]
+        aks_default = [o for o in ref["aks"]["options"] if o.get("default")]
+        self.assertEqual(len(aks_default), 1)
+        self.assertEqual({k: aks_default[0][k] for k in ("cpu_rate", "mem_rate")}, defaults["aks"])
+        self.assertEqual(ref["onprem"]["rates"], defaults["onprem"])
+        self.assertEqual(sum(v for _, v in ref["onprem"]["items"]), ref["onprem"]["total"])
 
 
 class Store(unittest.TestCase):
@@ -133,7 +154,7 @@ class Evaluate(unittest.TestCase):
     CPU limit = min(10 - 4 - 1, 80 % x (10 - 1)) = min(5, 7.2) = 5; memory = min(40 - 16 - 4, 80 % x 36) = 20."""
 
     def plan(self, env="prod", reserve=(1, 4), **projects):
-        raw = planner.empty_state()
+        raw = fixed_rates(planner.empty_state())
         raw["clusters"] = {"c-m-1": {"env": env, "platform": "onprem"}}
         if reserve:
             raw["clusters"]["c-m-1"].update(platform_cpu=reserve[0], platform_mem_gib=reserve[1])
@@ -228,7 +249,7 @@ class Evaluate(unittest.TestCase):
 
 class Export(unittest.TestCase):
     def test_allocation_file_format(self):
-        raw = planner.empty_state()
+        raw = fixed_rates(planner.empty_state())
         raw["clusters"] = {"c-m-1": {"env": "test", "platform": "onprem"}}
         raw["projects"] = {"payments": {"cost_center": "CC-1234", "owners": ["lead@corp"], "monthly_budget": 6000,
                                         "allocations": {"c-m-1": {"cpu": 2.5, "memory_gib": 8},

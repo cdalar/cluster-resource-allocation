@@ -34,19 +34,66 @@ MAX_STATE_BYTES = 1_000_000
 # Hidden by default: Rancher's own projects, not streams with a budget.
 RANCHER_BUILTIN_PROJECTS = ("System", "Default")
 
-# docs/03-allocation-model.md (illustrative rates, headroom table) and docs/02-resource-standards.md (S3:
-# memory limit = request in prod, up to 2x in non-prod). Meant to be edited in the planner.
+# Unit rates per month (EUR): docs/03-allocation-model.md "Reference rates" -- AKS from the Azure retail price list
+# (West Europe, 1-year reservation, per allocatable unit, Sep 2026), on-prem from an assumption-based TCO estimate.
+# Environments from docs/03 (N+1, headroom) and docs/02 (S3: memory limit = request in prod, up to 2x elsewhere).
+# All meant to be replaced with the organisation's own figures in the planner.
 DEFAULT_SETTINGS = {
     "currency": "EUR",
     "platforms": {
-        "onprem": {"cpu_rate": 25.0, "mem_rate": 6.25},
-        "aks": {"cpu_rate": 25.0, "mem_rate": 6.25},
+        "onprem": {"cpu_rate": 10.60, "mem_rate": 1.23},
+        "aks": {"cpu_rate": 14.84, "mem_rate": 1.82},
     },
     "envs": {
         "prod": {"max_quota_pct": 80.0, "mem_limit_factor": 1.0, "node_failures": 1},
-        "acc": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
         "test": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
         "dev": {"max_quota_pct": 150.0, "mem_limit_factor": 2.0, "node_failures": 0},
+    },
+}
+
+
+# Where the default unit rates come from, shown on the planner page (docs/03-allocation-model.md "Reference rates").
+RATE_REFERENCE = {
+    "as_of": "September 2026",
+    "currency": "EUR",
+    "aks": {
+        "method": "Azure Retail Prices API (prices.azure.com), region West Europe, Linux VMs, D- and E-series v5 and v6 "
+                  "(Intel and AMD). D has 4 GiB per vCPU and E 8 GiB, so for each same-size D/E pair the price "
+                  "difference is the memory price and the rest the CPU price; medians of 28 pairs from 2 to 64 vCPU. "
+                  "Then divided by the allocatable share of a node (D8s_v5, 110 pods: 97.8 % of CPU, 93 % of memory "
+                  "after AKS kube-reserved and eviction), because quota is planned against allocatable capacity.",
+        "options": [
+            {"name": "Pay-as-you-go", "cpu_rate": 24.68, "mem_rate": 3.01},
+            {"name": "1-year reservation", "cpu_rate": 14.84, "mem_rate": 1.82, "default": True},
+            {"name": "3-year reservation", "cpu_rate": 9.53, "mem_rate": 1.17},
+        ],
+        "notes": [
+            "Default: 1-year reservation, typical for long-running services; switch if your node pools run pay-as-you-go "
+            "or on a 3-year reservation or savings plan.",
+            "Region: Germany West Central costs the same as West Europe; North Europe about 7 % less.",
+            "Not included: the AKS Standard tier (uptime SLA) at 0.0859 per cluster-hour, about 63 per cluster and "
+            "month; node OS disks, load balancers, public IPs and egress.",
+            "Allocatable assumes 110 max pods per node; with Azure CNI Overlay's default of 250 pods, memory "
+            "allocatable drops to about 84 % and the memory rate rises by about 11 %.",
+        ],
+    },
+    "onprem": {
+        "method": "Estimate, not market data: the monthly cost of one Kubernetes node (total cost of ownership) divided "
+                  "by what it can sell as quota. Replace the assumptions with your own figures.",
+        "items": [
+            ["Server: 2 sockets, 64 cores / 128 threads, 512 GiB, NVMe, 25 GbE, 5-year warranty; 25,000 over 60 months", 417],
+            ["Power: 600 W average x PUE 1.5 x 0.20 per kWh", 131],
+            ["Rack space, network and cabling share", 100],
+            ["Rancher Prime / SUSE subscription and OS support", 150],
+            ["Shared services: monitoring, logging, backup, registry", 50],
+            ["Platform team: 2 FTE x 110,000 a year, spread over a 30-node estate", 611],
+        ],
+        "total": 1459,
+        "capacity": "126 vCPU / 496 GiB allocatable per node, 75 % of it sellable after N+1 and headroom "
+                    "= 94.5 vCPU / 372 GiB",
+        "split": "cost split between CPU and memory in the market price ratio (1 vCPU costs as much as 8.6 GiB)",
+        "rates": {"cpu_rate": 10.60, "mem_rate": 1.23},
+        "without_team": {"cpu_rate": 6.16, "mem_rate": 0.71},
     },
 }
 

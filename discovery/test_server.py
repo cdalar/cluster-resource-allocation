@@ -125,9 +125,11 @@ class PlannerServer(unittest.TestCase):
         view = json.loads(self.req("/api/planner")[2])
         self.assertEqual(view["plan"]["version"], 0)
         self.assertEqual({c["id"] for c in view["inventory"]["clusters"]}, {"local", "c-m-1"})
+        self.assertEqual(view["reference"]["onprem"]["rates"], {"cpu_rate": 10.60, "mem_rate": 1.23})
 
         plan = view["plan"]
         plan["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem"}}
+        plan["settings"]["platforms"]["onprem"] = {"cpu_rate": 25, "mem_rate": 6.25}
         plan["projects"] = {"payments": {"monthly_budget": 100, "allocations": {"c-m-1": {"cpu": 4, "memory_gib": 16}}}}
         code, _, body = self.put({"version": 0, "plan": plan})
         self.assertEqual(code, 200, body)

@@ -144,7 +144,8 @@ class PlannerBackend:
     def view(self, plan=None):
         plan = plan or self.store.load()
         inventory = self.inventory()
-        return {"plan": plan, "inventory": inventory, "evaluation": planner.evaluate(plan, inventory)}
+        return {"plan": plan, "inventory": inventory, "evaluation": planner.evaluate(plan, inventory),
+                "reference": planner.RATE_REFERENCE}
 
     def save(self, body):
         if not isinstance(body, dict) or not isinstance(body.get("version"), int):

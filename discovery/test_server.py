@@ -127,7 +127,7 @@ class PlannerServer(unittest.TestCase):
         self.assertEqual({c["id"] for c in view["inventory"]["clusters"]}, {"local", "c-m-1"})
 
         plan = view["plan"]
-        plan["clusters"] = {"c-m-1": {"env": "prod"}}
+        plan["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem"}}
         plan["projects"] = {"payments": {"monthly_budget": 100, "allocations": {"c-m-1": {"cpu": 4, "memory_gib": 16}}}}
         code, _, body = self.put({"version": 0, "plan": plan})
         self.assertEqual(code, 200, body)
@@ -149,7 +149,7 @@ class PlannerServer(unittest.TestCase):
     def test_save_needs_header_json_and_valid_plan(self):
         self.assertEqual(self.put({"version": 0, "plan": {}}, **{"X-Planner": ""})[0], 400)
         self.assertEqual(self.put({"version": 0, "plan": {}}, **{"Content-Type": "text/plain"})[0], 400)
-        code, _, body = self.put({"version": 0, "plan": {"settings": {"envs": {}}}})
+        code, _, body = self.put({"version": 0, "plan": {"settings": {"platforms": {}, "envs": {}}}})
         self.assertIn(code, (400, 409))  # 409 if test_flow already saved
         self.assertEqual(self.req("/api/planner", "PUT", None, {"X-Planner": "1", "Content-Type": "application/json"})[0], 413)
 

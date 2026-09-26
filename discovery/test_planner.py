@@ -39,7 +39,7 @@ def inventory(nodes=NODES):
 
 def plan_with(**projects):
     raw = planner.empty_state()
-    raw["clusters"] = {"c-m-1": {"env": "prod"}}
+    raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem"}}
     raw["projects"] = projects
     return planner.validate_state(raw)
 
@@ -110,7 +110,7 @@ class Store(unittest.TestCase):
             for e in old["settings"]["envs"].values():
                 e.pop("node_failures")
             old.update(version=7, updated_at="2026-09-26T10:00:00+00:00",
-                       clusters={"c-m-1": {"env": "prod"}})
+                       clusters={"c-m-1": {"env": "prod", "platform": "onprem"}})
             with open(store.path, "w") as f:
                 json.dump(old, f)
             plan = store.load()
@@ -134,7 +134,7 @@ class Evaluate(unittest.TestCase):
 
     def plan(self, env="prod", reserve=(1, 4), **projects):
         raw = planner.empty_state()
-        raw["clusters"] = {"c-m-1": {"env": env}}
+        raw["clusters"] = {"c-m-1": {"env": env, "platform": "onprem"}}
         if reserve:
             raw["clusters"]["c-m-1"].update(platform_cpu=reserve[0], platform_mem_gib=reserve[1])
         raw["projects"] = projects
@@ -185,13 +185,13 @@ class Evaluate(unittest.TestCase):
         self.assertEqual((local["platform_measured_cpu"], local["platform_measured_mem_gib"]), (0.5, 2))
         self.assertIsNone(prod["platform_measured_cpu"])
         raw = planner.empty_state()
-        raw["clusters"] = {"local": {"env": "test"}}
+        raw["clusters"] = {"local": {"env": "test", "platform": "onprem"}}
         row = planner.evaluate(planner.validate_state(raw), inv)["clusters"]["local"]
         self.assertEqual((row["reserve_source"], row["limit_cpu"]), ("measured", 1.5))  # 100 % x (2 - 0.5)
 
     def test_single_node_prod_cluster(self):
         raw = planner.empty_state()
-        raw["clusters"] = {"local": {"env": "prod", "platform_cpu": 0, "platform_mem_gib": 0}}
+        raw["clusters"] = {"local": {"env": "prod", "platform": "onprem", "platform_cpu": 0, "platform_mem_gib": 0}}
         raw["projects"] = {"crm": {"allocations": {"local": {"cpu": 0.5, "memory_gib": 1}}}}
         ev = planner.evaluate(planner.validate_state(raw), inventory())
         self.assertEqual(ev["clusters"]["local"]["limit_cpu"], 0)
@@ -203,23 +203,14 @@ class Evaluate(unittest.TestCase):
         self.assertIn("Rancher reports no node sizes", texts)
         self.assertIn("above its limit for projects of 7.2 (80 % of allocatable", texts)
 
-    def test_cluster_without_env(self):
+    def test_cluster_without_env_or_platform(self):
         raw = planner.empty_state()
         raw["projects"] = {"crm": {"allocations": {"local": {"cpu": 1, "memory_gib": 1}}}}
         ev = planner.evaluate(planner.validate_state(raw), inventory())
         texts = " ".join(i["text"] for i in ev["issues"])
+        self.assertIn("no platform set for local", texts)
         self.assertIn("local: no environment set", texts)
-        self.assertEqual(ev["projects"]["crm"]["cost"], 31.25)  # priced with the one rate set: 25 + 6.25
-
-    def test_old_per_platform_rates_are_migrated(self):
-        raw = planner.empty_state()
-        del raw["settings"]["rates"]
-        raw["settings"]["platforms"] = {"aks": {"cpu_rate": 40, "mem_rate": 9}, "onprem": {"cpu_rate": 20, "mem_rate": 5}}
-        raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "aks"}}
-        plan = planner.validate_state(raw)
-        self.assertEqual(plan["settings"]["rates"], {"cpu_rate": 20, "mem_rate": 5})  # the on-prem ones
-        self.assertNotIn("platforms", plan["settings"])
-        self.assertNotIn("platform", plan["clusters"]["c-m-1"])
+        self.assertEqual(ev["projects"]["crm"]["cost"], 0)
 
     def test_project_missing_in_rancher(self):
         plan = self.plan(newstream={"allocations": {"c-m-1": {"cpu": 1, "memory_gib": 1}}})
@@ -238,7 +229,7 @@ class Evaluate(unittest.TestCase):
 class Export(unittest.TestCase):
     def test_allocation_file_format(self):
         raw = planner.empty_state()
-        raw["clusters"] = {"c-m-1": {"env": "test"}}
+        raw["clusters"] = {"c-m-1": {"env": "test", "platform": "onprem"}}
         raw["projects"] = {"payments": {"cost_center": "CC-1234", "owners": ["lead@corp"], "monthly_budget": 6000,
                                         "allocations": {"c-m-1": {"cpu": 2.5, "memory_gib": 8},
                                                         "local": {"cpu": 0, "memory_gib": 0}}},

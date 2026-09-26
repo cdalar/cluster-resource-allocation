@@ -6,7 +6,7 @@ keeps the plan in a JSON file in the report's data directory. It writes nothing 
 the allocation files of docs/04 ("Allocation as code"), which go through the Git / Terraform flow.
 
 The plan holds, per project, a monthly budget and a CPU/memory quota per cluster. Either can drive the other:
-the page converts a budget into quota with the unit rates, and the checks here compare the cost of the
+the page converts a budget into quota with the cluster's unit rates, and the checks here compare the cost of the
 planned quota with the budget, and the planned quota per cluster with the cluster's limit for projects:
 
     capacity after failures = allocatable of schedulable nodes - the N largest nodes   (N = environment's node_failures)
@@ -38,7 +38,10 @@ RANCHER_BUILTIN_PROJECTS = ("System", "Default")
 # memory limit = request in prod, up to 2x in non-prod). Meant to be edited in the planner.
 DEFAULT_SETTINGS = {
     "currency": "EUR",
-    "rates": {"cpu_rate": 25.0, "mem_rate": 6.25},
+    "platforms": {
+        "onprem": {"cpu_rate": 25.0, "mem_rate": 6.25},
+        "aks": {"cpu_rate": 25.0, "mem_rate": 6.25},
+    },
     "envs": {
         "prod": {"max_quota_pct": 80.0, "mem_limit_factor": 1.0, "node_failures": 1},
         "acc": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
@@ -179,14 +182,11 @@ def validate_state(raw):
     if not isinstance(raw, dict):
         raise PlanError("plan must be an object")
     settings = raw.get("settings") or {}
-    rates = settings.get("rates")
-    if not isinstance(rates, dict):
-        # plans from before one rate set: per-platform rates -> the on-prem ones (or the first platform's)
-        platforms = settings.get("platforms") or {}
-        rates = platforms.get("onprem") or next(iter(platforms.values()), None) or DEFAULT_SETTINGS["rates"]
-    rates = {"cpu_rate": _num(rates.get("cpu_rate"), "rate per vCPU"),
-             "mem_rate": _num(rates.get("mem_rate"), "rate per GiB")}
-    envs = {}
+    platforms, envs = {}, {}
+    for name, p in (settings.get("platforms") or {}).items():
+        _name(name, "platform")
+        platforms[name] = {"cpu_rate": _num(p.get("cpu_rate"), f"{name}.cpu_rate"),
+                           "mem_rate": _num(p.get("mem_rate"), f"{name}.mem_rate")}
     for name, e in (settings.get("envs") or {}).items():
         _name(name, "environment")
         default_failures = DEFAULT_SETTINGS["envs"].get(name, {}).get("node_failures", 0)
@@ -194,19 +194,21 @@ def validate_state(raw):
                       "mem_limit_factor": _num(e.get("mem_limit_factor"), f"{name}.mem_limit_factor", 1, 10),
                       "node_failures": int(_num(e.get("node_failures", default_failures),
                                                 f"{name}.node_failures", 0, 10))}
-    if not envs:
-        raise PlanError("settings need at least one environment")
+    if not platforms or not envs:
+        raise PlanError("settings need at least one platform and one environment")
     clusters = {}
     for cid, c in (raw.get("clusters") or {}).items():
         _name(cid, "cluster id")
-        env = c.get("env") or ""
+        env, platform = c.get("env") or "", c.get("platform") or ""
         if env and env not in envs:
             raise PlanError(f"cluster {cid}: unknown environment {env!r}")
+        if platform and platform not in platforms:
+            raise PlanError(f"cluster {cid}: unknown platform {platform!r}")
         reserve = {}
         for key in ("platform_cpu", "platform_mem_gib"):
             v = c.get(key)
             reserve[key] = None if v in (None, "") else _num(v, f"cluster {cid}.{key}", 0, 1000000)
-        clusters[cid] = {"env": env, **reserve}
+        clusters[cid] = {"env": env, "platform": platform, **reserve}
     projects = {}
     for pname, p in (raw.get("projects") or {}).items():
         _name(pname, "project")
@@ -227,7 +229,7 @@ def validate_state(raw):
         }
     return {
         "settings": {"currency": _text(settings.get("currency") or "EUR", "currency", 8) or "EUR",
-                     "rates": rates, "envs": envs},
+                     "platforms": platforms, "envs": envs},
         "clusters": clusters,
         "projects": projects,
     }
@@ -295,9 +297,9 @@ class PlanConflict(Exception):
 # ---------------------------------------------------------------------------
 
 def _cluster_rules(plan, cluster_id):
-    """The environment rules of a cluster and the environment's name ("" when none is set)."""
-    env_name = (plan["clusters"].get(cluster_id) or {}).get("env") or ""
-    return plan["settings"]["envs"].get(env_name), env_name
+    c = plan["clusters"].get(cluster_id) or {}
+    settings = plan["settings"]
+    return settings["platforms"].get(c.get("platform")), settings["envs"].get(c.get("env")), c.get("env") or ""
 
 
 def cluster_limits(cluster, cluster_cfg, env):
@@ -343,9 +345,8 @@ def evaluate(plan, inventory):
     rancher_projects = {(p["cluster_id"], p["name"]) for p in inventory["projects"]}
     issues, project_rows, cluster_totals = [], {}, {}
 
-    rates = plan["settings"]["rates"]
     for pname, p in sorted(plan["projects"].items()):
-        cost = 0.0
+        cost, unpriced = 0.0, []
         for cid, a in sorted(p["allocations"].items()):
             if not a["cpu"] and not a["memory_gib"]:
                 continue
@@ -355,12 +356,19 @@ def evaluate(plan, inventory):
             elif (cid, pname) not in rancher_projects:
                 issues.append({"level": "warning",
                                "text": f"{pname}: no Rancher Project of that name on {cname} yet"})
-            cost += a["cpu"] * rates["cpu_rate"] + a["memory_gib"] * rates["mem_rate"]
+            platform, _, _ = _cluster_rules(plan, cid)
+            if platform:
+                cost += a["cpu"] * platform["cpu_rate"] + a["memory_gib"] * platform["mem_rate"]
+            else:
+                unpriced.append(cname)
             t = cluster_totals.setdefault(cid, {"cpu": 0.0, "memory_gib": 0.0})
             t["cpu"] += a["cpu"]
             t["memory_gib"] += a["memory_gib"]
         budget = p["monthly_budget"]
-        row = {"cost": round(cost, 2), "budget": budget}
+        row = {"cost": round(cost, 2), "budget": budget, "unpriced_clusters": unpriced}
+        if unpriced:
+            issues.append({"level": "warning", "text": f"{pname}: no platform set for {', '.join(unpriced)}, "
+                                                       f"so its quota there has no price"})
         if budget is not None and cost > budget + 0.005:
             issues.append({"level": "critical", "text": f"{pname}: planned quota costs {cost:,.2f} a month, "
                                                         f"over its budget of {budget:,.2f}"})
@@ -369,7 +377,7 @@ def evaluate(plan, inventory):
     cluster_rows = {}
     for c in inventory["clusters"]:
         t = cluster_totals.get(c["id"], {"cpu": 0.0, "memory_gib": 0.0})
-        env, env_name = _cluster_rules(plan, c["id"])
+        _, env, env_name = _cluster_rules(plan, c["id"])
         cap = cluster_limits(c, plan["clusters"].get(c["id"]) or {}, env)
         planned = {"cpu": t["cpu"], "mem": t["memory_gib"]}
         row = {"planned_cpu": round(t["cpu"], 3), "planned_mem_gib": round(t["memory_gib"], 3), **cap}
@@ -430,7 +438,7 @@ def export_yaml(plan, inventory):
                       f"  monthly: {_fmt(p['monthly_budget'])}"]
         lines.append("allocations:" if allocs else "allocations: []")
         for cid, a in allocs:
-            env, env_name = _cluster_rules(plan, cid)
+            _, env, env_name = _cluster_rules(plan, cid)
             factor = env["mem_limit_factor"] if env else 1.0
             lines += [f"  - cluster: {_yaml_str(clusters.get(cid, {}).get('name', cid))}"]
             if env_name:

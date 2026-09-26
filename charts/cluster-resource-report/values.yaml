@@ -46,6 +46,12 @@ rancher:
   namesConfigMap:
     enabled: false
     namespace: ""
+  # Menu entry in the Rancher UI (cluster explorer) that opens the dashboard through Rancher's proxy.
+  # Created only where Rancher's NavLink CRD (ui.cattle.io/v1) exists.
+  navLink:
+    enabled: true
+    label: Resource report
+    group: ""          # optional menu group, e.g. "Monitoring"
   # Downstream clusters, alternative: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
   # Rancher Project / cluster display names instead of IDs (p-xxxxx). Needs read on
   # projects.management.cattle.io and clusters.management.cattle.io.

@@ -32,7 +32,7 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 | Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
 
 To release, set `appVersion` (and `version`) in `Chart.yaml`, push that commit, then tag it:
-`git tag v0.2.0 && git push origin v0.2.0`. The workflow fails if the tag and `appVersion` differ. The chart's
+`git tag v0.2.1 && git push origin v0.2.1`. The workflow fails if the tag and `appVersion` differ. The chart's
 default image tag is its `appVersion`.
 
 The repository is private, so the GHCR package is private too. Clusters pulling from GHCR need a pull secret, for
@@ -45,15 +45,15 @@ helm upgrade --install ... --set 'imagePullSecrets[0].name=ghcr-pull'
 ```
 
 Most on-prem clusters pull from an internal registry instead. In that case, mirror the image
-(e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.2.0 registry.example.com/platform/cluster-resource-report:0.2.0`)
+(e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.2.1 registry.example.com/platform/cluster-resource-report:0.2.1`)
 and set `image.repository`.
 
 ### Build locally
 
 ```bash
 cd discovery
-docker build -t registry.example.com/platform/cluster-resource-report:0.2.0 .
-docker push registry.example.com/platform/cluster-resource-report:0.2.0
+docker build -t registry.example.com/platform/cluster-resource-report:0.2.1 .
+docker push registry.example.com/platform/cluster-resource-report:0.2.1
 # KUBECTL_VERSION is a build arg
 ```
 
@@ -63,7 +63,7 @@ docker push registry.example.com/platform/cluster-resource-report:0.2.0
 helm upgrade --install resource-report charts/cluster-resource-report \
   -n resource-report --create-namespace \
   --set image.repository=registry.example.com/platform/cluster-resource-report \
-  --set image.tag=0.2.0          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
+  --set image.tag=0.2.1          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
 ```
 
 On a Rancher-managed cluster you can also install it from the Rancher UI (Apps → Charts, from a Git or Helm repo),

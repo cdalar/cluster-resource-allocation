@@ -1,0 +1,22 @@
+{{- if and (dig "navLink" "enabled" true .Values.rancher) (.Capabilities.APIVersions.Has "ui.cattle.io/v1/NavLink") }}
+# Menu entry in the Rancher UI (cluster explorer) that opens the dashboard through Rancher's service proxy
+apiVersion: ui.cattle.io/v1
+kind: NavLink
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  label: {{ dig "navLink" "label" "Resource report" .Values.rancher | quote }}
+  {{- with dig "navLink" "group" "" .Values.rancher }}
+  group: {{ . | quote }}
+  {{- end }}
+  description: Requests, limits and usage per Rancher Project and namespace
+  target: _blank
+  toService:
+    namespace: {{ .Release.Namespace }}
+    name: {{ include "crr.fullname" . }}
+    scheme: http
+    port: {{ .Values.service.port | quote }}
+    path: /
+{{- end }}

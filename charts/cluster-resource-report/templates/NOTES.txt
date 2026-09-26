@@ -6,7 +6,8 @@ Open the dashboard:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "crr.fullname" . }} 8080:{{ .Values.service.port }}
   open http://localhost:8080/
 
-  # Or through Rancher (uses your Rancher login; <cluster-id> is e.g. c-m-xxxxx):
+  # Or through Rancher (uses your Rancher login): the cluster's side menu has a "Resource report"
+  # entry when the NavLink was created; the same page is at (<cluster-id> is e.g. c-m-xxxxx):
   https://<rancher-host>/k8s/clusters/<cluster-id>/api/v1/namespaces/{{ .Release.Namespace }}/services/http:{{ include "crr.fullname" . }}:{{ .Values.service.port }}/proxy/
 {{- if .Values.ingress.enabled }}
 

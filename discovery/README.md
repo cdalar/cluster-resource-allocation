@@ -133,7 +133,7 @@ after the next publish and Fleet sync. In the chart this is `rancher.publishName
 
 ## Allocation planner
 
-User guide with every parameter explained: [docs/07](../docs/07-allocation-planner-guide.md).
+User guide with every parameter explained: [guides/allocation-planner.md](../guides/allocation-planner.md).
 
 `server.py --planner` (Rancher local cluster only; needs `--rancher-local-self`, `--rancher-local-context` or
 `--rancher-local-kubeconfig`) adds a planning page at `/planner`, implemented in `planner.py`:

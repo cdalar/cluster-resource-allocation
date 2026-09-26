@@ -13,7 +13,6 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 | [4. Technical design](docs/04-technical-design.md) | Rancher Project quotas, allocation-as-code, policies, showback |
 | [5. Process](docs/05-process.md) | Onboarding, change requests, reviews, capacity planning, RACI |
 | [6. Rollout](docs/06-rollout.md) | Phased rollout and risks |
-| [7. Allocation planner guide](docs/07-allocation-planner-guide.md) | User guide for the allocation planner: parameters, checks, export |
 | [Open questions](docs/open-questions.md) | Items to resolve during discovery |
 | [ADRs](docs/adr/) | Architecture decision records |
 
@@ -23,7 +22,7 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 |---|---|
 | [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace (CLI) |
 | [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster; image built by CI to `ghcr.io/cdalar/cluster-resource-report` |
-| [Allocation planner](discovery/README.md#allocation-planner) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing) |
+| [Allocation planner](discovery/README.md#allocation-planner) ([user guide](guides/allocation-planner.md)) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing) |
 | [publish_rancher_names.py](discovery/README.md#project-names-on-downstream-clusters-without-a-token) | Publishes Rancher Project names from the local cluster to downstream clusters (Fleet Bundle with a ConfigMap), so their dashboards show names without a Rancher token |
 
 ## Status

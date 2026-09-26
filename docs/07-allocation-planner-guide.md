@@ -1,0 +1,286 @@
+# 7. Allocation Planner — User Guide
+
+How to plan CPU and memory quota per project and cluster with the allocation planner, and what each parameter
+means.
+
+## What the planner is for
+
+The allocation planner lets the platform team decide how much CPU and memory each project (a Rancher Project, one
+per stream) gets on each cluster, and check that the plan fits both the project's budget and the cluster's
+capacity.
+
+It is a **planning tool only**. It never changes a cluster or a Rancher quota:
+
+- **Save plan** stores the plan inside the planner itself (on its data volume).
+- **Export YAML** produces the allocation files (`allocations/projects/<project>.yaml`).
+- Those files go through the normal pull request, CI validation and Terraform flow
+  ([04](04-technical-design.md#42-allocation-as-code)), which is what actually sets the Rancher Project quotas.
+
+So you can try out numbers freely: nothing reaches a running workload until the exported files are merged and
+applied.
+
+## Opening the planner
+
+Open it from Rancher, logged in with your own Rancher account:
+
+1. In the Rancher UI, open the **local** cluster (the Rancher server's own cluster).
+2. In the cluster's left-hand menu, click **Allocation planner**.
+
+It opens in a new tab. You can also reach it from the resource dashboard: the **Allocation planner** link in its
+header appears whenever the planner is enabled.
+
+There is one planner for all clusters. It runs on the local cluster and reads every cluster Rancher manages, so you
+don't open it per cluster.
+
+**Who can use it:** anyone who can open services in the `resource-report` namespace of the local cluster through
+Rancher, which normally means the platform team (cluster owners of the local cluster). The planner has no login of
+its own; it relies on Rancher's.
+
+## The page at a glance
+
+The page reads top to bottom: settings first, then clusters, then projects. Every number updates as you type.
+
+| Part | What it shows or does |
+| --- | --- |
+| Header | Plan version and when it was last saved; buttons **Dashboard**, **Export YAML** and **Save plan** (enabled once you have unsaved changes) |
+| Planning only notice | Reminder that nothing is applied to any cluster |
+| Issues | Everything in the plan that breaks a rule, or "No issues" when budgets and headroom all fit |
+| Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over headroom |
+| Rates and rules | Collapsed by default; unit rates per platform and rules per environment |
+| Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
+| Projects | One block per project with its budget and a quota row per cluster |
+
+The status text next to the buttons says *Unsaved changes*, *Saving…* or *Saved*, and shows errors in red.
+
+## Parameters: rates and rules
+
+Set these once, before planning projects. Open **Rates and rules** to see them. They apply to the whole plan.
+
+### Currency
+
+The label shown after every amount, e.g. `EUR`. It is a label only; nothing is converted.
+
+### Platforms and unit rates
+
+A platform groups clusters that cost the same to run, e.g. `onprem` and `aks`. Each has two rates:
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| per vCPU | Monthly price of 1 CPU of **requested** quota | 25 |
+| per GiB memory | Monthly price of 1 GiB of **requested** memory quota | 6.25 |
+
+Cost of a quota on a cluster = CPU × rate per vCPU + memory GiB × rate per GiB, using that cluster's platform. The
+defaults are the illustrative numbers from the [allocation model](03-allocation-model.md#unit-rates); replace them
+with the rates finance publishes. **Add platform** creates another one; **Remove** clears it from the clusters that
+used it.
+
+### Environments
+
+Each environment carries two rules:
+
+| Parameter | Meaning | prod | acc | test | dev |
+| --- | --- | --- | --- | --- | --- |
+| max Σ quota / allocatable | The most a cluster of this environment may hand out as project quota, as a share of its allocatable capacity | 80 % | 100 % | 100 % | 150 % |
+| memory limit = request × | Factor for the `limits.memory` written in the export | 1.0 | 2.0 | 2.0 | 2.0 |
+
+- **Max Σ quota** keeps headroom for node failures, rolling updates and platform components
+  ([03](03-allocation-model.md#headroom-and-overcommit)). Prod stays at 80 % so one node can fail. Dev may go above
+  100 % (overcommit) because most dev workloads sit idle.
+- **Memory limit factor** follows resource standard S3 ([02](02-resource-standards.md)): memory limit equals the
+  request in prod, and may be up to twice the request elsewhere.
+
+Environment names are free text; **Add environment** creates more, e.g. `staging`.
+
+## Parameters: clusters
+
+Every cluster Rancher manages is listed automatically. You set two things per cluster; the rest comes from Rancher
+and is read-only.
+
+| Column | Set by | Meaning |
+| --- | --- | --- |
+| Environment | You | Which environment rules apply (headroom limit, memory limit factor) |
+| Platform | You | Which unit rates price quota on this cluster |
+| Nodes | Rancher | Number of nodes |
+| Allocatable CPU / GiB | Rancher | Capacity the scheduler can hand out, after system reservations |
+| Requested now | Rancher | Sum of CPU and memory requests of all pods running now, platform components included |
+| Planned CPU / GiB | Planner | Sum of the quotas you plan for all projects on this cluster |
+| Headroom | Planner | Two bars (CPU, memory): planned quota as a share of allocatable, against the environment's limit |
+
+The headroom bars are green below 90 % of the limit, amber from 90 % of the limit, and red above it. For a prod
+cluster with 10 allocatable CPU and an 80 % limit, planning 9 CPU shows 90 % in red.
+
+A cluster without an environment can't be checked for headroom, and a cluster without a platform gives its quotas
+no price. Both show up as issues once a project has quota there.
+
+## Parameters: projects
+
+Every Rancher Project appears as a block, grouped by name across clusters: `payments` on three clusters is one
+block with three rows. Rancher's own **System** and **Default** projects are hidden; tick *Show Rancher's System /
+Default projects* to plan them too.
+
+### Per project
+
+| Field | Meaning | In the export |
+| --- | --- | --- |
+| Budget / month | The project's monthly budget. Leave it empty if it isn't known yet; the budget check then skips this project | `budget.monthly` |
+| Cost center | The finance cost center the project is charged to | `costCenter` |
+| Owners | Comma-separated contacts, e.g. project leads | `owners` |
+| Planned … of … | Total cost of the planned quotas against the budget; dot green below 95 %, amber from 95 %, red above 100 % | – |
+
+### Per cluster row
+
+| Column | Meaning |
+| --- | --- |
+| Env | The cluster's environment, from the Clusters table |
+| Requests now CPU / GiB | What the project's pods request today. Only known for the local cluster, where the planner runs; "—" elsewhere |
+| Rancher quota now | The Project's current quota in Rancher, or "none" |
+| Quota CPU | The CPU quota you plan (Rancher: *CPU Reservation*, `requests.cpu`) |
+| Quota GiB | The memory quota you plan (Rancher: *Memory Reservation*, `requests.memory`) |
+| Cost / month | Price of that quota with the cluster's platform rates |
+
+### Three ways to fill a row
+
+1. **Type the quota** into *Quota CPU* and *Quota GiB* when you know the size you want.
+2. **Convert from an amount** when you start from money: enter an amount per month and the share of it that should
+   go to CPU (default 50 %), then click **Convert**. CPU = amount × share ÷ rate per vCPU, memory = amount ×
+   (1 − share) ÷ rate per GiB. The cluster needs a platform with rates for this.
+3. **Requests +25 %** (only where current requests are known) sets the quota to today's requests plus 25 %
+   headroom, a sensible starting point for surge pods during rollouts.
+
+You can mix them: convert first, then round the numbers by hand. A row with 0 CPU and 0 GiB counts as "no
+allocation" and is left out of the export.
+
+## The checks
+
+The issues box lists every problem as you type; the server runs the same checks again on save. Red issues break a
+rule, amber ones mean the plan is incomplete. You can still save a plan with issues, so a draft is never lost.
+
+| Issue | Level | What it means | How to fix it |
+| --- | --- | --- | --- |
+| *payments: planned quota costs 375.00 a month, over its budget of 250.00* | red | The priced quota of the project across all clusters exceeds its monthly budget | Lower quota on some cluster, or agree a higher budget |
+| *prod-01 (prod): planned CPU quota is 90 % of allocatable, above the 80 % allowed* | red | All projects together plan more quota on that cluster than its environment allows | Lower quotas there, move a project to another cluster, or add capacity |
+| *payments: no platform set for prod-01, so its quota there has no price* | amber | The cluster has no platform, so cost and budget can't be checked | Pick a platform for the cluster in the Clusters table |
+| *prod-01: no environment set, so its headroom rule can't be checked* | amber | The cluster has quota planned but no environment | Pick an environment for the cluster |
+| *newstream: no Rancher Project of that name on prod-01 yet* | amber | The plan gives quota to a project that doesn't exist on that cluster in Rancher | Create the Rancher Project first, or check the spelling of the name |
+| *payments: cluster c-m-xxxxx is no longer in Rancher* | amber | The plan still holds quota for a cluster that was removed from Rancher | Set that row to 0, or remove the project's allocation there |
+
+The tiles above the settings count the red issues: *Projects over budget* and *Clusters over headroom*.
+
+## Saving and versions
+
+Click **Save plan** to store your changes. Each save gets the next version number, shown in the header ("Plan
+version 4, saved …").
+
+- **One shared plan.** Everyone who opens the planner sees and edits the same plan.
+- **No silent overwrites.** If someone else saved while you were editing, your save is refused with *the plan was
+  changed by someone else*. Your edits stay on screen: note what you changed, reload the page, and apply your
+  changes to the newer version.
+- **History.** The last 30 saved versions are kept on the planner's volume
+  (`planner-history/planner-v00004.json`), so an administrator can recover an earlier plan.
+- **Leaving with unsaved changes** triggers the browser's "leave page?" warning.
+- **Invalid input** (negative numbers, text in a number field, a line break in a cost center) is refused with a
+  message naming the field.
+
+## From plan to applied quota
+
+**Export YAML** downloads `allocations.yaml`: one YAML document per project, in the allocation-file format of the
+[technical design](04-technical-design.md#42-allocation-as-code). It exports the **last saved** plan; if you have
+unsaved changes, the page asks first.
+
+```yaml
+# allocations/projects/payments.yaml
+project: "payments"
+costCenter: "CC-1234"
+owners: ["pay-lead@corp"]
+budget:
+  currency: "EUR"
+  monthly: 200
+allocations:
+  - cluster: "cra-downstream-2"
+    env: "prod"
+    quota:
+      requests.cpu: "3"
+      requests.memory: 8Gi
+      limits.memory: 8Gi
+```
+
+Clusters appear by their Rancher name. `limits.memory` is the planned memory × the environment's memory limit factor
+(8 GiB in prod here; a test cluster at factor 2 would get twice the request). Rows with 0 CPU and 0 GiB are left out.
+
+The path to an applied quota:
+
+1. Split the export into one file per project (each document starts with its file name as a comment) and commit
+   them to the allocations repository under `allocations/projects/`.
+2. Open a pull request. The pull request is the approval: the platform team approves, and increases above budget go
+   to the budget owner ([05](05-process.md)).
+3. CI validates the files: budget per project and headroom per cluster, the same checks the planner showed you.
+4. After merge, Terraform (`rancher2` provider) sets the Rancher Project quota on each cluster.
+5. The planner's *Rancher quota now* column then shows the applied values, so you can see where plan and reality
+   differ.
+
+## Worked example
+
+The payments stream has a budget of 400 EUR a month and runs on a prod cluster `prod-01` (10 allocatable CPU,
+40 GiB) and a test cluster `test-01`. Rates are the defaults: 25 per vCPU, 6.25 per GiB.
+
+1. **Rates and rules:** keep the defaults, or enter the published rates.
+2. **Clusters:** set `prod-01` to environment *prod*, platform *onprem*; set `test-01` to *test*, *onprem*.
+3. **Project:** in the *payments* block, enter budget 400, cost center `CC-1234`, owner `pay-lead@corp`.
+4. **prod-01 row:** payments wants 300 EUR of its budget in prod, 60 % for CPU. Enter 300 and 60, click
+   **Convert**: CPU = 300 × 0.6 ÷ 25 = **7.2**, memory = 300 × 0.4 ÷ 6.25 = **19.2 GiB**.
+5. **Check:** the prod-01 CPU bar shows 72 % against the 80 % limit, green. If another project already plans 2 CPU
+   there, the total is 92 % and the planner flags *prod-01 (prod): planned CPU quota is 92 % of allocatable, above
+   the 80 % allowed*. Round payments down to 6 CPU, or move the other project.
+6. **test-01 row:** type 2 CPU and 4 GiB directly: 2 × 25 + 4 × 6.25 = 75 EUR.
+7. **Budget:** planned 300 + 75 = 375 of 400 EUR, dot green.
+8. **Save plan**, then **Export YAML**, and commit the payments document as `allocations/projects/payments.yaml`.
+   The export writes `limits.memory` 19.2Gi for prod-01 (factor 1) and 8Gi for test-01 (factor 2).
+
+## Limitations and FAQ
+
+**Why doesn't saving change the quota in Rancher?** By design. Allocations are managed as code: Git is the source of
+truth and the pull request is the approval. The planner prepares those files, it doesn't bypass them.
+
+**Why is "Requests now" empty for most clusters?** The planner runs on the local cluster and only collects that
+cluster's pods. For other clusters, see each cluster's own resource dashboard (Rancher menu *Resource report*).
+
+**What does quota cover?** CPU and memory requests (Rancher's *CPU Reservation* and *Memory Reservation*), plus the
+derived memory limit. CPU limits, storage and object counts are not planned here.
+
+**Can I plan a project that doesn't exist in Rancher yet?** Only on clusters where it exists: a project's rows are
+the clusters where Rancher has a Project of that name. Create the Rancher Project first, then plan it.
+
+**Same project name on several clusters?** Treated as one stream with one budget; each cluster gets its own quota
+row. Quota itself is always per cluster.
+
+**Does a quota include room for rollouts?** Only if you plan it. During a rolling update, surge pods count against
+quota; plan 10–25 % above normal requests (the *Requests +25 %* button does this).
+
+**Is the Git and Terraform flow in place?** It is the designed process
+([ADR-0001](adr/0001-enforcement-mechanism.md), status *proposed*). Until the allocations repository and pipeline
+exist, the export is the input for setting quotas by hand.
+
+## For administrators: enabling the planner
+
+The planner is part of the `cluster-resource-report` Helm chart ([chart README](../charts/cluster-resource-report/README.md))
+and is installed once, on the Rancher local cluster:
+
+```bash
+helm upgrade --install resource-report charts/cluster-resource-report -n resource-report --create-namespace \
+  --set rancher.isLocalCluster=true \
+  --set persistence.enabled=true \
+  --set planner.enabled=true
+```
+
+| Value | Why it's needed |
+| --- | --- |
+| `planner.enabled=true` | Turns the planner on (`/planner`) and adds the *Allocation planner* entry to the local cluster's Rancher menu |
+| `rancher.isLocalCluster=true` | Lets it read clusters and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
+| `persistence.enabled=true` | Stores the plan on a volume; without it the chart refuses to install, so a pod restart can't lose the plan |
+
+- **Permissions:** read-only (`get`/`list` on Rancher `projects` and `clusters`). The planner has no permission to
+  change a cluster or a quota.
+- **Data:** the plan is `planner.json` on the volume, with the last 30 versions in `planner-history/`. Back up that
+  volume if the plan matters before it is exported.
+- **Security:** saving requires the page's own request header, so another website can't make a logged-in browser
+  change the plan through Rancher's proxy.

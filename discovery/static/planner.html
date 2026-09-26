@@ -105,16 +105,15 @@ details summary { cursor: pointer; }
 
   <div class="card">
     <details id="settings-box">
-      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates; node failures, headroom and memory limit per environment</span></summary>
+      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates per platform; node failures, headroom and memory limit per environment</span></summary>
       <div class="settings-grid">
         <div>
           <h3>Unit rates per month</h3>
+          <div class="table-wrap"><table><thead><tr><th>Platform</th><th>per vCPU</th><th>per GiB memory</th><th></th></tr></thead><tbody id="platforms"></tbody></table></div>
           <div class="actions" style="margin-top:8px">
-            <label class="sub">per vCPU <input type="number" min="0" step="any" id="cpu-rate"></label>
-            <label class="sub">per GiB memory <input type="number" min="0" step="any" id="mem-rate"></label>
             <label class="sub">Currency <input id="currency" style="width:70px"></label>
+            <button type="button" class="small" id="add-platform">Add platform</button>
           </div>
-          <div class="note">The monthly price of 1 vCPU and 1 GiB of requested quota, the same for every cluster.</div>
         </div>
         <div>
           <h3>Environments</h3>
@@ -139,7 +138,7 @@ details summary { cursor: pointer; }
       The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
   </div>
@@ -151,7 +150,7 @@ details summary { cursor: pointer; }
         <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default projects</label>
       </div>
     </div>
-    <div class="note" style="margin:-4px 0 8px">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with the unit rates. Planned cost is compared with the project's monthly budget.</div>
+    <div class="note" style="margin:-4px 0 8px">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</div>
     <div id="projects"></div>
   </div>
 </div>
@@ -222,11 +221,11 @@ async function save() {
 // ---- model helpers (mirror planner.evaluate for live feedback; the server re-checks on save) ----
 function clusterRules(cid) {
   const c = plan.clusters[cid] || {};
-  return {env: plan.settings.envs[c.env], envName: c.env || ""};
+  return {platform: plan.settings.platforms[c.platform], env: plan.settings.envs[c.env], envName: c.env || ""};
 }
-function allocCost(a) {
-  const r = plan.settings.rates;
-  return a.cpu * r.cpu_rate + a.memory_gib * r.mem_rate;
+function allocCost(cid, a) {
+  const {platform} = clusterRules(cid);
+  return platform ? a.cpu * platform.cpu_rate + a.memory_gib * platform.mem_rate : null;
 }
 function projectNames() {
   const names = new Set(Object.keys(plan.projects));
@@ -262,13 +261,15 @@ function evaluate() {
   const clusters = Object.fromEntries(data.inventory.clusters.map((c) => [c.id, c]));
   const issues = [], projects = {}, totals = {};
   for (const [name, p] of Object.entries(plan.projects)) {
-    let cost = 0;
+    let cost = 0; const unpriced = [];
     for (const [cid, a] of Object.entries(p.allocations)) {
       if (!a.cpu && !a.memory_gib) continue;
-      cost += allocCost(a);
+      const c = allocCost(cid, a);
+      if (c == null) unpriced.push(clusters[cid]?.name || cid); else cost += c;
       const t = totals[cid] ||= {cpu: 0, mem: 0}; t.cpu += a.cpu; t.mem += a.memory_gib;
     }
-    projects[name] = {cost};
+    projects[name] = {cost, unpriced};
+    if (unpriced.length) issues.push(["warning", `${name}: no platform set for ${unpriced.join(", ")}, so its quota there has no price`]);
     if (p.monthly_budget != null && cost > p.monthly_budget + 0.005) issues.push(["critical", `${name}: planned quota costs ${money(cost)} a month, over its budget of ${money(p.monthly_budget)}`]);
   }
   const clusterRows = {};
@@ -311,10 +312,11 @@ function renderSettings() {
   const s = plan.settings;
   $("currency").value = s.currency || "";
   $("currency").oninput = (e) => { s.currency = e.target.value.trim(); markDirty(); };
-  $("cpu-rate").value = s.rates.cpu_rate;
-  $("cpu-rate").oninput = (e) => { s.rates.cpu_rate = num(e.target.value); markDirty(); };
-  $("mem-rate").value = s.rates.mem_rate;
-  $("mem-rate").oninput = (e) => { s.rates.mem_rate = num(e.target.value); markDirty(); };
+  $("platforms").replaceChildren(...Object.entries(s.platforms).map(([name, p]) => h("tr", {},
+    h("td", {}, name),
+    h("td", {}, numberInput(p.cpu_rate, (v) => { p.cpu_rate = num(v); markDirty(); }, {label: `${name} rate per vCPU`})),
+    h("td", {}, numberInput(p.mem_rate, (v) => { p.mem_rate = num(v); markDirty(); }, {label: `${name} rate per GiB`})),
+    h("td", {}, Object.keys(s.platforms).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.platforms[name]; for (const c of Object.values(plan.clusters)) if (c.platform === name) c.platform = ""; markDirty(); render(); }}, "Remove")))));
   $("envs").replaceChildren(...Object.entries(s.envs).map(([name, e]) => h("tr", {},
     h("td", {}, name),
     h("td", {}, h("input", {type: "number", min: "0", max: "10", step: "1", value: e.node_failures ?? 0, "aria-label": `${name} node failures to tolerate`, style: "width:60px", oninput: (ev) => { e.node_failures = Math.max(0, Math.round(num(ev.target.value))); markDirty(); }})),
@@ -322,6 +324,11 @@ function renderSettings() {
     h("td", {}, numberInput(e.mem_limit_factor, (v) => { e.mem_limit_factor = num(v); markDirty(); }, {label: `${name} memory limit factor`, step: "0.1"})),
     h("td", {}, Object.keys(s.envs).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.envs[name]; for (const c of Object.values(plan.clusters)) if (c.env === name) c.env = ""; markDirty(); render(); }}, "Remove")))));
 }
+$("add-platform").onclick = () => {
+  const name = (prompt("Platform name (e.g. aks-westeurope):") || "").trim();
+  if (!name || plan.settings.platforms[name]) return;
+  plan.settings.platforms[name] = {cpu_rate: 0, mem_rate: 0}; markDirty(); render();
+};
 $("add-env").onclick = () => {
   const name = (prompt("Environment name:") || "").trim();
   if (!name || plan.settings.envs[name]) return;
@@ -345,7 +352,7 @@ const pair = (cpu, mem) => (cpu == null && mem == null) ? h("span", {class: "mut
 function renderClusters() {
   const s = plan.settings;
   $("clusters").replaceChildren(...(data.inventory.clusters.length ? data.inventory.clusters.map((c) => {
-    const cfg = plan.clusters[c.id] ||= {env: ""};
+    const cfg = plan.clusters[c.id] ||= {env: "", platform: ""};
     const reserveIn = (key, measured, label) => h("input", {type: "number", min: "0", step: "any", style: "width:64px",
       value: cfg[key] ?? "", placeholder: measured != null ? fmt(measured, 2) : "?", "aria-label": `${c.name} platform reserve ${label}`,
       title: measured != null ? `measured: ${fmt(measured, 3)} — leave empty to use it` : "not measured for this cluster",
@@ -357,12 +364,13 @@ function renderClusters() {
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
       h("td", {class: "l"}, select(Object.keys(s.envs), cfg.env, (v) => { cfg.env = v; markDirty(); renderProjects(); }, `${c.name} environment`)),
+      h("td", {class: "l"}, select(Object.keys(s.platforms), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
       h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
       h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
       h("td", {"data-k": "failover"}),
       h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}), useRequests)),
       h("td", {"data-k": "limit"}), h("td", {"data-k": "planned"}), h("td", {class: "l", "data-k": "use"}));
-  }) : [h("tr", {}, h("td", {colspan: 9, class: "empty"}, "No clusters in Rancher"))]));
+  }) : [h("tr", {}, h("td", {colspan: 10, class: "empty"}, "No clusters in Rancher"))]));
 }
 
 function renderProjects() {
@@ -384,10 +392,10 @@ function renderProjects() {
       const amount = h("input", {type: "number", min: "0", step: "any", placeholder: plan.settings.currency || "€", "aria-label": `${name} on ${clusters[cid]?.name || cid}: amount per month`});
       const share = h("input", {type: "number", min: "0", max: "100", step: "1", value: "50", "aria-label": "CPU share of the amount, percent"});
       const convert = h("button", {type: "button", class: "small", onclick: () => {
-        const rates = plan.settings.rates;
-        if (!rates.cpu_rate || !rates.mem_rate) { setStatus("Set the unit rates under Rates and rules first", true); return; }
+        const {platform} = clusterRules(cid);
+        if (!platform || !platform.cpu_rate || !platform.mem_rate) { setStatus(`Set a platform with rates for ${clusters[cid]?.name || cid} first`, true); return; }
         const eur = num(amount.value), sh = Math.min(100, Math.max(0, num(share.value))) / 100;
-        a().cpu = round(eur * sh / rates.cpu_rate, 2); a().memory_gib = round(eur * (1 - sh) / rates.mem_rate, 1);
+        a().cpu = round(eur * sh / platform.cpu_rate, 2); a().memory_gib = round(eur * (1 - sh) / platform.mem_rate, 1);
         cpuIn.value = a().cpu; memIn.value = a().memory_gib; markDirty();
       }}, "Convert");
       const fromReq = rp && rp.requests_cpu != null && h("button", {type: "button", class: "small", title: "current requests + 25 % headroom", onclick: () => {
@@ -445,8 +453,8 @@ function recompute() {
     for (const tr of div.querySelectorAll("tr[data-cluster]")) {
       const cid = tr.dataset.cluster, a = p?.allocations?.[cid];
       tr.querySelector('[data-k="env"]').replaceChildren(clusterRules(cid).envName || h("span", {class: "muted"}, "—"));
-      const c = a ? allocCost(a) : 0;
-      tr.querySelector('[data-k="cost"]').replaceChildren(a && (a.cpu || a.memory_gib) ? money(c) : h("span", {class: "muted"}, "—"));
+      const c = a ? allocCost(cid, a) : 0;
+      tr.querySelector('[data-k="cost"]').replaceChildren(a && (a.cpu || a.memory_gib) ? (c == null ? h("span", {class: "muted"}, "no platform") : money(c)) : h("span", {class: "muted"}, "—"));
     }
     const pr = ev.projects[name] || {cost: 0};
     const budget = p?.monthly_budget;

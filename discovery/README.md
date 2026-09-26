@@ -141,11 +141,10 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
 `server.py --planner` (Rancher local cluster only; needs `--rancher-local-self`, `--rancher-local-context` or
 `--rancher-local-kubeconfig`) adds a planning page at `/planner`, implemented in `planner.py`:
 
-- **Input:** one pair of unit rates (€ per vCPU-month / GiB-month), per environment the node failures to tolerate,
-  the maximum Σ quota as a share of allocatable and the memory-limit factor, per cluster its environment and
-  platform reserve, and per project a monthly
+- **Input:** unit rates per platform (€ per vCPU-month / GiB-month), per environment the maximum Σ quota as a share
+  of allocatable and the memory-limit factor, per cluster its environment and platform, and per project a monthly
   budget, cost center, owners and a CPU/memory quota per cluster -- typed in, converted from an amount with the
-  unit rates, or taken from current requests + 25 %.
+  cluster's rates, or taken from current requests + 25 %.
 - **Rancher inventory (read-only):** `clusters.management.cattle.io` (allocatable, requested, nodes) and
   `projects.management.cattle.io` (current quota). Current requests per project come from this collector's own
   report, so only for the cluster it scans.

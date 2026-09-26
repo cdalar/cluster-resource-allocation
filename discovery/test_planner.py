@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -21,8 +22,19 @@ PROJECTS = [
 ]
 
 
-def inventory():
-    return planner.parse_inventory(CLUSTERS, PROJECTS)
+def node(cluster, name, cpu, mem, cordoned=False):
+    return {"metadata": {"name": f"m-{name}", "namespace": cluster},
+            "spec": {"internalNodeSpec": {"unschedulable": cordoned}},
+            "status": {"nodeName": name, "internalNodeStatus": {"allocatable": {"cpu": str(cpu), "memory": f"{mem}Gi"}}}}
+
+
+# prod-01: three schedulable nodes (4+4+2 CPU, 16+16+8 GiB = the 10 CPU / 40 GiB of CLUSTERS) and one cordoned
+NODES = [node("c-m-1", "n1", 4, 16), node("c-m-1", "n2", 4, 16), node("c-m-1", "n3", 2, 8),
+         node("c-m-1", "n4", 8, 32, cordoned=True), node("local", "cra-report", 2, 8)]
+
+
+def inventory(nodes=NODES):
+    return planner.parse_inventory(CLUSTERS, PROJECTS, nodes)
 
 
 def plan_with(**projects):
@@ -90,6 +102,22 @@ class Store(unittest.TestCase):
             self.assertEqual(store.save(planner.empty_state(), 1)["version"], 2)
             self.assertEqual(len(os.listdir(os.path.join(d, planner.HISTORY_DIR))), 2)
 
+    def test_old_plan_file_gets_new_defaults_on_load(self):
+        # a plan saved before node failures / platform reserve existed must still evaluate
+        with tempfile.TemporaryDirectory() as d:
+            store = planner.PlanStore(d)
+            old = planner.empty_state()
+            for e in old["settings"]["envs"].values():
+                e.pop("node_failures")
+            old.update(version=7, updated_at="2026-09-26T10:00:00+00:00",
+                       clusters={"c-m-1": {"env": "prod", "platform": "onprem"}})
+            with open(store.path, "w") as f:
+                json.dump(old, f)
+            plan = store.load()
+            self.assertEqual((plan["version"], plan["settings"]["envs"]["prod"]["node_failures"]), (7, 1))
+            self.assertIsNone(plan["clusters"]["c-m-1"]["platform_cpu"])
+            planner.evaluate(plan, inventory())  # no KeyError
+
     def test_invalid_plan_is_not_written(self):
         with tempfile.TemporaryDirectory() as d:
             store = planner.PlanStore(d)
@@ -101,32 +129,101 @@ class Store(unittest.TestCase):
 
 
 class Evaluate(unittest.TestCase):
-    def test_within_budget_and_headroom(self):
-        # 4 CPU * 25 + 16 GiB * 6.25 = 200
-        plan = plan_with(payments={"monthly_budget": 200, "allocations": {"c-m-1": {"cpu": 4, "memory_gib": 16}}})
+    """prod-01 in prod: lose the largest node (4 CPU / 16 GiB), platform reserve 1 CPU / 4 GiB.
+    CPU limit = min(10 - 4 - 1, 80 % x (10 - 1)) = min(5, 7.2) = 5; memory = min(40 - 16 - 4, 80 % x 36) = 20."""
+
+    def plan(self, env="prod", reserve=(1, 4), **projects):
+        raw = planner.empty_state()
+        raw["clusters"] = {"c-m-1": {"env": env, "platform": "onprem"}}
+        if reserve:
+            raw["clusters"]["c-m-1"].update(platform_cpu=reserve[0], platform_mem_gib=reserve[1])
+        raw["projects"] = projects
+        return planner.validate_state(raw)
+
+    def test_node_failure_rule_sets_the_limit(self):
+        plan = self.plan(payments={"monthly_budget": 200, "allocations": {"c-m-1": {"cpu": 4, "memory_gib": 16}}})
         ev = planner.evaluate(plan, inventory())
-        self.assertEqual(ev["projects"]["payments"]["cost"], 200)
-        self.assertEqual(ev["clusters"]["c-m-1"]["cpu_pct"], 40)
+        row = ev["clusters"]["c-m-1"]
+        self.assertEqual(ev["projects"]["payments"]["cost"], 200)  # 4 * 25 + 16 * 6.25
+        self.assertEqual((row["failover_cpu"], row["reserve_cpu"], row["limit_cpu"], row["binding_cpu"]),
+                         (4, 1, 5, "failures"))
+        self.assertEqual((row["failover_mem"], row["limit_mem"]), (16, 20))
+        self.assertEqual(row["node_count"], 3)  # the cordoned node doesn't count
+        self.assertEqual(row["cpu_pct"], 80)  # 4 of the 5 CPU limit
         self.assertEqual(ev["issues"], [])
 
-    def test_over_budget_and_over_headroom(self):
-        plan = plan_with(payments={"monthly_budget": 100, "allocations": {"c-m-1": {"cpu": 9, "memory_gib": 8}}})
+    def test_over_the_limit_and_over_budget(self):
+        plan = self.plan(payments={"monthly_budget": 100, "allocations": {"c-m-1": {"cpu": 6, "memory_gib": 8}}})
         texts = [i["text"] for i in planner.evaluate(plan, inventory())["issues"]]
         self.assertTrue(any("over its budget" in t for t in texts), texts)
-        self.assertTrue(any("90 % of allocatable, above the 80 %" in t for t in texts), texts)
+        self.assertIn("prod-01 (prod): planned CPU quota 6 is above its limit for projects of 5 (allocatable minus "
+                      "its 1 largest node(s) and the platform reserve)", texts)
+
+    def test_percentage_rule_without_node_failures(self):
+        plan = self.plan(env="test", payments={"allocations": {"c-m-1": {"cpu": 9.5, "memory_gib": 1}}})
+        ev = planner.evaluate(plan, inventory())
+        row = ev["clusters"]["c-m-1"]
+        self.assertEqual((row["node_failures"], row["limit_cpu"], row["binding_cpu"]), (0, 9, "pct"))
+        self.assertTrue(any("100 % of allocatable minus the platform reserve" in i["text"] for i in ev["issues"]))
+
+    def test_platform_reserve_missing(self):
+        plan = self.plan(reserve=None, payments={"allocations": {"c-m-1": {"cpu": 1, "memory_gib": 1}}})
+        ev = planner.evaluate(plan, inventory())
+        self.assertEqual(ev["clusters"]["c-m-1"]["reserve_source"], "none")
+        self.assertTrue(any("platform reserve not set" in i["text"] for i in ev["issues"]))
+
+    def test_platform_reserve_measured_on_the_scanned_cluster(self):
+        report = {"clusters": [{"cluster": "local"}],
+                  "projects": [{"project_id": "local:p-sys", "category": "system", "cpu_requests": 0.4,
+                                "mem_requests_gib": 1.5},
+                               {"project_id": "", "category": "system", "cpu_requests": 0.1, "mem_requests_gib": 0.5},
+                               {"project_id": "local:p-bbbbb", "category": "tenant", "cpu_requests": 1,
+                                "mem_requests_gib": 1}]}
+        inv = planner.add_report_requests(inventory(), report)
+        local = next(c for c in inv["clusters"] if c["id"] == "local")
+        prod = next(c for c in inv["clusters"] if c["id"] == "c-m-1")
+        self.assertEqual((local["platform_measured_cpu"], local["platform_measured_mem_gib"]), (0.5, 2))
+        self.assertIsNone(prod["platform_measured_cpu"])
+        raw = planner.empty_state()
+        raw["clusters"] = {"local": {"env": "test", "platform": "onprem"}}
+        row = planner.evaluate(planner.validate_state(raw), inv)["clusters"]["local"]
+        self.assertEqual((row["reserve_source"], row["limit_cpu"]), ("measured", 1.5))  # 100 % x (2 - 0.5)
+
+    def test_single_node_prod_cluster(self):
+        raw = planner.empty_state()
+        raw["clusters"] = {"local": {"env": "prod", "platform": "onprem", "platform_cpu": 0, "platform_mem_gib": 0}}
+        raw["projects"] = {"crm": {"allocations": {"local": {"cpu": 0.5, "memory_gib": 1}}}}
+        ev = planner.evaluate(planner.validate_state(raw), inventory())
+        self.assertEqual(ev["clusters"]["local"]["limit_cpu"], 0)
+        self.assertTrue(any("1 schedulable node(s) can't tolerate 1 node failure(s)" in i["text"] for i in ev["issues"]))
+
+    def test_node_sizes_unknown_still_checks_the_percentage(self):
+        plan = self.plan(payments={"allocations": {"c-m-1": {"cpu": 9, "memory_gib": 1}}})
+        texts = " ".join(i["text"] for i in planner.evaluate(plan, inventory(nodes=[]))["issues"])
+        self.assertIn("Rancher reports no node sizes", texts)
+        self.assertIn("above its limit for projects of 7.2 (80 % of allocatable", texts)
 
     def test_cluster_without_env_or_platform(self):
-        plan = plan_with(crm={"allocations": {"local": {"cpu": 1, "memory_gib": 1}}})
-        ev = planner.evaluate(plan, inventory())
+        raw = planner.empty_state()
+        raw["projects"] = {"crm": {"allocations": {"local": {"cpu": 1, "memory_gib": 1}}}}
+        ev = planner.evaluate(planner.validate_state(raw), inventory())
         texts = " ".join(i["text"] for i in ev["issues"])
         self.assertIn("no platform set for local", texts)
         self.assertIn("local: no environment set", texts)
         self.assertEqual(ev["projects"]["crm"]["cost"], 0)
 
     def test_project_missing_in_rancher(self):
-        plan = plan_with(newstream={"allocations": {"c-m-1": {"cpu": 1, "memory_gib": 1}}})
+        plan = self.plan(newstream={"allocations": {"c-m-1": {"cpu": 1, "memory_gib": 1}}})
         texts = " ".join(i["text"] for i in planner.evaluate(plan, inventory())["issues"])
         self.assertIn("no Rancher Project of that name on prod-01", texts)
+
+    def test_old_plans_get_the_default_node_failures(self):
+        raw = planner.empty_state()
+        for e in raw["settings"]["envs"].values():
+            e.pop("node_failures")
+        plan = planner.validate_state(raw)
+        self.assertEqual(plan["settings"]["envs"]["prod"]["node_failures"], 1)
+        self.assertEqual(plan["settings"]["envs"]["dev"]["node_failures"], 0)
 
 
 class Export(unittest.TestCase):

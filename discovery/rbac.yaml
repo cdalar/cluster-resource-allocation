@@ -26,6 +26,6 @@ rules:
   resourceNames: ["http:rancher-monitoring-prometheus:9090"]
   verbs: [get]
 # On the Rancher local cluster only (for --rancher-local-context / --rancher-local-self), additionally:
-#   apiGroups: [management.cattle.io], resources: [projects, clusters], verbs: [get, list]
+#   apiGroups: [management.cattle.io], resources: [projects, clusters, nodes], verbs: [get, list]   (nodes: planner N+1)
 # On downstream clusters with --rancher-names-configmap, additionally (in that namespace):
 #   apiGroups: [""], resources: [configmaps], resourceNames: [rancher-project-names], verbs: [get]

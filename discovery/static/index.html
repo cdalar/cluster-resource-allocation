@@ -160,6 +160,7 @@ tr.selected { background: var(--hover); }
       <div class="legend" id="capLegend"></div>
     </div>
     <div id="capacity"></div>
+    <div class="sub" id="n1note" style="margin-top:8px"></div>
   </div>
 
   <div class="filters" role="group" aria-label="Filters">
@@ -356,10 +357,11 @@ function renderTiles() {
   const cpuU = nsUsage.reduce((a, n) => a + (cpuUsed(n) || 0), 0), memU = nsUsage.reduce((a, n) => a + (memUsed(n) || 0), 0);
   const missing = c.containers_no_cpu_request + c.containers_no_mem_request > 0;
   const pctMissing = c.containers ? Math.round(100 * c.containers_no_cpu_request / c.containers) : 0;
-  $("#tiles").replaceChildren(
+  $("#tiles").replaceChildren(...[
     tile("Allocatable (schedulable nodes)", smart(c.alloc_cpu_schedulable), "vCPU", `${smart(c.alloc_mem_gib_schedulable)} GiB · ${c.nodes_schedulable} of ${c.nodes} nodes`),
     tile("CPU requested", `${num(c.cpu_requests_pct_of_schedulable, 0)}%`, "", `${smart(cpuSched)} of ${smart(c.alloc_cpu_schedulable)} vCPU`),
     tile("Memory requested", `${num(c.mem_requests_pct_of_schedulable, 0)}%`, "", `${smart(memSched)} of ${smart(c.alloc_mem_gib_schedulable)} GiB`),
+    n1Tile(c),
     tile(usedLabel(), smart(cpuU), "vCPU", `${smart(memU)} GiB memory`),
     tile("Containers without CPU request", f0.format(c.containers_no_cpu_request), "",
       missing ? `${pctMissing}% of ${f0.format(c.containers)} · ${f0.format(c.containers_no_mem_limit)} without memory limit` : `all ${f0.format(c.containers)} set`,
@@ -368,7 +370,39 @@ function renderTiles() {
       c.cpu_requests_pending > 0 ? "warning" : null),
     tile("Unassigned namespaces", f0.format(c.namespaces_unassigned), "", "not in any Rancher Project",
       c.namespaces_unassigned > 0 ? "warning" : null),
-  );
+  ].filter(Boolean));
+}
+
+// N+1: what projects can have if the largest schedulable node fails, after platform components (system requests)
+function n1Numbers(c) {
+  if (c.alloc_cpu_n1 == null) return null;   // report from before these fields existed
+  return {
+    cpuProjects: c.cpu_requests_tenant + c.cpu_requests_unassigned,
+    memProjects: c.mem_requests_gib_tenant + c.mem_requests_gib_unassigned,
+  };
+}
+function n1Tile(c) {
+  const n = n1Numbers(c);
+  if (!n) return null;
+  if (c.nodes_schedulable < 2) return tile("Room for projects (N+1)", "0", "vCPU", "one schedulable node: nothing survives a node failure", "serious");
+  const fits = n.cpuProjects <= c.cpu_for_projects_n1 + 1e-9 && n.memProjects <= c.mem_gib_for_projects_n1 + 1e-9;
+  return tile("Room for projects (N+1)", smart(c.cpu_for_projects_n1), "vCPU",
+    `${smart(c.mem_gib_for_projects_n1)} GiB · projects request ${smart(n.cpuProjects)} vCPU / ${smart(n.memProjects)} GiB`,
+    fits ? "good" : "serious");
+}
+function renderN1Note(c) {
+  const box = $("#n1note");
+  const n = c && n1Numbers(c);
+  if (!n) { box.replaceChildren(); return; }
+  const line = (res, unit, alloc, largest, n1, system, left, projects) =>
+    `${res}: ${smart(alloc)} allocatable − ${smart(largest)} largest node = ${smart(n1)} after a node failure − ${smart(system)} platform components = ` +
+    `${smart(left)} ${unit} for projects; projects request ${smart(projects)} ${unit}` +
+    (projects > left + 1e-9 ? ` — ${smart(projects - left)} ${unit} would not fit after a node failure.` : " — fits.");
+  box.replaceChildren(
+    el("b", { text: "N+1 (dashed line): " }),
+    "the capacity left if the largest schedulable node fails. Platform components (cattle-*, kube-system, monitoring — the System category) come off first; the rest is what projects can safely have.",
+    el("br"), line("CPU", "vCPU", c.alloc_cpu_schedulable, c.largest_node_cpu, c.alloc_cpu_n1, c.cpu_requests_system, c.cpu_for_projects_n1, n.cpuProjects),
+    el("br"), line("Memory", "GiB", c.alloc_mem_gib_schedulable, c.largest_node_mem_gib, c.alloc_mem_gib_n1, c.mem_requests_gib_system, c.mem_gib_for_projects_n1, n.memProjects));
 }
 
 function legend(target, items) {
@@ -397,18 +431,20 @@ function renderCapacity() {
   if (!c) { box.replaceChildren(); return; }
   const colors = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
   const names = ["Tenant", "System", "Unassigned"];
-  legend("#capLegend", [[colors[0], "Tenant"], [colors[1], "System"], [colors[2], "Unassigned"], ["var(--track)", "Free"]]);
+  legend("#capLegend", [[colors[0], "Tenant"], [colors[1], "System (platform)"], [colors[2], "Unassigned"], ["var(--track)", "Free"]]);
+  if (c.alloc_cpu_n1 != null) $("#capLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border-left:2px dashed var(--text-primary);border-radius:0" }), "If the largest node fails"));
+  renderN1Note(c);
   const pend = (cat, res) => state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category === cat)
     .reduce((a, n) => a + (res === "cpu" ? n.cpu_requests_pending : n.mem_requests_pending_gib), 0);
   const rows = [
-    ["CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable],
-    ["Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable],
+    ["CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable, c.alloc_cpu_n1],
+    ["Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable, c.alloc_mem_gib_n1],
   ];
   const W = widthOf(box, 1000), narrow = W < 640;
   const labelW = narrow ? 0 : 70, rightW = narrow ? 0 : 210, barH = 22;
   const rowH = narrow ? 64 : 40, barY = narrow ? 18 : 6;
   const svg = sv("svg", { viewBox: `0 0 ${W} ${rows.length * rowH}`, width: W, height: rows.length * rowH, role: "img", "aria-label": "Cluster capacity by requests" });
-  rows.forEach(([name, unit, alloc, parts, pctOfAlloc], i) => {
+  rows.forEach(([name, unit, alloc, parts, pctOfAlloc, n1], i) => {
     const y = i * rowH + barY, plotW = W - labelW - rightW;
     const total = parts.reduce((a, b) => a + Math.max(b, 0), 0);
     const scale = plotW / Math.max(alloc, total, 1e-9);
@@ -429,6 +465,13 @@ function renderCapacity() {
     if (total > alloc && alloc > 0) {   // allocatable marker when requests exceed schedulable capacity
       const ax = labelW + alloc * scale;
       svg.append(sv("line", { x1: ax, x2: ax, y1: y - 4, y2: y + barH + 4, stroke: "var(--text-primary)", "stroke-width": 2 }));
+    }
+    if (n1 != null && alloc > 0) {   // N+1 marker: capacity left if the largest node fails
+      const nx = labelW + Math.max(n1, 0) * scale;
+      svg.append(sv("line", { x1: nx, x2: nx, y1: y - 5, y2: y + barH + 5, stroke: "var(--text-primary)", "stroke-width": 2, "stroke-dasharray": "3 2" }));
+      const hit = sv("rect", { x: nx - 4, y: y - 5, width: 8, height: barH + 10, class: "hit" });
+      attachTip(hit, (e) => showTip(e, `${name} · if the largest node fails`, [[null, "Capacity left", `${smart(n1)} ${unit}`], [null, "Share of allocatable", `${num(100 * n1 / alloc, 0)}%`]]));
+      svg.append(hit);
     }
     const free = alloc - total;
     const lbl = sv("text", narrow ? { x: 0, y: y + barH + 16, class: "val" } : { x: W, y: y + barH / 2 + 4, "text-anchor": "end", class: "val" });

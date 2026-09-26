@@ -97,6 +97,29 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(out[0]["project"], "(no project) legacy")
 
 
+class NodeFailure(unittest.TestCase):
+    def test_n_plus_one_capacity_after_platform(self):
+        from discover import summarize_cluster
+        def node(cpu, mem, taint=None):
+            return {"spec": {"taints": [{"effect": taint}] if taint else []},
+                    "status": {"allocatable": {"cpu": str(cpu), "memory": f"{mem}Gi"}}}
+        nodes = [node(4, 16), node(2, 8), node(8, 32, taint="NoSchedule")]  # the tainted one can't run pods
+        rows = []
+        for cat, cpu, mem in (("system", 0.5, 1.0), ("tenant", 1.0, 2.0)):
+            r = {k: 0.0 for k in NS_NUMERIC}
+            r.update(category=cat, cpu_requests=cpu, mem_requests_gib=mem)
+            rows.append(r)
+        c = summarize_cluster("c1", "ctx", nodes, rows, None)
+        self.assertEqual((c["largest_node_cpu"], c["largest_node_mem_gib"]), (4, 16))
+        self.assertEqual((c["alloc_cpu_n1"], c["alloc_mem_gib_n1"]), (2, 8))  # 6 - 4, 24 - 16
+        self.assertEqual((c["cpu_for_projects_n1"], c["mem_gib_for_projects_n1"]), (1.5, 7))  # minus system
+
+    def test_single_node_leaves_nothing(self):
+        from discover import summarize_cluster
+        c = summarize_cluster("c1", "ctx", [{"status": {"allocatable": {"cpu": "2", "memory": "8Gi"}}}], [], None)
+        self.assertEqual((c["alloc_cpu_n1"], c["cpu_for_projects_n1"]), (0, 0))
+
+
 class RancherLocalSelf(unittest.TestCase):
     def run_collect(self, argv):
         from unittest import mock

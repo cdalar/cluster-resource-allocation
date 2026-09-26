@@ -91,6 +91,12 @@ Quota is only a *guarantee* if the sum of all project quotas fits into the clust
 Rule: **the platform team must never approve allocations that break these ratios** — instead, this triggers
 capacity expansion (see [05 Process](05-process.md#capacity-planning)).
 
+A flat percentage only approximates N+1 on clusters with many similar nodes (with 2 nodes, losing one takes 50 %).
+The [allocation planner](../guides/allocation-planner.md#parameters-clusters) therefore checks N+1 explicitly
+against the real node sizes: Σ project quota ≤ allocatable − the N largest nodes − platform components' requests,
+and the percentage on top (of allocatable minus platform) for rollout room. Each cluster's resource dashboard
+shows the same N+1 picture for its current requests.
+
 Also account for:
 
 - **Rolling-update surge**: during a rollout, `maxSurge` pods count against quota. Projects need ~10–25 %

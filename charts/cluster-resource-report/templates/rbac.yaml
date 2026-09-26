@@ -25,7 +25,7 @@ rules:
   {{- if .Values.rancher.isLocalCluster }}
   # Rancher local cluster: Project and cluster display names
   - apiGroups: [management.cattle.io]
-    resources: [projects, clusters]
+    resources: [projects, clusters, nodes]
     verbs: [get, list]
   {{- end }}
 ---

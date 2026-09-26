@@ -46,8 +46,8 @@ The page reads top to bottom: settings first, then clusters, then projects. Ever
 | Planning only notice | Reminder that nothing is applied to any cluster |
 | Issues | Everything in the plan that breaks a rule, or "No issues" when every budget and every cluster limit fits |
 | Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over their limit |
-| Rates and rules | Collapsed by default; unit rates per platform, and node failures, headroom and memory limit per environment |
-| Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
+| Rates and rules | Collapsed by default; the unit rates, and node failures, headroom and memory limit per environment |
+| Clusters | Every cluster in Rancher, its environment, capacity, limit for projects and planned quota |
 | Projects | One block per project with its budget and a quota row per cluster |
 
 The status text next to the buttons says *Unsaved changes*, *Saving…* or *Saved*, and shows errors in red.
@@ -60,19 +60,17 @@ Set these once, before planning projects. Open **Rates and rules** to see them. 
 
 The label shown after every amount, e.g. `EUR`. It is a label only; nothing is converted.
 
-### Platforms and unit rates
+### Unit rates
 
-A platform groups clusters that cost the same to run, e.g. `onprem` and `aks`. Each has two rates:
+One pair of rates prices quota on every cluster:
 
 | Parameter | Meaning | Default |
 | --- | --- | --- |
 | per vCPU | Monthly price of 1 CPU of **requested** quota | 25 |
 | per GiB memory | Monthly price of 1 GiB of **requested** memory quota | 6.25 |
 
-Cost of a quota on a cluster = CPU × rate per vCPU + memory GiB × rate per GiB, using that cluster's platform. The
-defaults are the illustrative numbers from the [allocation model](../docs/03-allocation-model.md#unit-rates); replace them
-with the rates finance publishes. **Add platform** creates another one; **Remove** clears it from the clusters that
-used it.
+Cost of a quota = CPU × rate per vCPU + memory GiB × rate per GiB. The defaults are the illustrative numbers from the
+[allocation model](../docs/03-allocation-model.md#unit-rates); replace them with the rates finance publishes.
 
 ### Environments
 
@@ -112,7 +110,6 @@ The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a plat
 | Column | Set by | Meaning |
 | --- | --- | --- |
 | Environment | You | Which environment rules apply (node failures, headroom limit, memory limit factor) |
-| Platform | You | Which unit rates price quota on this cluster |
 | Nodes | Rancher | Schedulable nodes; hover for each node's size |
 | Allocatable | Rancher | CPU / GiB the scheduler can hand out on schedulable nodes, after system reservations |
 | − largest node(s) | Planner | Capacity of the N largest nodes, lost when they fail (0 / 0 when the environment tolerates no failures) |
@@ -132,8 +129,8 @@ one node failure: a dashed line in *Cluster capacity by requests* marks the capa
 the text under the chart spells out allocatable − largest node − platform components = room for projects, and the
 tile **Room for projects (N+1)** turns red when today's project requests wouldn't fit after a node failure.
 
-A cluster without an environment has no limit ("no env") and a cluster without a platform gives its quotas no
-price; both show up as issues once a project has quota there.
+A cluster without an environment has no limit ("no env"); that shows up as an issue once a project has quota
+there.
 
 ## Parameters: projects
 
@@ -159,14 +156,14 @@ Default projects* to plan them too.
 | Rancher quota now | The Project's current quota in Rancher, or "none" |
 | Quota CPU | The CPU quota you plan (Rancher: *CPU Reservation*, `requests.cpu`) |
 | Quota GiB | The memory quota you plan (Rancher: *Memory Reservation*, `requests.memory`) |
-| Cost / month | Price of that quota with the cluster's platform rates |
+| Cost / month | Price of that quota with the unit rates |
 
 ### Three ways to fill a row
 
 1. **Type the quota** into *Quota CPU* and *Quota GiB* when you know the size you want.
 2. **Convert from an amount** when you start from money: enter an amount per month and the share of it that should
    go to CPU (default 50 %), then click **Convert**. CPU = amount × share ÷ rate per vCPU, memory = amount ×
-   (1 − share) ÷ rate per GiB. The cluster needs a platform with rates for this.
+   (1 − share) ÷ rate per GiB.
 3. **Requests +25 %** (only where current requests are known) sets the quota to today's requests plus 25 %
    headroom, a sensible starting point for surge pods during rollouts.
 
@@ -186,7 +183,6 @@ rule, amber ones mean the plan is incomplete. You can still save a plan with iss
 | *local (prod): 1 schedulable node(s) can't tolerate 1 node failure(s), so no project quota fits* | red | A prod cluster with a single node can't survive a node failure at all | Add a node, or plan this cluster as a non-prod environment |
 | *prod-01: platform reserve not set, so the limit ignores what platform components request* | amber | Nothing measured or entered for platform components, so the limit is too high | Enter the *System* requests from the cluster's dashboard, or click *Use requests now* |
 | *prod-01: Rancher reports no node sizes, so the node-failure rule can't be checked* | amber | Rancher gave no per-node data for the cluster; only the percentage rule is checked | Check the cluster's agent in Rancher |
-| *payments: no platform set for prod-01, so its quota there has no price* | amber | The cluster has no platform, so cost and budget can't be checked | Pick a platform for the cluster in the Clusters table |
 | *prod-01: no environment set, so its limit for projects (node failures, headroom) can't be checked* | amber | The cluster has quota planned but no environment | Pick an environment for the cluster |
 | *newstream: no Rancher Project of that name on prod-01 yet* | amber | The plan gives quota to a project that doesn't exist on that cluster in Rancher | Create the Rancher Project first, or check the spelling of the name |
 | *payments: cluster c-m-xxxxx is no longer in Rancher* | amber | The plan still holds quota for a cluster that was removed from Rancher | Set that row to 0, or remove the project's allocation there |
@@ -252,7 +248,7 @@ The payments stream has a budget of 400 EUR a month and runs on a prod cluster `
 Rates are the defaults: 25 per vCPU, 6.25 per GiB.
 
 1. **Rates and rules:** keep the defaults (prod tolerates 1 node failure), or enter the published rates.
-2. **Clusters:** set `prod-01` to environment *prod*, platform *onprem*; set `test-01` to *test*, *onprem*.
+2. **Clusters:** set `prod-01` to environment *prod* and `test-01` to *test*.
 3. **Platform reserve:** `prod-01` is not the planner's own cluster, so enter 1 / 4 from its dashboard's *System*
    requests. The limit for projects becomes **11 CPU / 44 GiB (N+1)**: 16 − 4 − 1 CPU and 64 − 16 − 4 GiB, both
    below the 80 % rule (12 CPU / 48 GiB).

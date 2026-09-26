@@ -113,6 +113,8 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 
 ## 4. Allocation planner (optional, Rancher local cluster)
 
+User guide: [docs/07-allocation-planner-guide.md](../../docs/07-allocation-planner-guide.md).
+
 A planning page next to the dashboard for the platform team: a monthly budget per project and a CPU/memory quota
 per cluster, entered either way round (quota directly, or an amount converted with the cluster's unit rates).
 It checks the plan live against the budgets and each cluster's headroom rule (e.g. Σ quota ≤ 80 % of allocatable

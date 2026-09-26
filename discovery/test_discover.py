@@ -121,6 +121,47 @@ class RancherLocalSelf(unittest.TestCase):
                 self.run_collect(argv)
 
 
+class NamesConfigMap(unittest.TestCase):
+    def test_round_trip_through_the_published_bundle(self):
+        import json
+        from discover import names_from_configmap
+        from publish_rancher_names import build_bundle
+        projects = {"c-m-1:p-abcde": "payments"}
+        clusters = {"c-m-1": "onprem-test-01"}
+        bundle = build_bundle(projects, clusters, "fleet-default", "resource-report", {})
+        self.assertEqual(bundle["kind"], "Bundle")
+        self.assertEqual(bundle["metadata"]["namespace"], "fleet-default")
+        self.assertEqual(bundle["spec"]["targets"], [{"clusterSelector": {}}])
+        cm = json.loads(bundle["spec"]["resources"][0]["content"])
+        self.assertEqual(cm["metadata"], {"name": "rancher-project-names", "namespace": "resource-report",
+                                          "labels": {"app.kubernetes.io/part-of": "cluster-resource-report"}})
+        self.assertEqual(names_from_configmap(cm), (projects, clusters))
+
+    def test_empty_configmap(self):
+        from discover import names_from_configmap
+        self.assertEqual(names_from_configmap({}), ({}, {}))
+
+    def test_names_used_per_cluster(self):
+        from unittest import mock
+        import discover
+        args = discover.build_parser().parse_args(["--rancher-names-configmap", "resource-report/rancher-project-names"])
+        seen = {}
+        def fake_collect(ctx, a, projects, clusters):
+            seen.update(projects=projects, clusters=clusters)
+            return [], {"cluster": "x"}
+        with mock.patch.object(discover, "load_names_configmap", return_value=({"c:p-1": "crm"}, {"c": "x"})) as load, \
+                mock.patch.object(discover, "collect_cluster", side_effect=fake_collect):
+            discover.collect(args)
+        load.assert_called_once_with(None, "resource-report/rancher-project-names")
+        self.assertEqual(seen, {"projects": {"c:p-1": "crm"}, "clusters": {"c": "x"}})
+
+    def test_bad_reference(self):
+        import discover
+        args = discover.build_parser().parse_args(["--rancher-names-configmap", "no-namespace"])
+        with self.assertRaises(ValueError):
+            discover.collect(args)
+
+
 class LogCapture(unittest.TestCase):
     def test_collect_captures_only_its_own_thread(self):
         import threading

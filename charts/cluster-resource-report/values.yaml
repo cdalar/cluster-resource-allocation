@@ -33,7 +33,20 @@ rancher:
   # Set to true when installing on the Rancher local (management) cluster itself: project/cluster names
   # are read from this cluster (grants read on projects/clusters.management.cattle.io), no secret needed.
   isLocalCluster: false
-  # Downstream clusters: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
+  # Rancher local cluster only (needs isLocalCluster): a CronJob publishes the names to downstream clusters as
+  # a ConfigMap inside a Fleet Bundle (no GitRepo). It may create/update only that one Bundle.
+  publishNames:
+    enabled: false
+    schedule: "*/10 * * * *"
+    workspace: fleet-default          # Fleet workspace: fleet-default = all downstream clusters
+    targetNamespace: resource-report  # namespace of the ConfigMap on downstream clusters
+    clusterSelector: {}               # Fleet clusterSelector; {} = every cluster in the workspace
+  # Downstream clusters: read the names from that ConfigMap (in namesConfigMap.namespace, default: the
+  # release namespace). Grants get on exactly that ConfigMap. No token needed on the cluster.
+  namesConfigMap:
+    enabled: false
+    namespace: ""
+  # Downstream clusters, alternative: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
   # Rancher Project / cluster display names instead of IDs (p-xxxxx). Needs read on
   # projects.management.cattle.io and clusters.management.cattle.io.
   localKubeconfigSecret:

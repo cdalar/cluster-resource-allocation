@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 GIB = 2**30
 
 RANCHER_PROJECT_ANNOTATION = "field.cattle.io/projectId"  # "<cluster-id>:<project-id>"
+NAMES_CONFIGMAP = "rancher-project-names"  # written by publish_rancher_names.py, delivered by Fleet
 
 DEFAULT_SYSTEM_NS_REGEX = (
     r"^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|cis-operator-system|"
@@ -197,6 +198,17 @@ def load_rancher_projects(local_context=None, local_kubeconfig=None):
                   kubeconfig=local_kubeconfig):
         clusters[c["metadata"]["name"]] = c.get("spec", {}).get("displayName", c["metadata"]["name"])
     return projects, clusters
+
+
+def names_from_configmap(cm):
+    """Project and cluster name maps from the ConfigMap written by publish_rancher_names.py."""
+    data = cm.get("data") or {}
+    return json.loads(data.get("projects.json") or "{}"), json.loads(data.get("clusters.json") or "{}")
+
+
+def load_names_configmap(context, ref):
+    namespace, name = ref.split("/", 1)
+    return names_from_configmap(json.loads(kubectl(context, ["get", "configmap", name, "-n", namespace, "-o", "json"])))
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +527,9 @@ def build_parser():
     ap.add_argument("--rancher-local-self", action="store_true",
                     help="the scanned cluster is the Rancher local cluster: read Project/cluster names from it "
                          "(no separate kubeconfig needed)")
+    ap.add_argument("--rancher-names-configmap", metavar="NAMESPACE/NAME",
+                    help=f"read Project/cluster names from this ConfigMap on each scanned cluster (published by "
+                         f"publish_rancher_names.py via Fleet; usually <ns>/{NAMES_CONFIGMAP})")
     ap.add_argument("--project-label",
                     help="namespace label to group by when there is no Rancher Project (e.g. on non-Rancher AKS)")
     ap.add_argument("--prometheus", choices=["auto", "none"], default="auto",
@@ -540,6 +555,8 @@ def collect(args):
         if local_kubeconfig and not os.path.isfile(local_kubeconfig):
             raise ValueError(f"--rancher-local-kubeconfig: file not found: {local_kubeconfig}")
 
+        if args.rancher_names_configmap and args.rancher_names_configmap.count("/") != 1:
+            raise ValueError("--rancher-names-configmap: expected NAMESPACE/NAME")
         local_context = args.rancher_local_context
         if args.rancher_local_self:
             if local_context or local_kubeconfig or len(args.context) > 1:
@@ -557,8 +574,17 @@ def collect(args):
 
         all_ns, all_clusters = [], []
         for ctx in args.context or [None]:
+            projects, clusters = rancher_projects, rancher_clusters
+            if args.rancher_names_configmap:
+                try:
+                    cm_projects, cm_clusters = load_names_configmap(ctx, args.rancher_names_configmap)
+                    projects, clusters = {**cm_projects, **projects}, {**cm_clusters, **clusters}
+                    log(f"[{ctx or 'current'}] {len(cm_projects)} Rancher project names from "
+                        f"{args.rancher_names_configmap}")
+                except (KubectlError, ValueError) as e:
+                    log(f"[{ctx or 'current'}] could not read {args.rancher_names_configmap}: {first_line(e)}")
             try:
-                ns_rows, cluster_row = collect_cluster(ctx, args, rancher_projects, rancher_clusters)
+                ns_rows, cluster_row = collect_cluster(ctx, args, projects, clusters)
             except KubectlError as e:
                 log(f"[{ctx or 'current'}] FAILED: {first_line(e)}")
                 continue

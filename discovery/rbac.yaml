@@ -27,3 +27,5 @@ rules:
   verbs: [get]
 # On the Rancher local cluster only (for --rancher-local-context / --rancher-local-self), additionally:
 #   apiGroups: [management.cattle.io], resources: [projects, clusters], verbs: [get, list]
+# On downstream clusters with --rancher-names-configmap, additionally (in that namespace):
+#   apiGroups: [""], resources: [configmaps], resourceNames: [rancher-project-names], verbs: [get]

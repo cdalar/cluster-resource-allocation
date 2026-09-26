@@ -1,9 +1,9 @@
-{{- if dig "enabled" false (.Values.planner | default dict) }}
+{{- if or (dig "enabled" false (.Values.planner | default dict)) (dig "enabled" false (.Values.capacityPlanner | default dict)) }}
 {{- if not .Values.persistence.enabled }}
-{{- fail "planner.enabled needs persistence.enabled=true: the plan is stored in the data volume" }}
+{{- fail "planner.enabled / capacityPlanner.enabled need persistence.enabled=true: the plan is stored in the data volume" }}
 {{- end }}
 {{- if not (or .Values.rancher.isLocalCluster .Values.rancher.localKubeconfigSecret.name) }}
-{{- fail "planner.enabled needs the Rancher inventory: set rancher.isLocalCluster (or rancher.localKubeconfigSecret)" }}
+{{- fail "planner.enabled / capacityPlanner.enabled need the Rancher inventory: set rancher.isLocalCluster (or rancher.localKubeconfigSecret)" }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1
@@ -72,6 +72,9 @@ spec:
             {{- end }}
             {{- if dig "enabled" false (.Values.planner | default dict) }}
             - --planner
+            {{- end }}
+            {{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}
+            - --capacity-planner
             {{- end }}
             {{- if .Values.rancher.isLocalCluster }}
             - --rancher-local-self

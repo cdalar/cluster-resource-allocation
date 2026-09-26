@@ -13,7 +13,9 @@ With --planner (Rancher local cluster only), also the allocation planner (planne
   GET  /api/planner              plan + Rancher inventory + checks
   PUT  /api/planner              save the plan ({"version": n, "plan": {...}}; needs header X-Planner: 1)
   GET  /api/planner/export.yaml  the plan as allocation files (docs/04)
-The planner only writes its own plan file in --data-dir, never to a cluster.
+With --capacity-planner, the same without money (CPU / memory envelopes per project instead of budgets):
+  GET  /capacity, GET|PUT /api/capacity, GET /api/capacity/export.yaml
+The planners only write their own plan files in --data-dir, never to a cluster.
 """
 
 import copy
@@ -75,6 +77,7 @@ class Collector:
                 "interval": self.args.interval,
                 "collect_enabled": not self.args.no_collect,
                 "planner": bool(getattr(self.args, "planner", False)),
+                "capacity_planner": bool(getattr(self.args, "capacity_planner", False)),
             }
 
     def trigger(self):
@@ -119,9 +122,9 @@ class PlannerBackend:
 
     INVENTORY_TTL = 30  # seconds; the page reloads it on every open and save
 
-    def __init__(self, args, collector, inventory_loader=None):
-        self.collector = collector
-        self.store = planner.PlanStore(args.data_dir)
+    def __init__(self, args, collector, inventory_loader=None, mode="budget"):
+        self.collector, self.mode = collector, mode
+        self.store = planner.PlanStore(args.data_dir, mode)
         self.save_lock = threading.Lock()
         if inventory_loader is None:
             if args.rancher_local_self:
@@ -144,8 +147,14 @@ class PlannerBackend:
     def view(self, plan=None):
         plan = plan or self.store.load()
         inventory = self.inventory()
-        return {"plan": plan, "inventory": inventory, "evaluation": planner.evaluate(plan, inventory),
-                "reference": planner.RATE_REFERENCE}
+        out = {"mode": self.mode, "plan": plan, "inventory": inventory,
+               "evaluation": planner.evaluate(plan, inventory, self.mode)}
+        if self.mode == "budget":
+            out["reference"] = planner.RATE_REFERENCE
+        return out
+
+    def export(self):
+        return planner.export_yaml(self.store.load(), self.inventory(), self.mode)
 
     def save(self, body):
         if not isinstance(body, dict) or not isinstance(body.get("version"), int):
@@ -154,7 +163,21 @@ class PlannerBackend:
             return self.view(self.store.save(body.get("plan"), body["version"]))
 
 
-def make_handler(collector, planner_backend=None):
+def make_handler(collector, planner_backend=None, capacity_backend=None):
+    # URL name -> planner backend; both are served by static/planner.html, which takes its mode from the API
+    planners = {name: b for name, b in (("planner", planner_backend), ("capacity", capacity_backend)) if b}
+
+    def planner_route(path):
+        """(backend, what) for /<name>, /api/<name> and /api/<name>/export.yaml, else (None, None)."""
+        for name, backend in planners.items():
+            if path == f"/{name}":
+                return backend, "page"
+            if path == f"/api/{name}":
+                return backend, "api"
+            if path == f"/api/{name}/export.yaml":
+                return backend, "export"
+        return None, None
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "cluster-resource-report"
 
@@ -179,21 +202,22 @@ def make_handler(collector, planner_backend=None):
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            backend, what = planner_route(path)
             if path in ("/", "/index.html"):
                 self._page("index.html")
-            elif path == "/planner" and planner_backend:
+            elif what == "page":
                 self._page("planner.html")
-            elif path == "/api/planner" and planner_backend:
+            elif what == "api":
                 try:
-                    self._json(200, planner_backend.view())
+                    self._json(200, backend.view())
                 except discover.KubectlError as e:
                     self._json(502, {"error": f"could not read the Rancher inventory: {discover.first_line(e)}"})
                 except Exception as e:  # a bug must show up on the page, not as a dropped connection
                     discover.log(f"planner: {type(e).__name__}: {e}")
                     self._json(500, {"error": f"planner error: {type(e).__name__}: {e}"})
-            elif path == "/api/planner/export.yaml" and planner_backend:
+            elif what == "export":
                 try:
-                    data = planner.export_yaml(planner_backend.store.load(), planner_backend.inventory())
+                    data = backend.export()
                 except discover.KubectlError as e:
                     return self._send(502, f"could not read the Rancher inventory: {discover.first_line(e)}",
                                       "text/plain")
@@ -224,7 +248,8 @@ def make_handler(collector, planner_backend=None):
                 self._send(200, f.read(), "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_CSP})
 
         def do_PUT(self):
-            if self.path.split("?", 1)[0] != "/api/planner" or not planner_backend:
+            backend, what = planner_route(self.path.split("?", 1)[0])
+            if what != "api":
                 return self._send(404, "not found", "text/plain")
             # Opened through Rancher's proxy, the page rides on the user's Rancher session cookie. A custom
             # header plus a JSON body can't be sent cross-origin without a CORS preflight, which this server
@@ -240,7 +265,7 @@ def make_handler(collector, planner_backend=None):
                 return self._json(413, {"error": "missing or too large body"})
             try:
                 body = json.loads(self.rfile.read(length))
-                self._json(200, planner_backend.save(body))
+                self._json(200, backend.save(body))
             except json.JSONDecodeError as e:
                 self._json(400, {"error": f"invalid JSON: {e}"})
             except planner.PlanConflict as e:
@@ -272,19 +297,24 @@ def main():
     ap.add_argument("--planner", action="store_true",
                     help="also serve the allocation planner (needs Rancher local cluster access: "
                          "--rancher-local-self, --rancher-local-context or --rancher-local-kubeconfig)")
+    ap.add_argument("--capacity-planner", action="store_true",
+                    help="also serve the capacity planner: the allocation planner without money, with a CPU and "
+                         "memory envelope per project (same Rancher access as --planner)")
     args = ap.parse_args()
     parse_duration(args.interval)
-    if args.planner and not (args.rancher_local_self or args.rancher_local_context or args.rancher_local_kubeconfig):
-        ap.error("--planner needs the Rancher local cluster: --rancher-local-self, --rancher-local-context "
-                 "or --rancher-local-kubeconfig")
+    if (args.planner or args.capacity_planner) and not (
+            args.rancher_local_self or args.rancher_local_context or args.rancher_local_kubeconfig):
+        ap.error("--planner / --capacity-planner need the Rancher local cluster: --rancher-local-self, "
+                 "--rancher-local-context or --rancher-local-kubeconfig")
 
     collector = Collector(args)
     planner_backend = PlannerBackend(args, collector) if args.planner else None
+    capacity_backend = PlannerBackend(args, collector, mode="capacity") if args.capacity_planner else None
     if not args.no_collect:
         threading.Thread(target=collector.loop, daemon=True).start()
 
     host, port = args.listen.rsplit(":", 1)
-    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend))
+    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend, capacity_backend))
     discover.log(f"serving on http://{args.listen} (interval {args.interval}, data {args.data_dir})")
     try:
         httpd.serve_forever()

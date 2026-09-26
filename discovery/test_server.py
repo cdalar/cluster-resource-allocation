@@ -156,5 +156,59 @@ class PlannerServer(unittest.TestCase):
         self.assertEqual(self.req("/api/planner", "PUT", None, {"X-Planner": "1", "Content-Type": "application/json"})[0], 413)
 
 
+class CapacityServer(unittest.TestCase):
+    """Both planners side by side: /planner and /capacity with separate plans."""
+
+    @classmethod
+    def setUpClass(cls):
+        import test_planner
+        cls.tmp = tempfile.TemporaryDirectory()
+        args = server.discover.build_parser().parse_args(["--rancher-local-self"])
+        args.data_dir, args.interval, args.no_collect = cls.tmp.name, "30m", True
+        args.planner = args.capacity_planner = True
+        collector = server.Collector(args)
+        budget = server.PlannerBackend(args, collector, inventory_loader=test_planner.inventory)
+        capacity = server.PlannerBackend(args, collector, inventory_loader=test_planner.inventory, mode="capacity")
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(collector, budget, capacity))
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.tmp.cleanup()
+
+    def req(self, path, method="GET", body=None):
+        h = {"Content-Type": "application/json", "X-Planner": "1"} if body is not None else {}
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None,
+                                     method=method, headers=h)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def test_capacity_planner(self):
+        code, page = self.req("/capacity")
+        self.assertEqual(code, 200)
+        self.assertIn(b"Allocation planner", page)  # same page, switches to capacity mode from the API
+        view = json.loads(self.req("/api/capacity")[1])
+        self.assertEqual(view["mode"], "capacity")
+        self.assertNotIn("reference", view)
+        self.assertEqual(set(view["plan"]["settings"]), {"envs"})
+        plan = view["plan"]
+        plan["clusters"] = {"c-m-1": {"env": "prod"}}
+        plan["projects"] = {"payments": {"cpu_envelope": 2, "allocations": {"c-m-1": {"cpu": 3, "memory_gib": 4}}}}
+        code, body = self.req("/api/capacity", "PUT", {"version": 0, "plan": plan})
+        self.assertEqual(code, 200, body)
+        saved = json.loads(body)
+        self.assertTrue(any("above its envelope of 2" in i["text"] for i in saved["evaluation"]["issues"]))
+        self.assertIn(b"by the capacity planner", self.req("/api/capacity/export.yaml")[1])
+        # the budget planner has its own, untouched plan
+        self.assertEqual(json.loads(self.req("/api/planner")[1])["plan"]["version"], 0)
+        status = json.loads(self.req("/api/report")[1])["status"]
+        self.assertTrue(status["planner"] and status["capacity_planner"])
+
+
 if __name__ == "__main__":
     unittest.main()

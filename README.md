@@ -24,6 +24,7 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 | [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace (CLI) |
 | [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster; image built by CI to `ghcr.io/cdalar/cluster-resource-report` |
 | [Allocation planner](discovery/README.md#allocation-planner) ([user guide](guides/allocation-planner.md)) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing) |
+| [Capacity planner](guides/allocation-planner.md#capacity-planner-without-money) | The allocation planner without money: a CPU and memory envelope per project, split into quota per cluster, with the same cluster checks |
 | [publish_rancher_names.py](discovery/README.md#project-names-on-downstream-clusters-without-a-token) | Publishes Rancher Project names from the local cluster to downstream clusters (Fleet Bundle with a ConfigMap), so their dashboards show names without a Rancher token |
 
 ## Status

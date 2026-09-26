@@ -115,6 +115,10 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 
 User guide: [guides/allocation-planner.md](../../guides/allocation-planner.md).
 
+**Without money:** `--set capacityPlanner.enabled=true` adds the capacity planner (`/capacity`, *Capacity planner*
+in the Rancher menu): no rates, budgets or costs, each project gets a CPU and memory envelope instead. It can run
+alone or next to the allocation planner, with its own plan (`capacity-plan.json`).
+
 A planning page next to the dashboard for the platform team: a monthly budget per project and a CPU/memory quota
 per cluster, entered either way round (quota directly, or an amount converted with the cluster's unit rates).
 It checks the plan live against the budgets and each cluster's headroom rule (e.g. Σ quota ≤ 80 % of allocatable
@@ -151,6 +155,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
+| `capacityPlanner.enabled` | `false` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
 | `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, and `persistence.enabled`) |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `""` | Menu entry in the Rancher UI that opens the dashboard through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
@@ -184,5 +189,6 @@ These are created by the chart. The dashboard's (and planner's) are all read-onl
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/healthz` | Liveness and readiness |
 | `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml` | Allocation planner, with `planner.enabled` |
+| `/capacity`, `/api/capacity` (`GET`, `PUT`), `/api/capacity/export.yaml` | Capacity planner, with `capacityPlanner.enabled` |
 
 All links in the page are relative, so it also works behind path-prefix proxies such as Rancher's.

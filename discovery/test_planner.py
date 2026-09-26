@@ -99,6 +99,57 @@ class Validate(unittest.TestCase):
         self.assertIsNone(plan["projects"]["payments"]["monthly_budget"])
 
 
+class CapacityMode(unittest.TestCase):
+    """The capacity planner: no money, a CPU / memory envelope per project."""
+
+    def plan(self, **projects):
+        raw = planner.empty_state("capacity")
+        raw["clusters"] = {"c-m-1": {"env": "prod", "platform_cpu": 1, "platform_mem_gib": 4}}
+        raw["projects"] = projects
+        return planner.validate_state(raw, "capacity")
+
+    def test_no_money_in_the_plan(self):
+        raw = planner.empty_state("capacity")
+        self.assertEqual(set(raw["settings"]), {"envs"})
+        raw["settings"]["platforms"] = {"onprem": {"cpu_rate": 1, "mem_rate": 1}}   # ignored if sent
+        raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem"}}
+        raw["projects"] = {"payments": {"monthly_budget": 100, "cost_center": "CC", "cpu_envelope": 8,
+                                        "allocations": {}}}
+        plan = planner.validate_state(raw, "capacity")
+        self.assertEqual(set(plan["settings"]), {"envs"})
+        self.assertNotIn("platform", plan["clusters"]["c-m-1"])
+        self.assertEqual(plan["projects"]["payments"], {"owners": [], "allocations": {}, "cpu_envelope": 8,
+                                                        "memory_gib_envelope": None})
+
+    def test_envelope_check(self):
+        plan = self.plan(payments={"cpu_envelope": 4, "memory_gib_envelope": 20,
+                                   "allocations": {"c-m-1": {"cpu": 5, "memory_gib": 16}}})
+        ev = planner.evaluate(plan, inventory(), "capacity")
+        self.assertEqual(ev["projects"]["payments"], {"cpu": 5, "memory_gib": 16, "cpu_envelope": 4,
+                                                      "memory_gib_envelope": 20})
+        texts = [i["text"] for i in ev["issues"]]
+        self.assertIn("payments: planned CPU quota 5 across all clusters is above its envelope of 4", texts)
+        self.assertFalse(any("memory quota" in t and "envelope" in t for t in texts))
+        self.assertFalse(any("budget" in t or "platform set" in t for t in texts))
+        self.assertEqual(ev["clusters"]["c-m-1"]["limit_cpu"], 5)  # cluster limits work as in the budget planner
+
+    def test_export_without_budget(self):
+        plan = self.plan(payments={"owners": ["lead@corp"], "cpu_envelope": 8,
+                                   "allocations": {"c-m-1": {"cpu": 2, "memory_gib": 4}}})
+        out = planner.export_yaml(plan, inventory(), "capacity")
+        self.assertIn("by the capacity planner", out)
+        self.assertIn('project: "payments"\nowners: ["lead@corp"]\nallocations:\n  - cluster: "prod-01"', out)
+        self.assertNotIn("budget", out)
+
+    def test_separate_plan_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            planner.PlanStore(d, "capacity").save(planner.empty_state("capacity"), 0)
+            self.assertTrue(os.path.exists(os.path.join(d, "capacity-plan.json")))
+            self.assertFalse(os.path.exists(os.path.join(d, "planner.json")))
+            self.assertEqual(planner.PlanStore(d).load()["version"], 0)  # the budget planner is untouched
+            self.assertTrue(os.path.exists(os.path.join(d, "capacity-history", "capacity-v00001.json")))
+
+
 class RateReference(unittest.TestCase):
     """The reference shown on the page must match the shipped defaults it explains."""
 

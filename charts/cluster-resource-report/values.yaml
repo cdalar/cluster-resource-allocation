@@ -86,6 +86,11 @@ ingress:
 planner:
   enabled: false
 
+# Capacity planner (/capacity): the same without money -- no rates, budgets or costs; each project gets a CPU and
+# memory envelope (its total across all clusters) instead. Own plan file; same requirements as planner.enabled.
+capacityPlanner:
+  enabled: false
+
 persistence:
   enabled: false
   storageClass: ""

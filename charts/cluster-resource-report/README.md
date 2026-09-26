@@ -111,6 +111,26 @@ The app has **no login of its own**. Recommended ways to open it, in order:
 
 Anyone who can open the dashboard sees names and sizes of all namespaces and projects in the cluster.
 
+## 4. Allocation planner (optional, Rancher local cluster)
+
+A planning page next to the dashboard for the platform team: a monthly budget per project and a CPU/memory quota
+per cluster, entered either way round (quota directly, or an amount converted with the cluster's unit rates).
+It checks the plan live against the budgets and each cluster's headroom rule (e.g. Σ quota ≤ 80 % of allocatable
+in prod) and exports it as the allocation files of [docs/04](../../docs/04-technical-design.md#42-allocation-as-code).
+
+**It applies nothing.** The plan is saved in the data volume (`planner.json`, plus the last 30 versions in
+`planner-history/`); quotas still reach Rancher only through the Git / Terraform flow.
+
+```bash
+helm upgrade --install ... --set rancher.isLocalCluster=true --set persistence.enabled=true --set planner.enabled=true
+```
+
+It reads all clusters (capacity, requests) and Rancher Projects (current quota) from the local cluster, so one
+installation covers every cluster Rancher manages. Open it from the **Allocation planner** entry in the local
+cluster's Rancher menu, or `/planner` next to the dashboard. Current requests per project are only shown for
+the cluster the planner runs on. Saving needs the page (it sends `X-Planner: 1`), so another website can't make
+a logged-in browser save a plan through Rancher's proxy.
+
 ## Values
 
 | Value | Default | Description |
@@ -129,6 +149,7 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 | `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
+| `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, and `persistence.enabled`) |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `""` | Menu entry in the Rancher UI that opens the dashboard through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
@@ -139,11 +160,17 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 
 ## Permissions
 
-These are created by the chart; all of them are read-only.
+These are created by the chart. The dashboard's (and planner's) are all read-only.
 
-- **ClusterRole:** `get`/`list` on nodes, namespaces, pods, resourcequotas, limitranges, HPAs and `metrics.k8s.io` pods.
+- **ClusterRole:** `get`/`list` on nodes, namespaces, pods, resourcequotas, limitranges, HPAs and `metrics.k8s.io` pods;
+  with `rancher.isLocalCluster` also on `projects` and `clusters.management.cattle.io`.
 - **Role in the Prometheus namespace:** `get` on `services/proxy` for the configured Prometheus service only.
   It is only created when the service proxy is used.
+- **Role (`rancher.namesConfigMap`):** `get` on the `rancher-project-names` ConfigMap only.
+- **Name publisher (`rancher.publishNames`, own service account):** read on `projects`/`clusters.management.cattle.io`,
+  and `create` bundles plus `get`/`patch`/`update` on the `rancher-project-names` Bundle in the Fleet workspace --
+  the only write permission in the chart.
+- **NavLinks** (`ui.cattle.io`) are created by Helm at install time, not by the running app.
 
 ## Endpoints
 
@@ -154,5 +181,6 @@ These are created by the chart; all of them are read-only.
 | `POST /api/refresh` | Trigger a collection |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/healthz` | Liveness and readiness |
+| `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml` | Allocation planner, with `planner.enabled` |
 
 All links in the page are relative, so it also works behind path-prefix proxies such as Rancher's.

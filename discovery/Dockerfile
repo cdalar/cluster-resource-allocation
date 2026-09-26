@@ -11,7 +11,7 @@ RUN ARCH="${TARGETARCH:-amd64}" && apk add --no-cache curl \
 FROM python:3.13-slim
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 WORKDIR /app
-COPY discover.py server.py publish_rancher_names.py ./
+COPY discover.py server.py planner.py publish_rancher_names.py ./
 COPY static/ ./static/
 ENV HOME=/tmp PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 65534:65534

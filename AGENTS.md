@@ -18,7 +18,7 @@ several namespaces each), plus some AKS clusters.
 |---|---|
 | `docs/` | Design and process docs (numbered), `open-questions.md` |
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
-| `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
+| `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 
 ## Conventions
@@ -29,7 +29,7 @@ several namespaces each), plus some AKS clusters.
   It must stay read-only against clusters. Sole exception: `publish_rancher_names.py` writes one Fleet Bundle
   (`rancher-project-names`) on the Rancher local cluster, with its own service account.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
-- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server`.
+- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`.
   After changing the chart: `helm lint charts/cluster-resource-report`.
 - Keep `discovery/README.md`, `discovery/rbac.yaml` and the chart (values, RBAC, README) in sync with the code.
 - Test against a throwaway cluster, never against production kubeconfig contexts.

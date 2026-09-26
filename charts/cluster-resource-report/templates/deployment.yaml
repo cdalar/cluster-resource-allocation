@@ -59,6 +59,9 @@ spec:
             {{- else }}
             - --prom-service={{ .Values.prometheus.service }}
             {{- end }}
+            {{- if dig "namesConfigMap" "enabled" false .Values.rancher }}
+            - --rancher-names-configmap={{ include "crr.namesNamespace" . }}/rancher-project-names
+            {{- end }}
             {{- if .Values.rancher.isLocalCluster }}
             - --rancher-local-self
             {{- else if .Values.rancher.localKubeconfigSecret.name }}

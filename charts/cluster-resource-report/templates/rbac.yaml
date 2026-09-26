@@ -75,3 +75,35 @@ subjects:
     name: {{ include "crr.fullname" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
+{{- if dig "namesConfigMap" "enabled" false .Values.rancher }}
+---
+# Rancher Project names published by the Rancher local cluster (Fleet Bundle), exactly this ConfigMap
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "crr.fullname" . }}-rancher-names
+  namespace: {{ include "crr.namesNamespace" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [rancher-project-names]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "crr.fullname" . }}-rancher-names
+  namespace: {{ include "crr.namesNamespace" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "crr.fullname" . }}-rancher-names
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "crr.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

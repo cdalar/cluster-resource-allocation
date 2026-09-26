@@ -36,3 +36,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "crr.promServiceName" -}}
 {{- last (splitList "/" .Values.prometheus.service) -}}
 {{- end -}}
+
+{{- define "crr.namesNamespace" -}}
+{{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
+{{- end -}}

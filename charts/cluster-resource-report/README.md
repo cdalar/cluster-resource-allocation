@@ -85,6 +85,20 @@ Without it, the dashboard still works and shows project IDs.
 On the Rancher local cluster itself no secret is needed: `--set rancher.isLocalCluster=true` reads the names
 from that cluster and adds read access to those two resources to the chart's ClusterRole.
 
+**Without any token on downstream clusters (Fleet, no GitRepo):** on the local cluster, also set
+`rancher.publishNames.enabled=true`. A CronJob (own service account, may only create/update the one Bundle)
+publishes a Fleet Bundle containing the ConfigMap `rancher-project-names`, which Fleet copies to the downstream
+clusters. There, install with `rancher.namesConfigMap.enabled=true`:
+
+```bash
+# Rancher local cluster
+helm upgrade --install ... --set rancher.isLocalCluster=true --set rancher.publishNames.enabled=true
+# each downstream cluster
+helm upgrade --install ... --set rancher.namesConfigMap.enabled=true
+```
+
+Names appear after the next publish (every 10 minutes by default) and Fleet sync.
+
 ## 3. Open the dashboard
 
 The app has **no login of its own**. Recommended ways to open it, in order:
@@ -111,6 +125,9 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |
 | `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
+| `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
+| `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
+| `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately |

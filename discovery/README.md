@@ -22,6 +22,9 @@ Read-only. Needs only Python 3.8+ and `kubectl` — no extra packages.
 # Scanning the Rancher local cluster itself: read the names from it
 ./discover.py --context rancher-local --rancher-local-self
 
+# Downstream cluster without any Rancher access: names from the ConfigMap published by publish_rancher_names.py
+./discover.py --context onprem-prod-01 --rancher-names-configmap resource-report/rancher-project-names
+
 # AKS cluster not managed by Rancher: group namespaces by a label instead of Rancher Project
 ./discover.py --context aks-prod --project-label project
 
@@ -42,7 +45,7 @@ Rancher access.
 | Kubernetes API | nodes (allocatable), namespaces (Rancher project), pods (requests/limits), ResourceQuotas, LimitRanges, HPAs | Yes |
 | metrics-server | usage snapshot ("now") | Optional |
 | Prometheus (default: Rancher Monitoring via API server service proxy) | CPU/memory usage avg / P95 / max and peak requests over `--window` | Optional |
-| Rancher local cluster (`--rancher-local-context` and/or `--rancher-local-kubeconfig`, or `--rancher-local-self` when scanning it) | Project and cluster display names | Optional |
+| Rancher local cluster (`--rancher-local-context` and/or `--rancher-local-kubeconfig`, or `--rancher-local-self` when scanning it), or the `rancher-project-names` ConfigMap (`--rancher-names-configmap`) | Project and cluster display names | Optional |
 
 Permissions: see [`rbac.yaml`](rbac.yaml).
 
@@ -109,6 +112,24 @@ To look at a saved report locally without cluster access:
 ```bash
 python3 server.py --no-collect --data-dir <dir-with-report.json> --listen 127.0.0.1:8080
 ```
+
+## Project names on downstream clusters without a token
+
+Downstream clusters only carry project IDs. Instead of giving each cluster a token for the Rancher local cluster,
+`publish_rancher_names.py` runs on the local cluster and applies one Fleet `Bundle` (no GitRepo) whose only
+resource is a ConfigMap `rancher-project-names` with `projects.json` and `clusters.json`. Fleet delivers it to the
+downstream clusters (workspace `fleet-default`, all clusters or a `--cluster-selector`), and the report reads it
+there with `--rancher-names-configmap <ns>/rancher-project-names`.
+
+```bash
+./publish_rancher_names.py --context rancher-local --dry-run   # print the Bundle
+./publish_rancher_names.py --context rancher-local             # apply it
+```
+
+It needs read on `projects`/`clusters.management.cattle.io` and create/get/patch on that one Bundle. The ConfigMap
+holds the names of all projects in the workspace, so every targeted cluster sees them. Names show up downstream
+after the next publish and Fleet sync. In the chart this is `rancher.publishNames` (local) and
+`rancher.namesConfigMap` (downstream).
 
 ## Tests
 

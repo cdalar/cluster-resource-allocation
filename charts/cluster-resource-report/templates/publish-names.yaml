@@ -1,0 +1,133 @@
+{{- if dig "publishNames" "enabled" false .Values.rancher }}
+{{- if not .Values.rancher.isLocalCluster }}
+{{- fail "rancher.publishNames.enabled needs rancher.isLocalCluster=true (it runs on the Rancher local cluster)" }}
+{{- end }}
+{{- /* CronJob names are limited to 52 characters */}}
+{{- $name := printf "%s-publish-names" (include "crr.fullname" . | trunc 38 | trimSuffix "-") }}
+{{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
+{{- $p := merge (deepCopy .Values.rancher.publishNames) (dict "schedule" "*/10 * * * *" "workspace" "fleet-default" "targetNamespace" "resource-report" "clusterSelector" dict) }}
+# Publishes Rancher Project/cluster names to downstream clusters: one Fleet Bundle holding a ConfigMap.
+# Separate service account: the dashboard itself stays read-only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [management.cattle.io]
+    resources: [projects, clusters]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+# Only the one Bundle (create cannot be limited by name; get/patch/update can)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.workspace }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [fleet.cattle.io]
+    resources: [bundles]
+    verbs: [create]
+  - apiGroups: [fleet.cattle.io]
+    resources: [bundles]
+    resourceNames: [rancher-project-names]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $p.workspace }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $p.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "crr.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: publish-names
+        spec:
+          serviceAccountName: {{ $name }}
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: publish
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: [python3, /app/publish_rancher_names.py]
+              args:
+                - --workspace={{ $p.workspace }}
+                - --target-namespace={{ $p.targetNamespace }}
+                - {{ printf "--cluster-selector=%s" (toJson $p.clusterSelector) | quote }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              resources:
+                requests: {cpu: 10m, memory: 64Mi}
+                limits: {memory: 128Mi}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

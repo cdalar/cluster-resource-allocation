@@ -141,6 +141,7 @@ tr.selected { background: var(--hover); }
       <select id="cluster" aria-label="Cluster" hidden></select>
       <button id="refresh" type="button">Collect now</button>
       <a id="planner-link" href="planner" hidden>Allocation planner</a>
+      <a id="capacity-link" href="capacity" hidden>Capacity planner</a>
       <span class="sub">CSV:
         <a href="download/projects.csv">projects</a> ·
         <a href="download/namespaces.csv">namespaces</a> ·
@@ -318,6 +319,7 @@ function renderMeta() {
   $("#meta").textContent = parts.join(" · ") || "No report yet";
   $("#refresh").disabled = !st || !st.collect_enabled || st.state === "collecting";
   $("#planner-link").hidden = !(st && st.planner);
+  $("#capacity-link").hidden = !(st && st.capacity_planner);
 }
 
 function statusBanner(kind, title, items) {

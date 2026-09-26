@@ -75,6 +75,11 @@ td { font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 16px; margin-top: 12px; }
 .note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.capacity .money { display: none !important; }
+.cap-only { display: none !important; }
+.capacity .cap-only { display: inline-flex !important; }
+.cap-text { display: none; }
+.capacity .cap-text { display: inline; }
 .reference { margin-top: 18px; border-top: 1px solid var(--grid); padding-top: 14px; }
 .reference p { margin: 4px 0 8px; color: var(--text-secondary); font-size: 13px; max-width: 110ch; }
 .reference ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
@@ -91,7 +96,7 @@ details summary { cursor: pointer; }
 <div class="wrap">
   <header>
     <div>
-      <h1>Allocation planner</h1>
+      <h1 id="title">Allocation planner</h1>
       <div class="sub" id="meta">Loading…</div>
     </div>
     <div class="actions">
@@ -106,15 +111,17 @@ details summary { cursor: pointer; }
     <b>Planning only.</b> Nothing here changes a cluster: saving stores the plan in this dashboard's data volume,
     and <i>Export YAML</i> produces the allocation files (<code>allocations/projects/&lt;project&gt;.yaml</code>)
     that go through the usual pull request and Terraform flow.
+    <span class="cap-text">This is the <b>capacity planner</b>: no money, only CPU and memory —
+    each project gets an envelope (its total CPU and memory across all clusters), split into quota per cluster.</span>
   </div>
   <div class="banner" id="issues" hidden></div>
   <div class="tiles" id="tiles"></div>
 
   <div class="card">
     <details id="settings-box">
-      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates per platform; node failures, headroom and memory limit per environment</span></summary>
+      <summary><h2 style="display:inline" id="settings-title">Rates and rules</h2> <span class="muted" id="settings-sub">— unit rates per platform; node failures, headroom and memory limit per environment</span></summary>
       <div class="settings-grid">
-        <div>
+        <div class="money">
           <h3>Unit rates per month</h3>
           <div class="table-wrap"><table><thead><tr><th>Platform</th><th>per vCPU</th><th>per GiB memory</th><th></th></tr></thead><tbody id="platforms"></tbody></table></div>
           <div class="actions" style="margin-top:8px">
@@ -146,7 +153,7 @@ details summary { cursor: pointer; }
       The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
   </div>
@@ -158,7 +165,7 @@ details summary { cursor: pointer; }
         <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default projects</label>
       </div>
     </div>
-    <div class="note" style="margin:-4px 0 8px">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</div>
+    <div class="note" style="margin:-4px 0 8px"><span class="money">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</span><span class="cap-text">Give each project an envelope (its total CPU and memory across all clusters) and split it into quota per cluster; <i>Requests +25 %</i> starts a row from today's requests. Planned quota is compared with the envelope.</span></div>
     <div id="projects"></div>
   </div>
 </div>
@@ -169,6 +176,9 @@ const BUILTIN = ["System", "Default"];
 let data = null;         // {plan, inventory, evaluation} as last loaded/saved
 let plan = null;         // working copy being edited
 let dirty = false;
+// Two planners share this page: /planner (budgets and unit rates) and /capacity (CPU / memory envelopes, no money).
+const API = /\/capacity\/?$/.test(location.pathname) ? "api/capacity" : "api/planner";
+let CAP = false;
 
 const $ = (id) => document.getElementById(id);
 function h(tag, attrs, ...children) {
@@ -194,15 +204,28 @@ window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault()
 
 async function load() {
   setStatus("Loading…");
-  const r = await fetch("api/planner", {cache: "no-store"});
+  const r = await fetch(API, {cache: "no-store"});
   const body = await r.json().catch(() => ({}));
   if (!r.ok) { setStatus(body.error || `Loading failed (${r.status})`, true); return; }
   apply(body);
   setStatus("");
 }
 
+function applyMode() {
+  CAP = data.mode === "capacity";
+  document.body.classList.toggle("capacity", CAP);
+  $("export").href = `${API}/export.yaml`;
+  if (CAP) {
+    document.title = "Capacity Planner";
+    $("title").textContent = "Capacity planner";
+    $("settings-title").textContent = "Rules";
+    $("settings-sub").textContent = "— node failures, headroom and memory limit per environment";
+  }
+}
+
 function apply(body) {
   data = body;
+  applyMode();
   plan = JSON.parse(JSON.stringify(body.plan));
   plan.clusters = plan.clusters || {};
   plan.projects = plan.projects || {};
@@ -216,7 +239,7 @@ function apply(body) {
 async function save() {
   $("save").disabled = true;
   setStatus("Saving…");
-  const r = await fetch("api/planner", {
+  const r = await fetch(API, {
     method: "PUT", headers: {"Content-Type": "application/json", "X-Planner": "1"},
     body: JSON.stringify({version: data.plan.version || 0, plan}),
   });
@@ -229,7 +252,7 @@ async function save() {
 // ---- model helpers (mirror planner.evaluate for live feedback; the server re-checks on save) ----
 function clusterRules(cid) {
   const c = plan.clusters[cid] || {};
-  return {platform: plan.settings.platforms[c.platform], env: plan.settings.envs[c.env], envName: c.env || ""};
+  return {platform: (plan.settings.platforms || {})[c.platform], env: plan.settings.envs[c.env], envName: c.env || ""};
 }
 function allocCost(cid, a) {
   const {platform} = clusterRules(cid);
@@ -241,7 +264,8 @@ function projectNames() {
   return [...names].filter((n) => $("show-builtin").checked || !BUILTIN.includes(n) || plan.projects[n]).sort((a, b) => a.localeCompare(b));
 }
 function ensureProject(name) {
-  return plan.projects[name] ||= {cost_center: "", owners: [], monthly_budget: null, allocations: {}};
+  return plan.projects[name] ||= (CAP ? {owners: [], cpu_envelope: null, memory_gib_envelope: null, allocations: {}}
+                                      : {cost_center: "", owners: [], monthly_budget: null, allocations: {}});
 }
 // Mirrors planner.cluster_limits: what a cluster can give to projects, per CPU and memory.
 function clusterLimits(c, cfg, env) {
@@ -275,6 +299,13 @@ function evaluate() {
       const c = allocCost(cid, a);
       if (c == null) unpriced.push(clusters[cid]?.name || cid); else cost += c;
       const t = totals[cid] ||= {cpu: 0, mem: 0}; t.cpu += a.cpu; t.mem += a.memory_gib;
+    }
+    if (CAP) {
+      const cpu = Object.values(p.allocations).reduce((s, x) => s + x.cpu, 0), mem = Object.values(p.allocations).reduce((s, x) => s + x.memory_gib, 0);
+      projects[name] = {cpu, mem};
+      if (p.cpu_envelope != null && cpu > p.cpu_envelope + 1e-9) issues.push(["critical", `${name}: planned CPU quota ${fmt(cpu, 3)} across all clusters is above its envelope of ${fmt(p.cpu_envelope, 3)}`]);
+      if (p.memory_gib_envelope != null && mem > p.memory_gib_envelope + 1e-9) issues.push(["critical", `${name}: planned memory quota ${fmt(mem, 3)} GiB across all clusters is above its envelope of ${fmt(p.memory_gib_envelope, 3)} GiB`]);
+      continue;
     }
     projects[name] = {cost, unpriced};
     if (unpriced.length) issues.push(["warning", `${name}: no platform set for ${unpriced.join(", ")}, so its quota there has no price`]);
@@ -358,6 +389,7 @@ function renderReference() {
 
 function renderSettings() {
   const s = plan.settings;
+  s.platforms ||= {};
   $("currency").value = s.currency || "";
   $("currency").oninput = (e) => { s.currency = e.target.value.trim(); markDirty(); };
   $("platforms").replaceChildren(...Object.entries(s.platforms).map(([name, p]) => h("tr", {},
@@ -412,7 +444,7 @@ function renderClusters() {
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
       h("td", {class: "l"}, select(Object.keys(s.envs), cfg.env, (v) => { cfg.env = v; markDirty(); renderProjects(); }, `${c.name} environment`)),
-      h("td", {class: "l"}, select(Object.keys(s.platforms), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
+      h("td", {class: "l money"}, select(Object.keys(s.platforms || {}), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
       h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
       h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
       h("td", {"data-k": "failover"}),
@@ -455,21 +487,25 @@ function renderProjects() {
         h("td", {class: "l", "data-k": "env"}),
         h("td", {}, rp && rp.requests_cpu != null ? `${fmt(rp.requests_cpu, 2)} / ${fmt(rp.requests_mem_gib)}` : h("span", {class: "muted", title: "only known for the cluster this dashboard runs on"}, "—")),
         h("td", {}, rp && rp.quota_cpu != null ? `${fmt(rp.quota_cpu, 2)} / ${fmt(rp.quota_mem_gib)}` : h("span", {class: "muted"}, "none")),
-        h("td", {}, cpuIn), h("td", {}, memIn), h("td", {"data-k": "cost"}),
-        h("td", {class: "l"}, h("span", {class: "conv"}, amount, share, h("span", {class: "muted"}, "% CPU"), convert, fromReq)));
+        h("td", {}, cpuIn), h("td", {}, memIn), h("td", {class: "money", "data-k": "cost"}),
+        h("td", {class: "l"}, h("span", {class: "conv"}, h("span", {class: "money conv"}, amount, share, h("span", {class: "muted"}, "% CPU"), convert), fromReq)));
     });
     const budget = numberInput(existing?.monthly_budget ?? "", (v) => { p().monthly_budget = v === "" ? null : num(v); markDirty(); }, {label: `${name} monthly budget`});
+    const envelope = (key, label, step) => h("input", {type: "number", min: "0", step, value: existing?.[key] ?? "", placeholder: "none", "aria-label": `${name} ${label}`,
+      oninput: (e) => { p()[key] = e.target.value === "" ? null : num(e.target.value); markDirty(); }});
     const cc = h("input", {value: existing?.cost_center || "", "aria-label": `${name} cost center`, style: "width:110px", oninput: (e) => { p().cost_center = e.target.value; markDirty(); }});
     const owners = h("input", {class: "wide", value: (existing?.owners || []).join(", "), placeholder: "lead@corp, …", "aria-label": `${name} owners`, oninput: (e) => { p().owners = e.target.value.split(",").map((s) => s.trim()).filter(Boolean); markDirty(); }});
     return h("div", {class: "project", "data-project": name},
       h("div", {class: "project-head"},
         h("h3", {}, name),
-        h("label", {}, "Budget / month", budget),
-        h("label", {}, "Cost center", cc),
+        h("label", {class: "money"}, "Budget / month", budget),
+        h("label", {class: "money"}, "Cost center", cc),
+        h("label", {class: "cap-only", title: "the project's total CPU quota across all clusters"}, "Envelope CPU", envelope("cpu_envelope", "CPU envelope", "0.5")),
+        h("label", {class: "cap-only", title: "the project's total memory quota across all clusters"}, "GiB", envelope("memory_gib_envelope", "memory envelope GiB", "1")),
         h("label", {}, "Owners", owners),
         h("span", {class: "cost", "data-k": "total"})),
       h("div", {class: "table-wrap"}, h("table", {},
-        h("thead", {}, h("tr", {}, h("th", {}, "Cluster"), h("th", {class: "l"}, "Env"), h("th", {}, "Requests now CPU / GiB"), h("th", {}, "Rancher quota now"), h("th", {}, "Quota CPU"), h("th", {}, "Quota GiB"), h("th", {}, "Cost / month"), h("th", {class: "l"}, "From an amount"))),
+        h("thead", {}, h("tr", {}, h("th", {}, "Cluster"), h("th", {class: "l"}, "Env"), h("th", {}, "Requests now CPU / GiB"), h("th", {}, "Rancher quota now"), h("th", {}, "Quota CPU"), h("th", {}, "Quota GiB"), h("th", {class: "money"}, "Cost / month"), h("th", {class: "l"}, h("span", {class: "money"}, "From an amount")))),
         h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", {colspan: 8, class: "empty"}, "Not on any cluster"))))));
   }));
 }
@@ -501,8 +537,19 @@ function recompute() {
     for (const tr of div.querySelectorAll("tr[data-cluster]")) {
       const cid = tr.dataset.cluster, a = p?.allocations?.[cid];
       tr.querySelector('[data-k="env"]').replaceChildren(clusterRules(cid).envName || h("span", {class: "muted"}, "—"));
+      if (CAP) continue;
       const c = a ? allocCost(cid, a) : 0;
       tr.querySelector('[data-k="cost"]').replaceChildren(a && (a.cpu || a.memory_gib) ? (c == null ? h("span", {class: "muted"}, "no platform") : money(c)) : h("span", {class: "muted"}, "—"));
+    }
+    if (CAP) {
+      const pr = ev.projects[name] || {cpu: 0, mem: 0};
+      const over = (p?.cpu_envelope != null && pr.cpu > p.cpu_envelope + 1e-9) || (p?.memory_gib_envelope != null && pr.mem > p.memory_gib_envelope + 1e-9);
+      const hasEnv = p?.cpu_envelope != null || p?.memory_gib_envelope != null;
+      div.querySelector('[data-k="total"]').replaceChildren(
+        hasEnv ? h("span", {class: `dot ${over ? "critical" : "good"}`}) : "",
+        "Planned ", h("b", {}, pair(pr.cpu, pr.mem)),
+        hasEnv ? ` of ${pair(p.cpu_envelope, p.memory_gib_envelope)}` : h("span", {class: "muted"}, " (no envelope)"));
+      continue;
     }
     const pr = ev.projects[name] || {cost: 0};
     const budget = p?.monthly_budget;
@@ -516,12 +563,23 @@ function recompute() {
   box.hidden = false;
   box.replaceChildren(...(ev.issues.length
     ? [h("b", {}, `${ev.issues.length} issue${ev.issues.length > 1 ? "s" : ""} in this plan`), h("ul", {}, ev.issues.map(([lvl, t]) => h("li", {}, h("span", {class: `dot ${lvl}`}), t)))]
-    : [h("span", {class: "dot good"}), " No issues: every project fits its budget, and every cluster its limit for projects (node failures, platform reserve, headroom)."]));
+    : [h("span", {class: "dot good"}), ` No issues: every project fits its ${CAP ? "envelope" : "budget"}, and every cluster its limit for projects (node failures, platform reserve, headroom).`]));
   const planned = Object.entries(plan.projects).filter(([, p]) => Object.values(p.allocations).some((a) => a.cpu || a.memory_gib));
   const totalCost = Object.values(ev.projects).reduce((s, p) => s + p.cost, 0);
   const totalBudget = Object.values(plan.projects).reduce((s, p) => s + (p.monthly_budget || 0), 0);
   const overBudget = Object.entries(ev.projects).filter(([n, p]) => plan.projects[n].monthly_budget != null && p.cost > plan.projects[n].monthly_budget + 0.005).length;
   const overHead = Object.values(ev.clusters).filter((c) => c.limit_cpu != null && (c.cpu > c.limit_cpu + 1e-9 || c.mem > c.limit_mem + 1e-9)).length;
+  if (CAP) {
+    const tot = Object.values(ev.projects).reduce((s, p) => ({cpu: s.cpu + p.cpu, mem: s.mem + p.mem}), {cpu: 0, mem: 0});
+    const overEnv = Object.entries(ev.projects).filter(([n, pr]) => { const p = plan.projects[n];
+      return (p.cpu_envelope != null && pr.cpu > p.cpu_envelope + 1e-9) || (p.memory_gib_envelope != null && pr.mem > p.memory_gib_envelope + 1e-9); }).length;
+    $("tiles").replaceChildren(
+      tile("Projects planned", planned.length, `of ${projectNames().length} shown`),
+      tile("Planned quota", pair(tot.cpu, tot.mem), "CPU / GiB across all clusters"),
+      tile("Projects over their envelope", overEnv, overEnv ? "see issues above" : "all within their envelope"),
+      tile("Clusters over their limit", overHead, `of ${data.inventory.clusters.length} clusters`));
+    return;
+  }
   $("tiles").replaceChildren(
     tile("Projects planned", planned.length, `of ${projectNames().length} shown`),
     tile("Planned cost / month", money(totalCost), totalBudget ? `budgets total ${money(totalBudget)}` : "no budgets set"),

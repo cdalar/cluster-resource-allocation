@@ -41,4 +41,26 @@ spec:
     port: {{ .Values.service.port | quote }}
     path: /planner
 {{- end }}
+{{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}
+---
+apiVersion: ui.cattle.io/v1
+kind: NavLink
+metadata:
+  name: {{ include "crr.fullname" . }}-capacity
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  label: "Capacity planner"
+  {{- with dig "navLink" "group" "" .Values.rancher }}
+  group: {{ . | quote }}
+  {{- end }}
+  description: Plan CPU and memory per project and cluster, without money (planning only, nothing is applied)
+  target: _blank
+  toService:
+    namespace: {{ .Release.Namespace }}
+    name: {{ include "crr.fullname" . }}
+    scheme: http
+    port: {{ .Values.service.port | quote }}
+    path: /capacity
+{{- end }}
 {{- end }}

@@ -131,7 +131,8 @@ To prepare these files, the report dashboard on the Rancher local cluster has an
 (either way round, via the unit rates of [03](03-allocation-model.md#unit-rates)), sees the same checks the CI step
 runs -- budget per project, headroom ratio per cluster -- against live Rancher capacity, and exports the result as
 `allocations/projects/<project>.yaml`. It is a planning tool only: it stores its plan in its own volume and writes
-nothing to Rancher, so Git stays the source of truth and the pull request stays the approval.
+nothing to Rancher, so Git stays the source of truth and the pull request stays the approval. A second page, the **capacity planner**
+(`capacityPlanner.enabled`), does the same without money: a CPU / memory envelope per project instead of a budget.
 
 ```mermaid
 flowchart LR

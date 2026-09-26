@@ -272,6 +272,27 @@ For round numbers the example uses rates of 25 per vCPU and 6.25 per GiB (not th
 9. **Save plan**, then **Export YAML**, and commit the payments document as `allocations/projects/payments.yaml`.
    The export writes `limits.memory` 19.2Gi for prod-01 (factor 1) and 8Gi for test-01 (factor 2).
 
+## Capacity planner (without money)
+
+The **capacity planner** is the same tool without rates, budgets or costs: each project simply has *this much CPU
+and memory*. Open it from the local cluster's Rancher menu (**Capacity planner**) or `/capacity` next to the
+dashboard. It keeps its own plan, separate from the allocation planner's.
+
+| | Allocation planner | Capacity planner |
+| --- | --- | --- |
+| Per project | Budget / month, cost center, owners | **Envelope**: total CPU and memory across all clusters; owners |
+| Per cluster row | Quota CPU / GiB, cost, conversion from an amount | Quota CPU / GiB, *Requests +25 %* |
+| Settings | Unit rates per platform, currency, environments | Environments only (**Rules**) |
+| Clusters | Environment, platform, limit for projects | Environment, limit for projects (no platform) |
+| Project check | Planned cost ≤ budget | Planned CPU and memory across all clusters ≤ envelope |
+| Cluster checks | Node failures, platform reserve, headroom | The same |
+| Export | Allocation files with budget and cost center | Allocation files without them |
+
+A project's envelope is optional: without one, the planner shows "(no envelope)" and only checks the clusters. The
+project check reads for example *crm: planned CPU quota 1.5 across all clusters is above its envelope of 1*; the
+tiles show the planned quota in CPU / GiB and *Projects over their envelope*. Everything in the sections on
+clusters, checks, saving and export applies as described above, minus the money.
+
 ## Limitations and FAQ
 
 **Why doesn't saving change the quota in Rancher?** By design. Allocations are managed as code: Git is the source of
@@ -311,8 +332,9 @@ helm upgrade --install resource-report charts/cluster-resource-report -n resourc
 | Value | Why it's needed |
 | --- | --- |
 | `planner.enabled=true` | Turns the planner on (`/planner`) and adds the *Allocation planner* entry to the local cluster's Rancher menu |
+| `capacityPlanner.enabled=true` | The capacity planner (`/capacity`, *Capacity planner* menu entry); can be used alone or next to the allocation planner |
 | `rancher.isLocalCluster=true` | Lets it read clusters, nodes and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
-| `persistence.enabled=true` | Stores the plan on a volume; without it the chart refuses to install, so a pod restart can't lose the plan |
+| `persistence.enabled=true` | Stores the plans on a volume (`planner.json`, `capacity-plan.json`); without it the chart refuses to install, so a pod restart can't lose the plan |
 
 - **Permissions:** read-only (`get`/`list` on Rancher `projects`, `clusters` and `nodes`). The planner has no permission to
   change a cluster or a quota.

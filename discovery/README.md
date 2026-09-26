@@ -160,6 +160,11 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
 
 It never writes to a cluster; applying stays with the Git / Terraform flow.
 
+`server.py --capacity-planner` adds the same planner without money at `/capacity` (`GET|PUT /api/capacity`,
+`/api/capacity/export.yaml`): no platforms, rates, budgets or costs; each project has an optional CPU / memory
+envelope checked against its quota summed over all clusters. Its plan is `<data-dir>/capacity-plan.json`
+(history in `capacity-history/`); both planners share `planner.py` (`mode="budget"` / `"capacity"`).
+
 ## Tests
 
 ```bash

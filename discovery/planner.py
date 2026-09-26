@@ -26,8 +26,14 @@ from datetime import datetime, timezone
 
 import discover
 
-STATE_FILE = "planner.json"
-HISTORY_DIR = "planner-history"
+# Two planners share this module:
+#   budget   -- the allocation planner: unit rates, budgets and costs per project (/planner)
+#   capacity -- the capacity planner: no money, each project has a CPU and memory envelope instead (/capacity)
+# Same inventory, cluster limits and export; separate plan files.
+MODES = ("budget", "capacity")
+STATE_FILES = {"budget": ("planner.json", "planner-history", "planner"),
+               "capacity": ("capacity-plan.json", "capacity-history", "capacity")}
+STATE_FILE, HISTORY_DIR = STATE_FILES["budget"][:2]
 HISTORY_KEEP = 30
 MAX_STATE_BYTES = 1_000_000
 
@@ -98,9 +104,11 @@ RATE_REFERENCE = {
 }
 
 
-def empty_state():
-    return {"version": 0, "updated_at": None, "settings": json.loads(json.dumps(DEFAULT_SETTINGS)),
-            "clusters": {}, "projects": {}}
+def empty_state(mode="budget"):
+    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    if mode == "capacity":
+        settings = {"envs": settings["envs"]}
+    return {"version": 0, "updated_at": None, "settings": settings, "clusters": {}, "projects": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +232,14 @@ def _text(v, where, maxlen=200):
     return v.strip()
 
 
-def validate_state(raw):
+def validate_state(raw, mode="budget"):
     """Normalised copy of a plan sent by the page; raises PlanError on anything malformed."""
     if not isinstance(raw, dict):
         raise PlanError("plan must be an object")
+    money = mode == "budget"
     settings = raw.get("settings") or {}
     platforms, envs = {}, {}
-    for name, p in (settings.get("platforms") or {}).items():
+    for name, p in ((settings.get("platforms") or {}) if money else {}).items():
         _name(name, "platform")
         platforms[name] = {"cpu_rate": _num(p.get("cpu_rate"), f"{name}.cpu_rate"),
                            "mem_rate": _num(p.get("mem_rate"), f"{name}.mem_rate")}
@@ -241,12 +250,14 @@ def validate_state(raw):
                       "mem_limit_factor": _num(e.get("mem_limit_factor"), f"{name}.mem_limit_factor", 1, 10),
                       "node_failures": int(_num(e.get("node_failures", default_failures),
                                                 f"{name}.node_failures", 0, 10))}
-    if not platforms or not envs:
-        raise PlanError("settings need at least one platform and one environment")
+    if money and not platforms:
+        raise PlanError("settings need at least one platform")
+    if not envs:
+        raise PlanError("settings need at least one environment")
     clusters = {}
     for cid, c in (raw.get("clusters") or {}).items():
         _name(cid, "cluster id")
-        env, platform = c.get("env") or "", c.get("platform") or ""
+        env, platform = c.get("env") or "", (c.get("platform") or "") if money else ""
         if env and env not in envs:
             raise PlanError(f"cluster {cid}: unknown environment {env!r}")
         if platform and platform not in platforms:
@@ -255,7 +266,9 @@ def validate_state(raw):
         for key in ("platform_cpu", "platform_mem_gib"):
             v = c.get(key)
             reserve[key] = None if v in (None, "") else _num(v, f"cluster {cid}.{key}", 0, 1000000)
-        clusters[cid] = {"env": env, "platform": platform, **reserve}
+        clusters[cid] = {"env": env, **reserve}
+        if money:
+            clusters[cid]["platform"] = platform
     projects = {}
     for pname, p in (raw.get("projects") or {}).items():
         _name(pname, "project")
@@ -267,27 +280,31 @@ def validate_state(raw):
             _name(cid, f"{pname}: cluster id")
             allocations[cid] = {"cpu": _num(a.get("cpu", 0), f"{pname}/{cid}.cpu", 0, 100000),
                                 "memory_gib": _num(a.get("memory_gib", 0), f"{pname}/{cid}.memory_gib", 0, 1000000)}
-        budget = p.get("monthly_budget")
-        projects[pname] = {
-            "cost_center": _text(p.get("cost_center"), f"{pname}.cost_center"),
-            "owners": [_text(o, f"{pname}.owners") for o in owners if o],
-            "monthly_budget": None if budget in (None, "") else _num(budget, f"{pname}.monthly_budget"),
-            "allocations": allocations,
-        }
-    return {
-        "settings": {"currency": _text(settings.get("currency") or "EUR", "currency", 8) or "EUR",
-                     "platforms": platforms, "envs": envs},
-        "clusters": clusters,
-        "projects": projects,
-    }
+        project = {"owners": [_text(o, f"{pname}.owners") for o in owners if o], "allocations": allocations}
+        if money:
+            budget = p.get("monthly_budget")
+            project["cost_center"] = _text(p.get("cost_center"), f"{pname}.cost_center")
+            project["monthly_budget"] = None if budget in (None, "") else _num(budget, f"{pname}.monthly_budget")
+        else:  # the project's total CPU / memory across all clusters; None = no envelope yet
+            for key in ("cpu_envelope", "memory_gib_envelope"):
+                v = p.get(key)
+                project[key] = None if v in (None, "") else _num(v, f"{pname}.{key}", 0, 1000000)
+        projects[pname] = project
+    out_settings = {"envs": envs}
+    if money:
+        out_settings.update(currency=_text(settings.get("currency") or "EUR", "currency", 8) or "EUR",
+                            platforms=platforms)
+    return {"settings": out_settings, "clusters": clusters, "projects": projects}
 
 
 class PlanStore:
-    """The plan in <data_dir>/planner.json, with a version for optimistic locking and a short history."""
+    """A plan in <data_dir> (planner.json, or capacity-plan.json for the capacity planner), with a version for
+    optimistic locking and a short history."""
 
-    def __init__(self, data_dir):
-        self.data_dir = data_dir
-        self.path = os.path.join(data_dir, STATE_FILE)
+    def __init__(self, data_dir, mode="budget"):
+        self.data_dir, self.mode = data_dir, mode
+        self.state_file, self.history_dir, self.prefix = STATE_FILES[mode]
+        self.path = os.path.join(data_dir, self.state_file)
 
     def load(self):
         """The stored plan, normalised: fields added in later versions get their defaults."""
@@ -295,9 +312,9 @@ class PlanStore:
             with open(self.path) as f:
                 stored = json.load(f)
         except FileNotFoundError:
-            return empty_state()
+            return empty_state(self.mode)
         try:
-            plan = validate_state(stored)
+            plan = validate_state(stored, self.mode)
         except PlanError as e:  # written by an older version with rules that have since changed
             discover.log(f"planner: stored plan doesn't validate ({e}); showing it unnormalised")
             return stored
@@ -309,12 +326,12 @@ class PlanStore:
         current = self.load()
         if expected_version != current.get("version", 0):
             raise PlanConflict(current.get("version", 0))
-        plan = validate_state(raw)
+        plan = validate_state(raw, self.mode)
         plan["version"] = current.get("version", 0) + 1
         plan["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         os.makedirs(self.data_dir, exist_ok=True)
         data = json.dumps(plan, indent=1, sort_keys=True)
-        fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".planner-")
+        fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=f".{self.prefix}-")
         with os.fdopen(fd, "w") as f:
             f.write(data)
         os.replace(tmp, self.path)
@@ -322,10 +339,10 @@ class PlanStore:
         return plan
 
     def _keep_history(self, plan, data):
-        hist = os.path.join(self.data_dir, HISTORY_DIR)
+        hist = os.path.join(self.data_dir, self.history_dir)
         try:
             os.makedirs(hist, exist_ok=True)
-            with open(os.path.join(hist, f'planner-v{plan["version"]:05d}.json'), "w") as f:
+            with open(os.path.join(hist, f'{self.prefix}-v{plan["version"]:05d}.json'), "w") as f:
                 f.write(data)
             for old in sorted(os.listdir(hist))[:-HISTORY_KEEP]:
                 os.remove(os.path.join(hist, old))
@@ -346,7 +363,7 @@ class PlanConflict(Exception):
 def _cluster_rules(plan, cluster_id):
     c = plan["clusters"].get(cluster_id) or {}
     settings = plan["settings"]
-    return settings["platforms"].get(c.get("platform")), settings["envs"].get(c.get("env")), c.get("env") or ""
+    return (settings.get("platforms") or {}).get(c.get("platform")), settings["envs"].get(c.get("env")), c.get("env") or ""
 
 
 def cluster_limits(cluster, cluster_cfg, env):
@@ -386,8 +403,9 @@ def cluster_limits(cluster, cluster_cfg, env):
     return out
 
 
-def evaluate(plan, inventory):
-    """Cost per project and headroom per cluster for the plan, plus the issues to show and fix."""
+def evaluate(plan, inventory, mode="budget"):
+    """Per project cost vs. budget (budget mode) or quota vs. envelope (capacity mode), per cluster quota vs. its
+    limit for projects, plus the issues to show and fix."""
     clusters = {c["id"]: c for c in inventory["clusters"]}
     rancher_projects = {(p["cluster_id"], p["name"]) for p in inventory["projects"]}
     issues, project_rows, cluster_totals = [], {}, {}
@@ -411,6 +429,19 @@ def evaluate(plan, inventory):
             t = cluster_totals.setdefault(cid, {"cpu": 0.0, "memory_gib": 0.0})
             t["cpu"] += a["cpu"]
             t["memory_gib"] += a["memory_gib"]
+        if mode == "capacity":
+            planned = {"cpu": sum(x["cpu"] for x in p["allocations"].values()),
+                       "memory_gib": sum(x["memory_gib"] for x in p["allocations"].values())}
+            row = {"cpu": round(planned["cpu"], 3), "memory_gib": round(planned["memory_gib"], 3),
+                   "cpu_envelope": p["cpu_envelope"], "memory_gib_envelope": p["memory_gib_envelope"]}
+            for key, name, unit in (("cpu", "CPU", ""), ("memory_gib", "memory", " GiB")):
+                env_ = p[f"{key}_envelope"]
+                if env_ is not None and planned[key] > env_ + 1e-9:
+                    issues.append({"level": "critical",
+                                   "text": f"{pname}: planned {name} quota {_fmt(planned[key])}{unit} across all "
+                                           f"clusters is above its envelope of {_fmt(env_)}{unit}"})
+            project_rows[pname] = row
+            continue
         budget = p["monthly_budget"]
         row = {"cost": round(cost, 2), "budget": budget, "unpriced_clusters": unpriced}
         if unpriced:
@@ -467,7 +498,7 @@ def _yaml_str(s):
     return json.dumps(s)  # a JSON string is a valid YAML scalar
 
 
-def export_yaml(plan, inventory):
+def export_yaml(plan, inventory, mode="budget"):
     """The plan as allocation files (docs/04, "Allocation as code"): one YAML document per project."""
     clusters = {c["id"]: c for c in inventory["clusters"]}
     docs = []
@@ -476,11 +507,11 @@ def export_yaml(plan, inventory):
                                                  key=lambda kv: clusters.get(kv[0], {}).get("name", kv[0]))
                   if a["cpu"] or a["memory_gib"]]
         lines = [f"# allocations/projects/{pname}.yaml", f"project: {_yaml_str(pname)}"]
-        if p["cost_center"]:
+        if p.get("cost_center"):
             lines.append(f"costCenter: {_yaml_str(p['cost_center'])}")
         if p["owners"]:
             lines.append("owners: [" + ", ".join(_yaml_str(o) for o in p["owners"]) + "]")
-        if p["monthly_budget"] is not None:
+        if p.get("monthly_budget") is not None:
             lines += ["budget:", f"  currency: {_yaml_str(plan['settings']['currency'])}",
                       f"  monthly: {_fmt(p['monthly_budget'])}"]
         lines.append("allocations:" if allocs else "allocations: []")
@@ -495,7 +526,8 @@ def export_yaml(plan, inventory):
                       f"      requests.memory: {_fmt(a['memory_gib'])}Gi",
                       f"      limits.memory: {_fmt(a['memory_gib'] * factor)}Gi"]
         docs.append("\n".join(lines) + "\n")
+    tool = "capacity planner" if mode == "capacity" else "allocation planner"
     header = (f"# Allocation plan version {plan.get('version', 0)}, exported "
-              f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} by the allocation planner.\n"
+              f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} by the {tool}.\n"
               f"# Not applied to any cluster: commit as allocations/projects/<project>.yaml (docs/04).\n")
     return header + "---\n" + "---\n".join(docs) if docs else header

@@ -14,3 +14,5 @@
 | Q10 | Showback only, or real chargeback in a later phase? | Reporting accuracy requirements | Finance | Open |
 | Q11 | Is Rancher Monitoring (Prometheus) installed on all clusters, with enough retention for quarterly reviews? | Visibility | Platform | Open |
 | Q12 | How are shared/platform services (ingress, monitoring, logging) funded — overhead in unit rate or separate? | Unit rates | Finance + Platform | Open |
+| Q13 | Where does the allocations repository (`allocations/projects/*.yaml`) live (GitHub / GitLab, which repo), and may the planner open pull requests there (GitHub App or token)? | Planner action P1 ([07](07-actions.md)) | Platform | Open |
+| Q14 | May the planner and dashboard change Rancher directly (quota, Projects, namespace moves, container defaults) as the logged-in user, or must every quota change go through Git? | ADR-0001, actions P2–P4, D2, D3 ([07](07-actions.md)) | Platform + architecture | Open |

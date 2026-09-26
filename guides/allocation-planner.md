@@ -1,4 +1,4 @@
-# 7. Allocation Planner — User Guide
+# Allocation Planner — User Guide
 
 How to plan CPU and memory quota per project and cluster with the allocation planner, and what each parameter
 means.
@@ -14,7 +14,7 @@ It is a **planning tool only**. It never changes a cluster or a Rancher quota:
 - **Save plan** stores the plan inside the planner itself (on its data volume).
 - **Export YAML** produces the allocation files (`allocations/projects/<project>.yaml`).
 - Those files go through the normal pull request, CI validation and Terraform flow
-  ([04](04-technical-design.md#42-allocation-as-code)), which is what actually sets the Rancher Project quotas.
+  ([04](../docs/04-technical-design.md#42-allocation-as-code)), which is what actually sets the Rancher Project quotas.
 
 So you can try out numbers freely: nothing reaches a running workload until the exported files are merged and
 applied.
@@ -70,7 +70,7 @@ A platform groups clusters that cost the same to run, e.g. `onprem` and `aks`. E
 | per GiB memory | Monthly price of 1 GiB of **requested** memory quota | 6.25 |
 
 Cost of a quota on a cluster = CPU × rate per vCPU + memory GiB × rate per GiB, using that cluster's platform. The
-defaults are the illustrative numbers from the [allocation model](03-allocation-model.md#unit-rates); replace them
+defaults are the illustrative numbers from the [allocation model](../docs/03-allocation-model.md#unit-rates); replace them
 with the rates finance publishes. **Add platform** creates another one; **Remove** clears it from the clusters that
 used it.
 
@@ -84,9 +84,9 @@ Each environment carries two rules:
 | memory limit = request × | Factor for the `limits.memory` written in the export | 1.0 | 2.0 | 2.0 | 2.0 |
 
 - **Max Σ quota** keeps headroom for node failures, rolling updates and platform components
-  ([03](03-allocation-model.md#headroom-and-overcommit)). Prod stays at 80 % so one node can fail. Dev may go above
+  ([03](../docs/03-allocation-model.md#headroom-and-overcommit)). Prod stays at 80 % so one node can fail. Dev may go above
   100 % (overcommit) because most dev workloads sit idle.
-- **Memory limit factor** follows resource standard S3 ([02](02-resource-standards.md)): memory limit equals the
+- **Memory limit factor** follows resource standard S3 ([02](../docs/02-resource-standards.md)): memory limit equals the
   request in prod, and may be up to twice the request elsewhere.
 
 Environment names are free text; **Add environment** creates more, e.g. `staging`.
@@ -184,7 +184,7 @@ version 4, saved …").
 ## From plan to applied quota
 
 **Export YAML** downloads `allocations.yaml`: one YAML document per project, in the allocation-file format of the
-[technical design](04-technical-design.md#42-allocation-as-code). It exports the **last saved** plan; if you have
+[technical design](../docs/04-technical-design.md#42-allocation-as-code). It exports the **last saved** plan; if you have
 unsaved changes, the page asks first.
 
 ```yaml
@@ -212,7 +212,7 @@ The path to an applied quota:
 1. Split the export into one file per project (each document starts with its file name as a comment) and commit
    them to the allocations repository under `allocations/projects/`.
 2. Open a pull request. The pull request is the approval: the platform team approves, and increases above budget go
-   to the budget owner ([05](05-process.md)).
+   to the budget owner ([05](../docs/05-process.md)).
 3. CI validates the files: budget per project and headroom per cluster, the same checks the planner showed you.
 4. After merge, Terraform (`rancher2` provider) sets the Rancher Project quota on each cluster.
 5. The planner's *Rancher quota now* column then shows the applied values, so you can see where plan and reality
@@ -257,7 +257,7 @@ row. Quota itself is always per cluster.
 quota; plan 10–25 % above normal requests (the *Requests +25 %* button does this).
 
 **Is the Git and Terraform flow in place?** It is the designed process
-([ADR-0001](adr/0001-enforcement-mechanism.md), status *proposed*). Until the allocations repository and pipeline
+([ADR-0001](../docs/adr/0001-enforcement-mechanism.md), status *proposed*). Until the allocations repository and pipeline
 exist, the export is the input for setting quotas by hand.
 
 ## For administrators: enabling the planner

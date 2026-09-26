@@ -37,7 +37,7 @@ jobs:
 
       - name: Unit tests
         working-directory: discovery
-        run: python -m unittest -v test_discover test_server
+        run: python -m unittest -v test_discover test_server test_planner
 
       - uses: azure/setup-helm@v5
 

@@ -1,3 +1,11 @@
+{{- if dig "enabled" false (.Values.planner | default dict) }}
+{{- if not .Values.persistence.enabled }}
+{{- fail "planner.enabled needs persistence.enabled=true: the plan is stored in the data volume" }}
+{{- end }}
+{{- if not (or .Values.rancher.isLocalCluster .Values.rancher.localKubeconfigSecret.name) }}
+{{- fail "planner.enabled needs the Rancher inventory: set rancher.isLocalCluster (or rancher.localKubeconfigSecret)" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,6 +69,9 @@ spec:
             {{- end }}
             {{- if dig "namesConfigMap" "enabled" false .Values.rancher }}
             - --rancher-names-configmap={{ include "crr.namesNamespace" . }}/rancher-project-names
+            {{- end }}
+            {{- if dig "enabled" false (.Values.planner | default dict) }}
+            - --planner
             {{- end }}
             {{- if .Values.rancher.isLocalCluster }}
             - --rancher-local-self

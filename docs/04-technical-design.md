@@ -124,6 +124,23 @@ Recommendation: **A (Terraform)**, with a CI step that validates:
 
 See [ADR-0001](adr/0001-enforcement-mechanism.md).
 
+### Allocation planner
+
+To prepare these files, the report dashboard on the Rancher local cluster has an optional **allocation planner**
+(`/planner`, chart value `planner.enabled`): the platform team enters budgets and quotas per project and cluster
+(either way round, via the unit rates of [03](03-allocation-model.md#unit-rates)), sees the same checks the CI step
+runs -- budget per project, headroom ratio per cluster -- against live Rancher capacity, and exports the result as
+`allocations/projects/<project>.yaml`. It is a planning tool only: it stores its plan in its own volume and writes
+nothing to Rancher, so Git stays the source of truth and the pull request stays the approval.
+
+```mermaid
+flowchart LR
+    R[Rancher local cluster<br/>clusters + projects, read-only] --> P[Allocation planner<br/>budgets, quotas, checks]
+    P -->|export YAML| G[Git: allocations/projects/*.yaml]
+    G -->|PR + CI validation| T[Terraform rancher2]
+    T --> Q[Rancher Project quotas]
+```
+
 ---
 
 ## 4.3 Admission policies

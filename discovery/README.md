@@ -131,10 +131,31 @@ holds the names of all projects in the workspace, so every targeted cluster sees
 after the next publish and Fleet sync. In the chart this is `rancher.publishNames` (local) and
 `rancher.namesConfigMap` (downstream).
 
+## Allocation planner
+
+`server.py --planner` (Rancher local cluster only; needs `--rancher-local-self`, `--rancher-local-context` or
+`--rancher-local-kubeconfig`) adds a planning page at `/planner`, implemented in `planner.py`:
+
+- **Input:** unit rates per platform (€ per vCPU-month / GiB-month), per environment the maximum Σ quota as a share
+  of allocatable and the memory-limit factor, per cluster its environment and platform, and per project a monthly
+  budget, cost center, owners and a CPU/memory quota per cluster -- typed in, converted from an amount with the
+  cluster's rates, or taken from current requests + 25 %.
+- **Rancher inventory (read-only):** `clusters.management.cattle.io` (allocatable, requested, nodes) and
+  `projects.management.cattle.io` (current quota). Current requests per project come from this collector's own
+  report, so only for the cluster it scans.
+- **Checks:** planned cost vs. budget per project, planned quota vs. the headroom rule per cluster, projects
+  missing in Rancher, clusters without environment/platform.
+- **Storage:** `<data-dir>/planner.json` with a version number (a save based on an older version is refused with
+  409, so two people can't overwrite each other) and the last 30 versions in `planner-history/`.
+- **Export:** `/api/planner/export.yaml`, one document per project in the allocation-file format of docs/04, with
+  `limits.memory` = requests × the environment's factor.
+
+It never writes to a cluster; applying stays with the Git / Terraform flow.
+
 ## Tests
 
 ```bash
-python3 -m unittest -v test_discover test_server
+python3 -m unittest -v test_discover test_server test_planner
 ```
 
 The script was verified end-to-end on a k3s cluster with fake Rancher Project objects, a kube-prometheus-stack

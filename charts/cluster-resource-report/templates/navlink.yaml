@@ -19,4 +19,26 @@ spec:
     scheme: http
     port: {{ .Values.service.port | quote }}
     path: /
+{{- if dig "enabled" false (.Values.planner | default dict) }}
+---
+apiVersion: ui.cattle.io/v1
+kind: NavLink
+metadata:
+  name: {{ include "crr.fullname" . }}-planner
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  label: "Allocation planner"
+  {{- with dig "navLink" "group" "" .Values.rancher }}
+  group: {{ . | quote }}
+  {{- end }}
+  description: Plan budgets and quotas per project and cluster (planning only, nothing is applied)
+  target: _blank
+  toService:
+    namespace: {{ .Release.Namespace }}
+    name: {{ include "crr.fullname" . }}
+    scheme: http
+    port: {{ .Values.service.port | quote }}
+    path: /planner
+{{- end }}
 {{- end }}

@@ -79,6 +79,13 @@ ingress:
 
 # Keep the latest report across pod restarts. Without it, a new pod starts with an empty dashboard
 # until the first collection finishes.
+# Allocation planner (/planner): budgets and quotas per project and cluster, planned only -- nothing is applied
+# to any cluster; the export is the allocation files for the Git/Terraform flow (docs/04). For the platform team,
+# on the Rancher local cluster: needs rancher.isLocalCluster (or rancher.localKubeconfigSecret) for the Rancher
+# inventory, and persistence.enabled, since the plan is stored in the data volume.
+planner:
+  enabled: false
+
 persistence:
   enabled: false
   storageClass: ""

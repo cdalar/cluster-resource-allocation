@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Allocation Planner</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --grid: #e1e0d9; --border: rgba(11,11,11,0.10); --track: #efeee9; --series-1: #2a78d6;
+  --status-good: #0ca30c; --status-warning: #fab219; --status-critical: #d03b3b; --accent-ink: #1c5cab;
+  --hover: rgba(11,11,11,0.04); --input: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+    --text-muted: #898781; --grid: #2c2c2a; --border: rgba(255,255,255,0.10); --track: #262624; --series-1: #3987e5;
+    --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05); --input: #121211;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+  --text-muted: #898781; --grid: #2c2c2a; --border: rgba(255,255,255,0.10); --track: #262624; --series-1: #3987e5;
+  --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05); --input: #121211;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0; font-weight: 600; }
+h3 { font-size: 14px; margin: 0; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.muted { color: var(--text-muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input { font: inherit; color: var(--text-primary); background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+button { cursor: pointer; background: var(--surface-1); }
+button:hover { background: var(--hover); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--series-1); color: #fff; border-color: transparent; }
+button.small { padding: 2px 8px; font-size: 12px; }
+a { color: var(--accent-ink); }
+a.button { text-decoration: none; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--surface-1); color: var(--text-primary); }
+input[type=number] { width: 88px; text-align: right; font-variant-numeric: tabular-nums; }
+input.wide { width: 220px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.banner { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); margin-bottom: 16px; font-size: 13px; }
+.banner ul { margin: 6px 0 0; padding-left: 0; list-style: none; }
+.banner li { display: flex; gap: 8px; align-items: baseline; margin: 2px 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .note { font-size: 12px; color: var(--text-muted); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 5px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; vertical-align: middle; }
+th:first-child, td:first-child, th.l, td.l { text-align: left; }
+th { font-weight: 600; color: var(--text-secondary); }
+td { font-variant-numeric: tabular-nums; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.good { background: var(--status-good); } .warning { background: var(--status-warning); } .critical { background: var(--status-critical); }
+.meter { display: inline-block; width: 70px; height: 6px; background: var(--track); border-radius: 3px; vertical-align: middle; margin-right: 6px; position: relative; overflow: hidden; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+.project { border-top: 1px solid var(--grid); padding: 14px 0 6px; }
+.project:first-of-type { border-top: 0; padding-top: 4px; }
+.project-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 8px; }
+.project-head label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); font-size: 13px; }
+.project-head .cost { margin-left: auto; font-variant-numeric: tabular-nums; display: inline-flex; gap: 6px; align-items: center; }
+.conv { display: inline-flex; gap: 4px; align-items: center; }
+.conv input { width: 72px; }
+details summary { cursor: pointer; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 16px; margin-top: 12px; }
+.note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.empty { color: var(--text-muted); padding: 16px 0; text-align: center; }
+.status { font-size: 13px; color: var(--text-secondary); }
+.status.error { color: var(--status-critical); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Allocation planner</h1>
+      <div class="sub" id="meta">Loading…</div>
+    </div>
+    <div class="actions">
+      <span class="status" id="status" role="status"></span>
+      <a class="button" href="./">Dashboard</a>
+      <a class="button" href="api/planner/export.yaml" id="export">Export YAML</a>
+      <button type="button" class="primary" id="save" disabled>Save plan</button>
+    </div>
+  </header>
+
+  <div class="banner" id="notice">
+    <b>Planning only.</b> Nothing here changes a cluster: saving stores the plan in this dashboard's data volume,
+    and <i>Export YAML</i> produces the allocation files (<code>allocations/projects/&lt;project&gt;.yaml</code>)
+    that go through the usual pull request and Terraform flow.
+  </div>
+  <div class="banner" id="issues" hidden></div>
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <details id="settings-box">
+      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates per platform, headroom and memory limit per environment</span></summary>
+      <div class="settings-grid">
+        <div>
+          <h3>Unit rates per month</h3>
+          <div class="table-wrap"><table><thead><tr><th>Platform</th><th>per vCPU</th><th>per GiB memory</th><th></th></tr></thead><tbody id="platforms"></tbody></table></div>
+          <div class="actions" style="margin-top:8px">
+            <label class="sub">Currency <input id="currency" style="width:70px"></label>
+            <button type="button" class="small" id="add-platform">Add platform</button>
+          </div>
+        </div>
+        <div>
+          <h3>Environments</h3>
+          <div class="table-wrap"><table><thead><tr><th>Environment</th><th>max Σ quota / allocatable</th><th>memory limit = request ×</th><th></th></tr></thead><tbody id="envs"></tbody></table></div>
+          <div class="actions" style="margin-top:8px"><button type="button" class="small" id="add-env">Add environment</button></div>
+          <div class="note">Defaults from docs/03 (headroom) and docs/02 S3 (memory limit = request in prod, up to 2× elsewhere).</div>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity from Rancher; planned = Σ of the quotas below</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l">Platform</th><th>Nodes</th><th>Allocatable CPU</th><th>Allocatable GiB</th><th>Requested now</th><th>Planned CPU</th><th>Planned GiB</th><th class="l">Headroom</th></tr></thead>
+      <tbody id="clusters"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Projects</h2>
+      <div class="actions">
+        <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default projects</label>
+      </div>
+    </div>
+    <div class="note" style="margin:-4px 0 8px">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</div>
+    <div id="projects"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const BUILTIN = ["System", "Default"];
+let data = null;         // {plan, inventory, evaluation} as last loaded/saved
+let plan = null;         // working copy being edited
+let dirty = false;
+
+const $ = (id) => document.getElementById(id);
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "value") el.value = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+const fmt = (n, d = 1) => n == null || Number.isNaN(n) ? "—" : Number(n).toLocaleString(undefined, {maximumFractionDigits: d});
+const money = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + " " + (plan.settings.currency || "");
+const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+
+function setStatus(text, error) { const s = $("status"); s.textContent = text; s.classList.toggle("error", !!error); }
+function markDirty() { dirty = true; $("save").disabled = false; setStatus("Unsaved changes"); recompute(); }
+window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+async function load() {
+  setStatus("Loading…");
+  const r = await fetch("api/planner", {cache: "no-store"});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { setStatus(body.error || `Loading failed (${r.status})`, true); return; }
+  apply(body);
+  setStatus("");
+}
+
+function apply(body) {
+  data = body;
+  plan = JSON.parse(JSON.stringify(body.plan));
+  plan.clusters = plan.clusters || {};
+  plan.projects = plan.projects || {};
+  dirty = false;
+  $("save").disabled = true;
+  const v = plan.version || 0;
+  $("meta").textContent = v ? `Plan version ${v}, saved ${new Date(plan.updated_at).toLocaleString()}` : "No plan saved yet";
+  render();
+}
+
+async function save() {
+  $("save").disabled = true;
+  setStatus("Saving…");
+  const r = await fetch("api/planner", {
+    method: "PUT", headers: {"Content-Type": "application/json", "X-Planner": "1"},
+    body: JSON.stringify({version: data.plan.version || 0, plan}),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (r.ok) { apply(body); setStatus("Saved"); return; }
+  $("save").disabled = false;
+  setStatus(r.status === 409 ? body.error + " — your edits are still here; copy what you need, then reload." : (body.error || `Saving failed (${r.status})`), true);
+}
+
+// ---- model helpers (mirror planner.evaluate for live feedback; the server re-checks on save) ----
+function clusterRules(cid) {
+  const c = plan.clusters[cid] || {};
+  return {platform: plan.settings.platforms[c.platform], env: plan.settings.envs[c.env], envName: c.env || ""};
+}
+function allocCost(cid, a) {
+  const {platform} = clusterRules(cid);
+  return platform ? a.cpu * platform.cpu_rate + a.memory_gib * platform.mem_rate : null;
+}
+function projectNames() {
+  const names = new Set(Object.keys(plan.projects));
+  for (const p of data.inventory.projects) names.add(p.name);
+  return [...names].filter((n) => $("show-builtin").checked || !BUILTIN.includes(n) || plan.projects[n]).sort((a, b) => a.localeCompare(b));
+}
+function ensureProject(name) {
+  return plan.projects[name] ||= {cost_center: "", owners: [], monthly_budget: null, allocations: {}};
+}
+function evaluate() {
+  const clusters = Object.fromEntries(data.inventory.clusters.map((c) => [c.id, c]));
+  const issues = [], projects = {}, totals = {};
+  for (const [name, p] of Object.entries(plan.projects)) {
+    let cost = 0; const unpriced = [];
+    for (const [cid, a] of Object.entries(p.allocations)) {
+      if (!a.cpu && !a.memory_gib) continue;
+      const c = allocCost(cid, a);
+      if (c == null) unpriced.push(clusters[cid]?.name || cid); else cost += c;
+      const t = totals[cid] ||= {cpu: 0, mem: 0}; t.cpu += a.cpu; t.mem += a.memory_gib;
+    }
+    projects[name] = {cost, unpriced};
+    if (unpriced.length) issues.push(["warning", `${name}: no platform set for ${unpriced.join(", ")}, so its quota there has no price`]);
+    if (p.monthly_budget != null && cost > p.monthly_budget + 0.005) issues.push(["critical", `${name}: planned quota costs ${money(cost)} a month, over its budget of ${money(p.monthly_budget)}`]);
+  }
+  const clusterRows = {};
+  for (const c of data.inventory.clusters) {
+    const t = totals[c.id] || {cpu: 0, mem: 0};
+    const {env, envName} = clusterRules(c.id);
+    const row = {cpu: t.cpu, mem: t.mem, cpuPct: c.alloc_cpu ? 100 * t.cpu / c.alloc_cpu : null, memPct: c.alloc_mem_gib ? 100 * t.mem / c.alloc_mem_gib : null, max: env?.max_quota_pct};
+    if ((t.cpu || t.mem) && !env) issues.push(["warning", `${c.name}: no environment set, so its headroom rule can't be checked`]);
+    else if (env) for (const [dim, pct] of [["CPU", row.cpuPct], ["memory", row.memPct]])
+      if (pct != null && pct > env.max_quota_pct) issues.push(["critical", `${c.name} (${envName}): planned ${dim} quota is ${fmt(pct)} % of allocatable, above the ${env.max_quota_pct} % allowed`]);
+    clusterRows[c.id] = row;
+  }
+  return {issues, projects, clusters: clusterRows};
+}
+
+// ---- rendering ----
+function render() {
+  renderSettings();
+  renderClusters();
+  renderProjects();
+  recompute();
+}
+
+function numberInput(value, onchange, attrs = {}) {
+  return h("input", {type: "number", min: "0", step: attrs.step || "any", value: value ?? "", "aria-label": attrs.label, oninput: (e) => onchange(e.target.value)});
+}
+
+function renderSettings() {
+  const s = plan.settings;
+  $("currency").value = s.currency || "";
+  $("currency").oninput = (e) => { s.currency = e.target.value.trim(); markDirty(); };
+  $("platforms").replaceChildren(...Object.entries(s.platforms).map(([name, p]) => h("tr", {},
+    h("td", {}, name),
+    h("td", {}, numberInput(p.cpu_rate, (v) => { p.cpu_rate = num(v); markDirty(); }, {label: `${name} rate per vCPU`})),
+    h("td", {}, numberInput(p.mem_rate, (v) => { p.mem_rate = num(v); markDirty(); }, {label: `${name} rate per GiB`})),
+    h("td", {}, Object.keys(s.platforms).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.platforms[name]; for (const c of Object.values(plan.clusters)) if (c.platform === name) c.platform = ""; markDirty(); render(); }}, "Remove")))));
+  $("envs").replaceChildren(...Object.entries(s.envs).map(([name, e]) => h("tr", {},
+    h("td", {}, name),
+    h("td", {}, numberInput(e.max_quota_pct, (v) => { e.max_quota_pct = num(v); markDirty(); }, {label: `${name} max quota percent`}), " %"),
+    h("td", {}, numberInput(e.mem_limit_factor, (v) => { e.mem_limit_factor = num(v); markDirty(); }, {label: `${name} memory limit factor`, step: "0.1"})),
+    h("td", {}, Object.keys(s.envs).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.envs[name]; for (const c of Object.values(plan.clusters)) if (c.env === name) c.env = ""; markDirty(); render(); }}, "Remove")))));
+}
+$("add-platform").onclick = () => {
+  const name = (prompt("Platform name (e.g. aks-westeurope):") || "").trim();
+  if (!name || plan.settings.platforms[name]) return;
+  plan.settings.platforms[name] = {cpu_rate: 0, mem_rate: 0}; markDirty(); render();
+};
+$("add-env").onclick = () => {
+  const name = (prompt("Environment name:") || "").trim();
+  if (!name || plan.settings.envs[name]) return;
+  plan.settings.envs[name] = {max_quota_pct: 100, mem_limit_factor: 1}; markDirty(); render();
+};
+
+function select(options, value, onchange, label) {
+  return h("select", {"aria-label": label, onchange: (e) => onchange(e.target.value)},
+    h("option", {value: ""}, "—"), options.map((o) => h("option", {value: o, selected: o === value}, o)));
+}
+
+function meter(pct, max) {
+  if (pct == null) return h("span", {class: "muted"}, "—");
+  const cls = max == null ? "warning" : pct > max ? "critical" : pct > max * 0.9 ? "warning" : "good";
+  const bar = h("span", {class: "meter"}, h("i", {class: cls, style: `width:${Math.min(100, pct / (max || 100) * 100)}%`}));
+  return h("span", {}, bar, `${fmt(pct)} %`);
+}
+
+function renderClusters() {
+  const s = plan.settings;
+  $("clusters").replaceChildren(...(data.inventory.clusters.length ? data.inventory.clusters.map((c) => {
+    const cfg = plan.clusters[c.id] ||= {env: "", platform: ""};
+    return h("tr", {"data-cluster": c.id},
+      h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
+      h("td", {class: "l"}, select(Object.keys(s.envs), cfg.env, (v) => { cfg.env = v; markDirty(); renderProjects(); }, `${c.name} environment`)),
+      h("td", {class: "l"}, select(Object.keys(s.platforms), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
+      h("td", {}, fmt(c.nodes, 0)), h("td", {}, fmt(c.alloc_cpu, 2)), h("td", {}, fmt(c.alloc_mem_gib)),
+      h("td", {}, `${fmt(c.requested_cpu, 2)} CPU / ${fmt(c.requested_mem_gib)} GiB`),
+      h("td", {"data-k": "cpu"}), h("td", {"data-k": "mem"}), h("td", {class: "l", "data-k": "head"}));
+  }) : [h("tr", {}, h("td", {colspan: 10, class: "empty"}, "No clusters in Rancher"))]));
+}
+
+function renderProjects() {
+  const clusters = Object.fromEntries(data.inventory.clusters.map((c) => [c.id, c]));
+  const names = projectNames();
+  if (!names.length) { $("projects").replaceChildren(h("div", {class: "empty"}, "No projects in Rancher yet")); return; }
+  $("projects").replaceChildren(...names.map((name) => {
+    const rancher = data.inventory.projects.filter((p) => p.name === name);
+    const existing = plan.projects[name];
+    const cids = [...new Set([...rancher.map((p) => p.cluster_id), ...Object.keys(existing?.allocations || {})])]
+      .sort((a, b) => (clusters[a]?.name || a).localeCompare(clusters[b]?.name || b));
+    const p = () => ensureProject(name);
+    const rows = cids.map((cid) => {
+      const rp = rancher.find((x) => x.cluster_id === cid);
+      const a = () => p().allocations[cid] ||= {cpu: 0, memory_gib: 0};
+      const cur = existing?.allocations?.[cid] || {cpu: 0, memory_gib: 0};
+      const cpuIn = numberInput(cur.cpu || "", (v) => { a().cpu = num(v); markDirty(); }, {label: `${name} on ${clusters[cid]?.name || cid}: CPU quota`, step: "0.1"});
+      const memIn = numberInput(cur.memory_gib || "", (v) => { a().memory_gib = num(v); markDirty(); }, {label: `${name} on ${clusters[cid]?.name || cid}: memory quota GiB`, step: "0.5"});
+      const amount = h("input", {type: "number", min: "0", step: "any", placeholder: plan.settings.currency || "€", "aria-label": `${name} on ${clusters[cid]?.name || cid}: amount per month`});
+      const share = h("input", {type: "number", min: "0", max: "100", step: "1", value: "50", "aria-label": "CPU share of the amount, percent"});
+      const convert = h("button", {type: "button", class: "small", onclick: () => {
+        const {platform} = clusterRules(cid);
+        if (!platform || !platform.cpu_rate || !platform.mem_rate) { setStatus(`Set a platform with rates for ${clusters[cid]?.name || cid} first`, true); return; }
+        const eur = num(amount.value), sh = Math.min(100, Math.max(0, num(share.value))) / 100;
+        a().cpu = round(eur * sh / platform.cpu_rate, 2); a().memory_gib = round(eur * (1 - sh) / platform.mem_rate, 1);
+        cpuIn.value = a().cpu; memIn.value = a().memory_gib; markDirty();
+      }}, "Convert");
+      const fromReq = rp && rp.requests_cpu != null && h("button", {type: "button", class: "small", title: "current requests + 25 % headroom", onclick: () => {
+        a().cpu = round(rp.requests_cpu * 1.25, 2); a().memory_gib = round(rp.requests_mem_gib * 1.25, 1);
+        cpuIn.value = a().cpu; memIn.value = a().memory_gib; markDirty();
+      }}, "Requests +25 %");
+      return h("tr", {"data-cluster": cid},
+        h("td", {}, clusters[cid]?.name || cid, rp ? "" : h("span", {class: "muted"}, " (no Rancher Project)")),
+        h("td", {class: "l", "data-k": "env"}),
+        h("td", {}, rp && rp.requests_cpu != null ? `${fmt(rp.requests_cpu, 2)} / ${fmt(rp.requests_mem_gib)}` : h("span", {class: "muted", title: "only known for the cluster this dashboard runs on"}, "—")),
+        h("td", {}, rp && rp.quota_cpu != null ? `${fmt(rp.quota_cpu, 2)} / ${fmt(rp.quota_mem_gib)}` : h("span", {class: "muted"}, "none")),
+        h("td", {}, cpuIn), h("td", {}, memIn), h("td", {"data-k": "cost"}),
+        h("td", {class: "l"}, h("span", {class: "conv"}, amount, share, h("span", {class: "muted"}, "% CPU"), convert, fromReq)));
+    });
+    const budget = numberInput(existing?.monthly_budget ?? "", (v) => { p().monthly_budget = v === "" ? null : num(v); markDirty(); }, {label: `${name} monthly budget`});
+    const cc = h("input", {value: existing?.cost_center || "", "aria-label": `${name} cost center`, style: "width:110px", oninput: (e) => { p().cost_center = e.target.value; markDirty(); }});
+    const owners = h("input", {class: "wide", value: (existing?.owners || []).join(", "), placeholder: "lead@corp, …", "aria-label": `${name} owners`, oninput: (e) => { p().owners = e.target.value.split(",").map((s) => s.trim()).filter(Boolean); markDirty(); }});
+    return h("div", {class: "project", "data-project": name},
+      h("div", {class: "project-head"},
+        h("h3", {}, name),
+        h("label", {}, "Budget / month", budget),
+        h("label", {}, "Cost center", cc),
+        h("label", {}, "Owners", owners),
+        h("span", {class: "cost", "data-k": "total"})),
+      h("div", {class: "table-wrap"}, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", {}, "Cluster"), h("th", {class: "l"}, "Env"), h("th", {}, "Requests now CPU / GiB"), h("th", {}, "Rancher quota now"), h("th", {}, "Quota CPU"), h("th", {}, "Quota GiB"), h("th", {}, "Cost / month"), h("th", {class: "l"}, "From an amount"))),
+        h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", {colspan: 8, class: "empty"}, "Not on any cluster"))))));
+  }));
+}
+
+function recompute() {
+  const ev = evaluate();
+  // clusters
+  for (const tr of $("clusters").querySelectorAll("tr[data-cluster]")) {
+    const row = ev.clusters[tr.dataset.cluster]; if (!row) continue;
+    tr.querySelector('[data-k="cpu"]').replaceChildren(fmt(row.cpu, 2));
+    tr.querySelector('[data-k="mem"]').replaceChildren(fmt(row.mem));
+    tr.querySelector('[data-k="head"]').replaceChildren(
+      h("span", {title: "CPU"}, meter(row.cpuPct, row.max)), " ", h("span", {title: "memory"}, meter(row.memPct, row.max)),
+      row.max != null ? h("span", {class: "muted"}, ` max ${row.max} %`) : h("span", {class: "muted"}, " no env"));
+  }
+  // projects
+  for (const div of $("projects").querySelectorAll("[data-project]")) {
+    const name = div.dataset.project, p = plan.projects[name];
+    for (const tr of div.querySelectorAll("tr[data-cluster]")) {
+      const cid = tr.dataset.cluster, a = p?.allocations?.[cid];
+      tr.querySelector('[data-k="env"]').replaceChildren(clusterRules(cid).envName || h("span", {class: "muted"}, "—"));
+      const c = a ? allocCost(cid, a) : 0;
+      tr.querySelector('[data-k="cost"]').replaceChildren(a && (a.cpu || a.memory_gib) ? (c == null ? h("span", {class: "muted"}, "no platform") : money(c)) : h("span", {class: "muted"}, "—"));
+    }
+    const pr = ev.projects[name] || {cost: 0};
+    const budget = p?.monthly_budget;
+    const cls = budget == null ? null : pr.cost > budget + 0.005 ? "critical" : pr.cost > budget * 0.95 ? "warning" : "good";
+    div.querySelector('[data-k="total"]').replaceChildren(
+      cls ? h("span", {class: `dot ${cls}`}) : "",
+      "Planned ", h("b", {}, money(pr.cost)), budget != null ? ` of ${money(budget)}` : h("span", {class: "muted"}, " (no budget)"));
+  }
+  // issues + tiles
+  const box = $("issues");
+  box.hidden = false;
+  box.replaceChildren(...(ev.issues.length
+    ? [h("b", {}, `${ev.issues.length} issue${ev.issues.length > 1 ? "s" : ""} in this plan`), h("ul", {}, ev.issues.map(([lvl, t]) => h("li", {}, h("span", {class: `dot ${lvl}`}), t)))]
+    : [h("span", {class: "dot good"}), " No issues: every project fits its budget and every cluster its headroom rule."]));
+  const planned = Object.entries(plan.projects).filter(([, p]) => Object.values(p.allocations).some((a) => a.cpu || a.memory_gib));
+  const totalCost = Object.values(ev.projects).reduce((s, p) => s + p.cost, 0);
+  const totalBudget = Object.values(plan.projects).reduce((s, p) => s + (p.monthly_budget || 0), 0);
+  const overBudget = Object.entries(ev.projects).filter(([n, p]) => plan.projects[n].monthly_budget != null && p.cost > plan.projects[n].monthly_budget + 0.005).length;
+  const overHead = Object.values(ev.clusters).filter((c) => c.max != null && ((c.cpuPct ?? 0) > c.max || (c.memPct ?? 0) > c.max)).length;
+  $("tiles").replaceChildren(
+    tile("Projects planned", planned.length, `of ${projectNames().length} shown`),
+    tile("Planned cost / month", money(totalCost), totalBudget ? `budgets total ${money(totalBudget)}` : "no budgets set"),
+    tile("Projects over budget", overBudget, overBudget ? "see issues above" : "all within budget"),
+    tile("Clusters over headroom", overHead, `of ${data.inventory.clusters.length} clusters`));
+}
+function tile(label, value, note) {
+  return h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), h("div", {class: "note"}, note));
+}
+
+$("save").onclick = save;
+$("show-builtin").onchange = () => { renderProjects(); recompute(); };
+$("export").onclick = (e) => { if (dirty && !confirm("The export uses the last saved plan. Export without your unsaved changes?")) e.preventDefault(); };
+load().catch((e) => setStatus(`Loading failed: ${e}`, true));
+</script>
+</body>
+</html>

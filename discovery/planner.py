@@ -7,7 +7,14 @@ the allocation files of docs/04 ("Allocation as code"), which go through the Git
 
 The plan holds, per project, a monthly budget and a CPU/memory quota per cluster. Either can drive the other:
 the page converts a budget into quota with the cluster's unit rates, and the checks here compare the cost of the
-planned quota with the budget and the planned quota per cluster with the headroom rule of its environment.
+planned quota with the budget, and the planned quota per cluster with the cluster's limit for projects:
+
+    capacity after failures = allocatable of schedulable nodes - the N largest nodes   (N = environment's node_failures)
+    limit for projects      = min(capacity after failures - platform reserve,
+                                  max_quota_pct x (allocatable - platform reserve))
+
+computed for CPU and memory separately. The platform reserve is what platform components (cattle-*, kube-system,
+monitoring, ...) request: measured for the cluster this collector scans, entered per cluster for the others.
 """
 
 import json
@@ -36,10 +43,10 @@ DEFAULT_SETTINGS = {
         "aks": {"cpu_rate": 25.0, "mem_rate": 6.25},
     },
     "envs": {
-        "prod": {"max_quota_pct": 80.0, "mem_limit_factor": 1.0},
-        "acc": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0},
-        "test": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0},
-        "dev": {"max_quota_pct": 150.0, "mem_limit_factor": 2.0},
+        "prod": {"max_quota_pct": 80.0, "mem_limit_factor": 1.0, "node_failures": 1},
+        "acc": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
+        "test": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
+        "dev": {"max_quota_pct": 150.0, "mem_limit_factor": 2.0, "node_failures": 0},
     },
 }
 
@@ -57,8 +64,19 @@ def _qty(value, divisor=1):
     return round(discover.parse_quantity(value) / divisor, 3) if value else None
 
 
-def parse_inventory(clusters_json, projects_json):
-    """Clusters (capacity, requests) and projects (current quota) from Rancher's management objects."""
+def parse_inventory(clusters_json, projects_json, nodes_json=None):
+    """Clusters (capacity, requests, node sizes) and projects (current quota) from Rancher's management objects."""
+    node_sizes = {}
+    for n in nodes_json or []:
+        st, spec = n.get("status") or {}, n.get("spec") or {}
+        if (spec.get("internalNodeSpec") or {}).get("unschedulable"):
+            continue  # cordoned: already not usable for pods, so not part of what can fail over
+        alloc = (st.get("internalNodeStatus") or {}).get("allocatable") or {}
+        node_sizes.setdefault(n["metadata"]["namespace"], []).append({
+            "name": st.get("nodeName") or n["metadata"]["name"],
+            "cpu": _qty(alloc.get("cpu")) or 0.0,
+            "mem_gib": _qty(alloc.get("memory"), discover.GIB) or 0.0,
+        })
     clusters = []
     for c in clusters_json:
         st = c.get("status") or {}
@@ -71,6 +89,10 @@ def parse_inventory(clusters_json, projects_json):
             "alloc_mem_gib": _qty(alloc.get("memory"), discover.GIB),
             "requested_cpu": _qty(req.get("cpu")),
             "requested_mem_gib": _qty(req.get("memory"), discover.GIB),
+            # None when Rancher reported no nodes for it (then N+1 can't be computed)
+            "node_sizes": sorted(node_sizes.get(c["metadata"]["name"], []), key=lambda x: x["name"]) or None,
+            "platform_measured_cpu": None,
+            "platform_measured_mem_gib": None,
         })
     projects = []
     for p in projects_json:
@@ -96,11 +118,24 @@ def load_inventory(local_context=None, local_kubeconfig=None):
     return parse_inventory(
         discover.kget(local_context, "clusters.management.cattle.io", all_namespaces=False,
                       kubeconfig=local_kubeconfig),
-        discover.kget(local_context, "projects.management.cattle.io", kubeconfig=local_kubeconfig))
+        discover.kget(local_context, "projects.management.cattle.io", kubeconfig=local_kubeconfig),
+        discover.kget(local_context, "nodes.management.cattle.io", kubeconfig=local_kubeconfig))
 
 
 def add_report_requests(inventory, report):
-    """Current requests per project from this collector's own report (only the cluster it scans)."""
+    """Current requests per project, and the measured platform reserve, from this collector's own report.
+
+    Both only for the cluster the collector scans: the platform reserve is what the report classes as `system`
+    (Rancher's System project and the system namespaces: cattle-*, kube-system, monitoring, ...).
+    """
+    report = report or {}
+    scanned = {c.get("cluster") for c in report.get("clusters", [])}
+    scanned |= {p["project_id"].split(":", 1)[0] for p in report.get("projects", []) if ":" in (p.get("project_id") or "")}
+    system = [p for p in report.get("projects", []) if p.get("category") == "system"]
+    for c in inventory["clusters"]:
+        if system and (c["id"] in scanned or c["name"] in scanned):
+            c["platform_measured_cpu"] = round(sum(p["cpu_requests"] for p in system), 3)
+            c["platform_measured_mem_gib"] = round(sum(p["mem_requests_gib"] for p in system), 3)
     by_key = {}
     for p in (report or {}).get("projects", []):
         if p.get("project_id"):
@@ -154,8 +189,11 @@ def validate_state(raw):
                            "mem_rate": _num(p.get("mem_rate"), f"{name}.mem_rate")}
     for name, e in (settings.get("envs") or {}).items():
         _name(name, "environment")
+        default_failures = DEFAULT_SETTINGS["envs"].get(name, {}).get("node_failures", 0)
         envs[name] = {"max_quota_pct": _num(e.get("max_quota_pct"), f"{name}.max_quota_pct", 1, 1000),
-                      "mem_limit_factor": _num(e.get("mem_limit_factor"), f"{name}.mem_limit_factor", 1, 10)}
+                      "mem_limit_factor": _num(e.get("mem_limit_factor"), f"{name}.mem_limit_factor", 1, 10),
+                      "node_failures": int(_num(e.get("node_failures", default_failures),
+                                                f"{name}.node_failures", 0, 10))}
     if not platforms or not envs:
         raise PlanError("settings need at least one platform and one environment")
     clusters = {}
@@ -166,7 +204,11 @@ def validate_state(raw):
             raise PlanError(f"cluster {cid}: unknown environment {env!r}")
         if platform and platform not in platforms:
             raise PlanError(f"cluster {cid}: unknown platform {platform!r}")
-        clusters[cid] = {"env": env, "platform": platform}
+        reserve = {}
+        for key in ("platform_cpu", "platform_mem_gib"):
+            v = c.get(key)
+            reserve[key] = None if v in (None, "") else _num(v, f"cluster {cid}.{key}", 0, 1000000)
+        clusters[cid] = {"env": env, "platform": platform, **reserve}
     projects = {}
     for pname, p in (raw.get("projects") or {}).items():
         _name(pname, "project")
@@ -201,11 +243,19 @@ class PlanStore:
         self.path = os.path.join(data_dir, STATE_FILE)
 
     def load(self):
+        """The stored plan, normalised: fields added in later versions get their defaults."""
         try:
             with open(self.path) as f:
-                return json.load(f)
+                stored = json.load(f)
         except FileNotFoundError:
             return empty_state()
+        try:
+            plan = validate_state(stored)
+        except PlanError as e:  # written by an older version with rules that have since changed
+            discover.log(f"planner: stored plan doesn't validate ({e}); showing it unnormalised")
+            return stored
+        plan["version"], plan["updated_at"] = stored.get("version", 0), stored.get("updated_at")
+        return plan
 
     def save(self, raw, expected_version):
         """Validate and write raw if the stored version is still expected_version; returns the saved plan."""
@@ -252,6 +302,43 @@ def _cluster_rules(plan, cluster_id):
     return settings["platforms"].get(c.get("platform")), settings["envs"].get(c.get("env")), c.get("env") or ""
 
 
+def cluster_limits(cluster, cluster_cfg, env):
+    """How much quota a cluster can hand out to projects, per CPU and memory (see the module docstring)."""
+    failures = int(env["node_failures"]) if env else 0
+    sizes = cluster.get("node_sizes")
+    reserve_source = "entered" if cluster_cfg.get("platform_cpu") is not None or \
+        cluster_cfg.get("platform_mem_gib") is not None else \
+        "measured" if cluster.get("platform_measured_cpu") is not None else "none"
+    out = {"node_failures": failures, "nodes_known": sizes is not None, "node_count": len(sizes or []),
+           "reserve_source": reserve_source, "max_pct": env["max_quota_pct"] if env else None}
+    for dim, alloc_key, size_key, cfg_key, measured_key in (
+            ("cpu", "alloc_cpu", "cpu", "platform_cpu", "platform_measured_cpu"),
+            ("mem", "alloc_mem_gib", "mem_gib", "platform_mem_gib", "platform_measured_mem_gib")):
+        alloc = cluster.get(alloc_key)
+        if reserve_source == "entered":
+            reserve = cluster_cfg.get(cfg_key) or 0.0
+        else:
+            reserve = cluster.get(measured_key) or 0.0
+        lost = sum(sorted((n[size_key] for n in sizes or []), reverse=True)[:failures]) if failures else 0.0
+        if sizes is not None and failures >= len(sizes):
+            lost = alloc or 0.0
+        out[f"alloc_{dim}"] = alloc
+        out[f"failover_{dim}"] = round(lost, 3)
+        out[f"reserve_{dim}"] = round(reserve, 3)
+        if alloc is None or not env:
+            out[f"limit_{dim}"], out[f"binding_{dim}"], out[f"binding_{dim}_text"] = None, None, ""
+            continue
+        by_failures = max(0.0, alloc - lost - reserve)
+        by_pct = max(0.0, env["max_quota_pct"] / 100 * (alloc - reserve))
+        binding = "failures" if failures and by_failures <= by_pct else "pct"
+        out[f"limit_{dim}"] = round(min(by_failures, by_pct), 3)
+        out[f"binding_{dim}"] = binding
+        out[f"binding_{dim}_text"] = (
+            f"allocatable minus its {failures} largest node(s) and the platform reserve" if binding == "failures"
+            else f"{env['max_quota_pct']:g} % of allocatable minus the platform reserve")
+    return out
+
+
 def evaluate(plan, inventory):
     """Cost per project and headroom per cluster for the plan, plus the issues to show and fix."""
     clusters = {c["id"]: c for c in inventory["clusters"]}
@@ -291,21 +378,36 @@ def evaluate(plan, inventory):
     for c in inventory["clusters"]:
         t = cluster_totals.get(c["id"], {"cpu": 0.0, "memory_gib": 0.0})
         _, env, env_name = _cluster_rules(plan, c["id"])
-        row = {"planned_cpu": round(t["cpu"], 3), "planned_mem_gib": round(t["memory_gib"], 3),
-               "cpu_pct": None, "mem_pct": None, "max_pct": env["max_quota_pct"] if env else None}
-        if c["alloc_cpu"]:
-            row["cpu_pct"] = round(100 * t["cpu"] / c["alloc_cpu"], 1)
-        if c["alloc_mem_gib"]:
-            row["mem_pct"] = round(100 * t["memory_gib"] / c["alloc_mem_gib"], 1)
-        if (t["cpu"] or t["memory_gib"]) and not env:
-            issues.append({"level": "warning", "text": f"{c['name']}: no environment set, so its headroom "
-                                                       f"rule can't be checked"})
+        cap = cluster_limits(c, plan["clusters"].get(c["id"]) or {}, env)
+        planned = {"cpu": t["cpu"], "mem": t["memory_gib"]}
+        row = {"planned_cpu": round(t["cpu"], 3), "planned_mem_gib": round(t["memory_gib"], 3), **cap}
+        for dim in ("cpu", "mem"):
+            lim = cap[f"limit_{dim}"]
+            row[f"{dim}_pct"] = round(100 * planned[dim] / lim, 1) if lim else None
+        has_plan = bool(t["cpu"] or t["memory_gib"])
+        label = f"{c['name']} ({env_name})" if env_name else c["name"]
+        if has_plan and not env:
+            issues.append({"level": "warning", "text": f"{c['name']}: no environment set, so its limit for "
+                                                       f"projects (node failures, headroom) can't be checked"})
+        if has_plan and cap["reserve_source"] == "none":
+            issues.append({"level": "warning", "text": f"{c['name']}: platform reserve not set, so the limit ignores "
+                                                       f"what platform components request (enter the 'system' "
+                                                       f"requests from that cluster's dashboard)"})
+        if has_plan and env and cap["nodes_known"] and cap["node_failures"] >= cap["node_count"]:
+            issues.append({"level": "critical",
+                           "text": f"{label}: {cap['node_count']} schedulable node(s) can't tolerate "
+                                   f"{cap['node_failures']} node failure(s), so no project quota fits"})
         elif env:
-            for dim, pct in (("CPU", row["cpu_pct"]), ("memory", row["mem_pct"])):
-                if pct is not None and pct > env["max_quota_pct"]:
+            if has_plan and not cap["nodes_known"] and cap["node_failures"]:
+                issues.append({"level": "warning", "text": f"{c['name']}: Rancher reports no node sizes, so the "
+                                                           f"node-failure rule can't be checked"})
+            for dim, name in (("cpu", "CPU"), ("mem", "memory")):
+                lim = cap[f"limit_{dim}"]
+                if lim is not None and planned[dim] > lim + 1e-9:
+                    unit = "" if dim == "cpu" else " GiB"
                     issues.append({"level": "critical",
-                                   "text": f"{c['name']} ({env_name}): planned {dim} quota is {pct:g} % of "
-                                           f"allocatable, above the {env['max_quota_pct']:g} % allowed"})
+                                   "text": f"{label}: planned {name} quota {_fmt(planned[dim])}{unit} is above its "
+                                           f"limit for projects of {_fmt(lim)}{unit} ({cap[f'binding_{dim}_text']})"})
         cluster_rows[c["id"]] = row
     return {"projects": project_rows, "clusters": cluster_rows, "issues": issues}
 

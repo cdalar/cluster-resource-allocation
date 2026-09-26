@@ -187,6 +187,9 @@ def make_handler(collector, planner_backend=None):
                     self._json(200, planner_backend.view())
                 except discover.KubectlError as e:
                     self._json(502, {"error": f"could not read the Rancher inventory: {discover.first_line(e)}"})
+                except Exception as e:  # a bug must show up on the page, not as a dropped connection
+                    discover.log(f"planner: {type(e).__name__}: {e}")
+                    self._json(500, {"error": f"planner error: {type(e).__name__}: {e}"})
             elif path == "/api/planner/export.yaml" and planner_backend:
                 try:
                     data = planner.export_yaml(planner_backend.store.load(), planner_backend.inventory())

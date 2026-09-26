@@ -384,6 +384,8 @@ CLUSTER_FIELDS = [
     "cpu_requests_system", "mem_requests_gib_system",
     "cpu_requests_unassigned", "mem_requests_gib_unassigned",
     "cpu_requests_pct_of_schedulable", "mem_requests_pct_of_schedulable",
+    "largest_node_cpu", "largest_node_mem_gib", "alloc_cpu_n1", "alloc_mem_gib_n1",
+    "cpu_for_projects_n1", "mem_gib_for_projects_n1",
     "cpu_usage_now", "mem_usage_now_gib",
     "containers", "containers_no_cpu_request", "containers_no_mem_request", "containers_no_mem_limit",
     "namespaces_tenant", "namespaces_unassigned", "prometheus_days_of_data",
@@ -427,6 +429,14 @@ def summarize_cluster(cluster_name, context, nodes, ns_rows, prom_days):
                                                c["alloc_cpu_schedulable"])
     c["mem_requests_pct_of_schedulable"] = pct(c["mem_requests_gib_total"] - c["mem_requests_pending_gib"],
                                                c["alloc_mem_gib_schedulable"])
+    # N+1: what is left if the largest schedulable node fails, and of that what platform components (the `system`
+    # requests) leave for projects. With one schedulable node, nothing survives a node failure.
+    c["largest_node_cpu"] = max((alloc([n], "cpu") for n in sched), default=0.0)
+    c["largest_node_mem_gib"] = max((alloc([n], "memory") / GIB for n in sched), default=0.0)
+    c["alloc_cpu_n1"] = c["alloc_cpu_schedulable"] - c["largest_node_cpu"]
+    c["alloc_mem_gib_n1"] = c["alloc_mem_gib_schedulable"] - c["largest_node_mem_gib"]
+    c["cpu_for_projects_n1"] = max(0.0, c["alloc_cpu_n1"] - c["cpu_requests_system"])
+    c["mem_gib_for_projects_n1"] = max(0.0, c["alloc_mem_gib_n1"] - c["mem_requests_gib_system"])
     return c
 
 

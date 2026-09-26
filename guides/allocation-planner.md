@@ -44,9 +44,9 @@ The page reads top to bottom: settings first, then clusters, then projects. Ever
 | --- | --- |
 | Header | Plan version and when it was last saved; buttons **Dashboard**, **Export YAML** and **Save plan** (enabled once you have unsaved changes) |
 | Planning only notice | Reminder that nothing is applied to any cluster |
-| Issues | Everything in the plan that breaks a rule, or "No issues" when budgets and headroom all fit |
-| Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over headroom |
-| Rates and rules | Collapsed by default; unit rates per platform and rules per environment |
+| Issues | Everything in the plan that breaks a rule, or "No issues" when every budget and every cluster limit fits |
+| Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over their limit |
+| Rates and rules | Collapsed by default; unit rates per platform, and node failures, headroom and memory limit per environment |
 | Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
 | Projects | One block per project with its budget and a quota row per cluster |
 
@@ -76,16 +76,19 @@ used it.
 
 ### Environments
 
-Each environment carries two rules:
+Each environment carries three rules:
 
 | Parameter | Meaning | prod | acc | test | dev |
 | --- | --- | --- | --- | --- | --- |
+| node failures to tolerate | How many of a cluster's largest nodes may fail with all project quota still fitting (N+1 = 1) | 1 | 0 | 0 | 0 |
 | max Σ quota / allocatable | The most a cluster of this environment may hand out as project quota, as a share of its allocatable capacity | 80 % | 100 % | 100 % | 150 % |
 | memory limit = request × | Factor for the `limits.memory` written in the export | 1.0 | 2.0 | 2.0 | 2.0 |
 
-- **Max Σ quota** keeps headroom for node failures, rolling updates and platform components
-  ([03](../docs/03-allocation-model.md#headroom-and-overcommit)). Prod stays at 80 % so one node can fail. Dev may go above
-  100 % (overcommit) because most dev workloads sit idle.
+- **Node failures to tolerate** is the N+1 rule of the [allocation model](../docs/03-allocation-model.md#headroom-and-overcommit):
+  with 1, a prod cluster must still fit every project's quota after its largest node fails. It is checked
+  against the real node sizes from Rancher, so it holds for small clusters too, where a flat percentage doesn't.
+- **Max Σ quota** keeps room for rolling updates (surge pods) on top of that, as a share of allocatable minus
+  the platform reserve. Dev may go above 100 % (overcommit) because most dev workloads sit idle.
 - **Memory limit factor** follows resource standard S3 ([02](../docs/02-resource-standards.md)): memory limit equals the
   request in prod, and may be up to twice the request elsewhere.
 
@@ -93,24 +96,44 @@ Environment names are free text; **Add environment** creates more, e.g. `staging
 
 ## Parameters: clusters
 
-Every cluster Rancher manages is listed automatically. You set two things per cluster; the rest comes from Rancher
-and is read-only.
+Every cluster Rancher manages is listed automatically. For each one the planner computes the **limit for
+projects**: how much CPU and memory quota it can hand out in total. The page states the calculation above the
+table; per resource (CPU and memory separately):
+
+1. **Allocatable** of the schedulable nodes,
+2. **minus the largest node(s):** the environment's *node failures to tolerate* largest nodes (N+1),
+3. **minus the platform reserve:** what platform components (cattle-*, kube-system, monitoring, ingress …)
+   request. They are in no project quota but take capacity first,
+4. **and at most the environment's max %** of (allocatable − platform reserve).
+
+The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a platform reserve of 1 CPU in prod:
+16 − 4 − 1 = **11 CPU** by N+1, 80 % × (16 − 1) = 12 CPU by headroom, so the limit is 11 CPU and N+1 sets it.
 
 | Column | Set by | Meaning |
 | --- | --- | --- |
-| Environment | You | Which environment rules apply (headroom limit, memory limit factor) |
+| Environment | You | Which environment rules apply (node failures, headroom limit, memory limit factor) |
 | Platform | You | Which unit rates price quota on this cluster |
-| Nodes | Rancher | Number of nodes |
-| Allocatable CPU / GiB | Rancher | Capacity the scheduler can hand out, after system reservations |
-| Requested now | Rancher | Sum of CPU and memory requests of all pods running now, platform components included |
-| Planned CPU / GiB | Planner | Sum of the quotas you plan for all projects on this cluster |
-| Headroom | Planner | Two bars (CPU, memory): planned quota as a share of allocatable, against the environment's limit |
+| Nodes | Rancher | Schedulable nodes; hover for each node's size |
+| Allocatable | Rancher | CPU / GiB the scheduler can hand out on schedulable nodes, after system reservations |
+| − largest node(s) | Planner | Capacity of the N largest nodes, lost when they fail (0 / 0 when the environment tolerates no failures) |
+| − platform reserve | You or measured | CPU / GiB requested by platform components, see below |
+| = limit for projects | Planner | The result, with the rule that sets it: *N+1* or the environment's *%* |
+| Planned | Planner | Sum of the quotas you plan for all projects on this cluster |
+| Use of limit | Planner | Planned as a share of the limit (the higher of CPU and memory; hover for both); *no room* when the limit is 0 |
 
-The headroom bars are green below 90 % of the limit, amber from 90 % of the limit, and red above it. For a prod
-cluster with 10 allocatable CPU and an 80 % limit, planning 9 CPU shows 90 % in red.
+**Platform reserve.** For the cluster the planner runs on, it is **measured**: everything the report classes as
+*System* (Rancher's System project and the system namespaces). Leave the fields empty to use it. For every other
+cluster the planner can't see its pods, so the reserve is **entered**: take the *System* requests from that
+cluster's resource dashboard (see below), or click **Use requests now** to enter the cluster's total requests
+today, a safe upper bound. A cluster with planned quota and no reserve is flagged *not set*.
 
-A cluster without an environment can't be checked for headroom, and a cluster without a platform gives its quotas
-no price. Both show up as issues once a project has quota there.
+**The same view on each cluster's dashboard.** The resource dashboard of every cluster shows its N+1 picture for
+one node failure: a dashed line in *Cluster capacity by requests* marks the capacity left if the largest node fails,
+the text under the chart spells out allocatable − largest node − platform components = room for projects, and the
+tile **Room for projects (N+1)** turns red when today's project requests wouldn't fit after a node failure.
+
+A cluster without an environment has no limit ("no env") and a cluster without a platform gives its quotas no
+price; both show up as issues once a project has quota there.
 
 ## Parameters: projects
 
@@ -158,13 +181,17 @@ rule, amber ones mean the plan is incomplete. You can still save a plan with iss
 | Issue | Level | What it means | How to fix it |
 | --- | --- | --- | --- |
 | *payments: planned quota costs 375.00 a month, over its budget of 250.00* | red | The priced quota of the project across all clusters exceeds its monthly budget | Lower quota on some cluster, or agree a higher budget |
-| *prod-01 (prod): planned CPU quota is 90 % of allocatable, above the 80 % allowed* | red | All projects together plan more quota on that cluster than its environment allows | Lower quotas there, move a project to another cluster, or add capacity |
+| *prod-01 (prod): planned CPU quota 11.2 is above its limit for projects of 11 (allocatable minus its 1 largest node(s) and the platform reserve)* | red | All projects together plan more quota than the cluster can keep running after a node failure | Lower quotas there, move a project to another cluster, or add nodes |
+| *prod-01 (prod): planned CPU quota 13 is above its limit for projects of 12 (80 % of allocatable minus the platform reserve)* | red | Planned quota leaves less room for rollouts than the environment requires | Same as above |
+| *local (prod): 1 schedulable node(s) can't tolerate 1 node failure(s), so no project quota fits* | red | A prod cluster with a single node can't survive a node failure at all | Add a node, or plan this cluster as a non-prod environment |
+| *prod-01: platform reserve not set, so the limit ignores what platform components request* | amber | Nothing measured or entered for platform components, so the limit is too high | Enter the *System* requests from the cluster's dashboard, or click *Use requests now* |
+| *prod-01: Rancher reports no node sizes, so the node-failure rule can't be checked* | amber | Rancher gave no per-node data for the cluster; only the percentage rule is checked | Check the cluster's agent in Rancher |
 | *payments: no platform set for prod-01, so its quota there has no price* | amber | The cluster has no platform, so cost and budget can't be checked | Pick a platform for the cluster in the Clusters table |
-| *prod-01: no environment set, so its headroom rule can't be checked* | amber | The cluster has quota planned but no environment | Pick an environment for the cluster |
+| *prod-01: no environment set, so its limit for projects (node failures, headroom) can't be checked* | amber | The cluster has quota planned but no environment | Pick an environment for the cluster |
 | *newstream: no Rancher Project of that name on prod-01 yet* | amber | The plan gives quota to a project that doesn't exist on that cluster in Rancher | Create the Rancher Project first, or check the spelling of the name |
 | *payments: cluster c-m-xxxxx is no longer in Rancher* | amber | The plan still holds quota for a cluster that was removed from Rancher | Set that row to 0, or remove the project's allocation there |
 
-The tiles above the settings count the red issues: *Projects over budget* and *Clusters over headroom*.
+The tiles above the settings count the red issues: *Projects over budget* and *Clusters over their limit*.
 
 ## Saving and versions
 
@@ -213,27 +240,32 @@ The path to an applied quota:
    them to the allocations repository under `allocations/projects/`.
 2. Open a pull request. The pull request is the approval: the platform team approves, and increases above budget go
    to the budget owner ([05](../docs/05-process.md)).
-3. CI validates the files: budget per project and headroom per cluster, the same checks the planner showed you.
+3. CI validates the files: budget per project and the limit per cluster (node failures, platform reserve, headroom), the same checks the planner showed you.
 4. After merge, Terraform (`rancher2` provider) sets the Rancher Project quota on each cluster.
 5. The planner's *Rancher quota now* column then shows the applied values, so you can see where plan and reality
    differ.
 
 ## Worked example
 
-The payments stream has a budget of 400 EUR a month and runs on a prod cluster `prod-01` (10 allocatable CPU,
-40 GiB) and a test cluster `test-01`. Rates are the defaults: 25 per vCPU, 6.25 per GiB.
+The payments stream has a budget of 400 EUR a month and runs on a prod cluster `prod-01` (4 nodes of 4 CPU /
+16 GiB, so 16 CPU / 64 GiB allocatable; platform components request 1 CPU / 4 GiB) and a test cluster `test-01`.
+Rates are the defaults: 25 per vCPU, 6.25 per GiB.
 
-1. **Rates and rules:** keep the defaults, or enter the published rates.
+1. **Rates and rules:** keep the defaults (prod tolerates 1 node failure), or enter the published rates.
 2. **Clusters:** set `prod-01` to environment *prod*, platform *onprem*; set `test-01` to *test*, *onprem*.
-3. **Project:** in the *payments* block, enter budget 400, cost center `CC-1234`, owner `pay-lead@corp`.
-4. **prod-01 row:** payments wants 300 EUR of its budget in prod, 60 % for CPU. Enter 300 and 60, click
+3. **Platform reserve:** `prod-01` is not the planner's own cluster, so enter 1 / 4 from its dashboard's *System*
+   requests. The limit for projects becomes **11 CPU / 44 GiB (N+1)**: 16 − 4 − 1 CPU and 64 − 16 − 4 GiB, both
+   below the 80 % rule (12 CPU / 48 GiB).
+4. **Project:** in the *payments* block, enter budget 400, cost center `CC-1234`, owner `pay-lead@corp`.
+5. **prod-01 row:** payments wants 300 EUR of its budget in prod, 60 % for CPU. Enter 300 and 60, click
    **Convert**: CPU = 300 × 0.6 ÷ 25 = **7.2**, memory = 300 × 0.4 ÷ 6.25 = **19.2 GiB**.
-5. **Check:** the prod-01 CPU bar shows 72 % against the 80 % limit, green. If another project already plans 2 CPU
-   there, the total is 92 % and the planner flags *prod-01 (prod): planned CPU quota is 92 % of allocatable, above
-   the 80 % allowed*. Round payments down to 6 CPU, or move the other project.
-6. **test-01 row:** type 2 CPU and 4 GiB directly: 2 × 25 + 4 × 6.25 = 75 EUR.
-7. **Budget:** planned 300 + 75 = 375 of 400 EUR, dot green.
-8. **Save plan**, then **Export YAML**, and commit the payments document as `allocations/projects/payments.yaml`.
+6. **Check:** *Use of limit* shows 65 % (7.2 of 11 CPU), green. If another project already plans 4 CPU there, the
+   total is 11.2 and the planner flags *prod-01 (prod): planned CPU quota 11.2 is above its limit for projects of
+   11 (allocatable minus its 1 largest node(s) and the platform reserve)*. Round payments down to 7 CPU, or move
+   the other project.
+7. **test-01 row:** type 2 CPU and 4 GiB directly: 2 × 25 + 4 × 6.25 = 75 EUR.
+8. **Budget:** planned 300 + 75 = 375 of 400 EUR, dot green.
+9. **Save plan**, then **Export YAML**, and commit the payments document as `allocations/projects/payments.yaml`.
    The export writes `limits.memory` 19.2Gi for prod-01 (factor 1) and 8Gi for test-01 (factor 2).
 
 ## Limitations and FAQ
@@ -275,10 +307,10 @@ helm upgrade --install resource-report charts/cluster-resource-report -n resourc
 | Value | Why it's needed |
 | --- | --- |
 | `planner.enabled=true` | Turns the planner on (`/planner`) and adds the *Allocation planner* entry to the local cluster's Rancher menu |
-| `rancher.isLocalCluster=true` | Lets it read clusters and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
+| `rancher.isLocalCluster=true` | Lets it read clusters, nodes and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
 | `persistence.enabled=true` | Stores the plan on a volume; without it the chart refuses to install, so a pod restart can't lose the plan |
 
-- **Permissions:** read-only (`get`/`list` on Rancher `projects` and `clusters`). The planner has no permission to
+- **Permissions:** read-only (`get`/`list` on Rancher `projects`, `clusters` and `nodes`). The planner has no permission to
   change a cluster or a quota.
 - **Data:** the plan is `planner.json` on the volume, with the last 30 versions in `planner-history/`. Back up that
   volume if the plan matters before it is exported.

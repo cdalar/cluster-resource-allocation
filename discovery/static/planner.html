@@ -48,7 +48,8 @@ input.wide { width: 220px; }
 .card-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .banner { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); margin-bottom: 16px; font-size: 13px; }
 .banner ul { margin: 6px 0 0; padding-left: 0; list-style: none; }
-.banner li { display: flex; gap: 8px; align-items: baseline; margin: 2px 0; }
+#issues li { display: flex; gap: 8px; align-items: baseline; margin: 2px 0; }
+.explain li { margin: 2px 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
 .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
 .tile .label { color: var(--text-secondary); font-size: 13px; }
@@ -62,7 +63,7 @@ th { font-weight: 600; color: var(--text-secondary); }
 td { font-variant-numeric: tabular-nums; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .good { background: var(--status-good); } .warning { background: var(--status-warning); } .critical { background: var(--status-critical); }
-.meter { display: inline-block; width: 70px; height: 6px; background: var(--track); border-radius: 3px; vertical-align: middle; margin-right: 6px; position: relative; overflow: hidden; }
+.meter { display: inline-block; width: 44px; height: 6px; background: var(--track); border-radius: 3px; vertical-align: middle; margin-right: 6px; position: relative; overflow: hidden; }
 .meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
 .project { border-top: 1px solid var(--grid); padding: 14px 0 6px; }
 .project:first-of-type { border-top: 0; padding-top: 4px; }
@@ -104,7 +105,7 @@ details summary { cursor: pointer; }
 
   <div class="card">
     <details id="settings-box">
-      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates per platform, headroom and memory limit per environment</span></summary>
+      <summary><h2 style="display:inline">Rates and rules</h2> <span class="muted">— unit rates per platform; node failures, headroom and memory limit per environment</span></summary>
       <div class="settings-grid">
         <div>
           <h3>Unit rates per month</h3>
@@ -116,18 +117,28 @@ details summary { cursor: pointer; }
         </div>
         <div>
           <h3>Environments</h3>
-          <div class="table-wrap"><table><thead><tr><th>Environment</th><th>max Σ quota / allocatable</th><th>memory limit = request ×</th><th></th></tr></thead><tbody id="envs"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>Environment</th><th>node failures to tolerate</th><th>max Σ quota / allocatable</th><th>memory limit = request ×</th><th></th></tr></thead><tbody id="envs"></tbody></table></div>
           <div class="actions" style="margin-top:8px"><button type="button" class="small" id="add-env">Add environment</button></div>
-          <div class="note">Defaults from docs/03 (headroom) and docs/02 S3 (memory limit = request in prod, up to 2× elsewhere).</div>
+          <div class="note">Node failures: how many of the cluster's largest nodes may fail with every project's quota still fitting (N+1 = 1). Defaults from docs/03 (prod N+1, headroom) and docs/02 S3 (memory limit = request in prod, up to 2× elsewhere).</div>
         </div>
       </div>
     </details>
   </div>
 
   <div class="card">
-    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity from Rancher; planned = Σ of the quotas below</span></div>
+    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity and node sizes from Rancher; planned = Σ of the quotas below. Values are CPU / GiB.</span></div>
+    <div class="banner" style="margin-bottom:12px">
+      <b>How much each cluster can give to projects</b> (CPU and memory separately):
+      <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
+        <li><b>Allocatable</b> of the schedulable nodes,</li>
+        <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
+        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
+        <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
+      </ol>
+      The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
+    </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l">Platform</th><th>Nodes</th><th>Allocatable CPU</th><th>Allocatable GiB</th><th>Requested now</th><th>Planned CPU</th><th>Planned GiB</th><th class="l">Headroom</th></tr></thead>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
   </div>
@@ -224,6 +235,28 @@ function projectNames() {
 function ensureProject(name) {
   return plan.projects[name] ||= {cost_center: "", owners: [], monthly_budget: null, allocations: {}};
 }
+// Mirrors planner.cluster_limits: what a cluster can give to projects, per CPU and memory.
+function clusterLimits(c, cfg, env) {
+  const failures = env ? Math.round(env.node_failures || 0) : 0;
+  const sizes = c.node_sizes;
+  const entered = cfg.platform_cpu != null || cfg.platform_mem_gib != null;
+  const source = entered ? "entered" : c.platform_measured_cpu != null ? "measured" : "none";
+  const out = {node_failures: failures, nodes_known: sizes != null, node_count: (sizes || []).length, reserve_source: source, max_pct: env ? env.max_quota_pct : null};
+  for (const [dim, allocKey, sizeKey, cfgKey, measuredKey] of [["cpu", "alloc_cpu", "cpu", "platform_cpu", "platform_measured_cpu"], ["mem", "alloc_mem_gib", "mem_gib", "platform_mem_gib", "platform_measured_mem_gib"]]) {
+    const alloc = c[allocKey];
+    const reserve = (entered ? cfg[cfgKey] : c[measuredKey]) || 0;
+    let lost = failures ? (sizes || []).map((n) => n[sizeKey]).sort((a, b) => b - a).slice(0, failures).reduce((a, b) => a + b, 0) : 0;
+    if (sizes != null && failures >= sizes.length) lost = alloc || 0;
+    Object.assign(out, {[`alloc_${dim}`]: alloc, [`failover_${dim}`]: lost, [`reserve_${dim}`]: reserve});
+    if (alloc == null || !env) { Object.assign(out, {[`limit_${dim}`]: null, [`binding_${dim}`]: null, [`binding_${dim}_text`]: ""}); continue; }
+    const byFailures = Math.max(0, alloc - lost - reserve), byPct = Math.max(0, env.max_quota_pct / 100 * (alloc - reserve));
+    const binding = failures && byFailures <= byPct ? "failures" : "pct";
+    Object.assign(out, {[`limit_${dim}`]: Math.min(byFailures, byPct), [`binding_${dim}`]: binding,
+      [`binding_${dim}_text`]: binding === "failures" ? `allocatable minus its ${failures} largest node(s) and the platform reserve` : `${env.max_quota_pct} % of allocatable minus the platform reserve`});
+  }
+  return out;
+}
+
 function evaluate() {
   const clusters = Object.fromEntries(data.inventory.clusters.map((c) => [c.id, c]));
   const issues = [], projects = {}, totals = {};
@@ -243,10 +276,21 @@ function evaluate() {
   for (const c of data.inventory.clusters) {
     const t = totals[c.id] || {cpu: 0, mem: 0};
     const {env, envName} = clusterRules(c.id);
-    const row = {cpu: t.cpu, mem: t.mem, cpuPct: c.alloc_cpu ? 100 * t.cpu / c.alloc_cpu : null, memPct: c.alloc_mem_gib ? 100 * t.mem / c.alloc_mem_gib : null, max: env?.max_quota_pct};
-    if ((t.cpu || t.mem) && !env) issues.push(["warning", `${c.name}: no environment set, so its headroom rule can't be checked`]);
-    else if (env) for (const [dim, pct] of [["CPU", row.cpuPct], ["memory", row.memPct]])
-      if (pct != null && pct > env.max_quota_pct) issues.push(["critical", `${c.name} (${envName}): planned ${dim} quota is ${fmt(pct)} % of allocatable, above the ${env.max_quota_pct} % allowed`]);
+    const cap = clusterLimits(c, plan.clusters[c.id] || {}, env);
+    const row = {...cap, cpu: t.cpu, mem: t.mem,
+      cpuPct: cap.limit_cpu ? 100 * t.cpu / cap.limit_cpu : null, memPct: cap.limit_mem ? 100 * t.mem / cap.limit_mem : null};
+    const hasPlan = !!(t.cpu || t.mem), label = envName ? `${c.name} (${envName})` : c.name;
+    if (hasPlan && !env) issues.push(["warning", `${c.name}: no environment set, so its limit for projects (node failures, headroom) can't be checked`]);
+    if (hasPlan && cap.reserve_source === "none") issues.push(["warning", `${c.name}: platform reserve not set, so the limit ignores what platform components request (enter the 'system' requests from that cluster's dashboard)`]);
+    if (hasPlan && env && cap.nodes_known && cap.node_failures >= cap.node_count) {
+      issues.push(["critical", `${label}: ${cap.node_count} schedulable node(s) can't tolerate ${cap.node_failures} node failure(s), so no project quota fits`]);
+    } else if (env) {
+      if (hasPlan && !cap.nodes_known && cap.node_failures) issues.push(["warning", `${c.name}: Rancher reports no node sizes, so the node-failure rule can't be checked`]);
+      for (const [dim, name, unit] of [["cpu", "CPU", ""], ["mem", "memory", " GiB"]]) {
+        const lim = cap[`limit_${dim}`];
+        if (lim != null && t[dim] > lim + 1e-9) issues.push(["critical", `${label}: planned ${name} quota ${fmt(t[dim], 3)}${unit} is above its limit for projects of ${fmt(lim, 3)}${unit} (${cap[`binding_${dim}_text`]})`]);
+      }
+    }
     clusterRows[c.id] = row;
   }
   return {issues, projects, clusters: clusterRows};
@@ -275,6 +319,7 @@ function renderSettings() {
     h("td", {}, Object.keys(s.platforms).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.platforms[name]; for (const c of Object.values(plan.clusters)) if (c.platform === name) c.platform = ""; markDirty(); render(); }}, "Remove")))));
   $("envs").replaceChildren(...Object.entries(s.envs).map(([name, e]) => h("tr", {},
     h("td", {}, name),
+    h("td", {}, h("input", {type: "number", min: "0", max: "10", step: "1", value: e.node_failures ?? 0, "aria-label": `${name} node failures to tolerate`, style: "width:60px", oninput: (ev) => { e.node_failures = Math.max(0, Math.round(num(ev.target.value))); markDirty(); }})),
     h("td", {}, numberInput(e.max_quota_pct, (v) => { e.max_quota_pct = num(v); markDirty(); }, {label: `${name} max quota percent`}), " %"),
     h("td", {}, numberInput(e.mem_limit_factor, (v) => { e.mem_limit_factor = num(v); markDirty(); }, {label: `${name} memory limit factor`, step: "0.1"})),
     h("td", {}, Object.keys(s.envs).length > 1 && h("button", {type: "button", class: "small", onclick: () => { delete s.envs[name]; for (const c of Object.values(plan.clusters)) if (c.env === name) c.env = ""; markDirty(); render(); }}, "Remove")))));
@@ -287,7 +332,7 @@ $("add-platform").onclick = () => {
 $("add-env").onclick = () => {
   const name = (prompt("Environment name:") || "").trim();
   if (!name || plan.settings.envs[name]) return;
-  plan.settings.envs[name] = {max_quota_pct: 100, mem_limit_factor: 1}; markDirty(); render();
+  plan.settings.envs[name] = {max_quota_pct: 100, mem_limit_factor: 1, node_failures: 0}; markDirty(); render();
 };
 
 function select(options, value, onchange, label) {
@@ -302,17 +347,29 @@ function meter(pct, max) {
   return h("span", {}, bar, `${fmt(pct)} %`);
 }
 
+const pair = (cpu, mem) => (cpu == null && mem == null) ? h("span", {class: "muted"}, "—") : `${fmt(cpu, 2)} / ${fmt(mem)}`;
+
 function renderClusters() {
   const s = plan.settings;
   $("clusters").replaceChildren(...(data.inventory.clusters.length ? data.inventory.clusters.map((c) => {
     const cfg = plan.clusters[c.id] ||= {env: "", platform: ""};
+    const reserveIn = (key, measured, label) => h("input", {type: "number", min: "0", step: "any", style: "width:64px",
+      value: cfg[key] ?? "", placeholder: measured != null ? fmt(measured, 2) : "?", "aria-label": `${c.name} platform reserve ${label}`,
+      title: measured != null ? `measured: ${fmt(measured, 3)} — leave empty to use it` : "not measured for this cluster",
+      oninput: (e) => { cfg[key] = e.target.value === "" ? null : num(e.target.value); markDirty(); }});
+    const cpuIn = reserveIn("platform_cpu", c.platform_measured_cpu, "CPU"), memIn = reserveIn("platform_mem_gib", c.platform_measured_mem_gib, "GiB");
+    const useRequests = c.requested_cpu != null && h("button", {type: "button", class: "small", title: "the cluster's total requests now: a safe upper bound for the platform reserve",
+      onclick: () => { cfg.platform_cpu = c.requested_cpu; cfg.platform_mem_gib = c.requested_mem_gib; cpuIn.value = c.requested_cpu; memIn.value = c.requested_mem_gib; markDirty(); }}, "Use requests now");
+    const nodes = c.node_sizes ? `${c.node_sizes.length}` : fmt(c.nodes, 0);
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
       h("td", {class: "l"}, select(Object.keys(s.envs), cfg.env, (v) => { cfg.env = v; markDirty(); renderProjects(); }, `${c.name} environment`)),
       h("td", {class: "l"}, select(Object.keys(s.platforms), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
-      h("td", {}, fmt(c.nodes, 0)), h("td", {}, fmt(c.alloc_cpu, 2)), h("td", {}, fmt(c.alloc_mem_gib)),
-      h("td", {}, `${fmt(c.requested_cpu, 2)} CPU / ${fmt(c.requested_mem_gib)} GiB`),
-      h("td", {"data-k": "cpu"}), h("td", {"data-k": "mem"}), h("td", {class: "l", "data-k": "head"}));
+      h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
+      h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
+      h("td", {"data-k": "failover"}),
+      h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}), useRequests)),
+      h("td", {"data-k": "limit"}), h("td", {"data-k": "planned"}), h("td", {class: "l", "data-k": "use"}));
   }) : [h("tr", {}, h("td", {colspan: 10, class: "empty"}, "No clusters in Rancher"))]));
 }
 
@@ -374,11 +431,21 @@ function recompute() {
   // clusters
   for (const tr of $("clusters").querySelectorAll("tr[data-cluster]")) {
     const row = ev.clusters[tr.dataset.cluster]; if (!row) continue;
-    tr.querySelector('[data-k="cpu"]').replaceChildren(fmt(row.cpu, 2));
-    tr.querySelector('[data-k="mem"]').replaceChildren(fmt(row.mem));
-    tr.querySelector('[data-k="head"]').replaceChildren(
-      h("span", {title: "CPU"}, meter(row.cpuPct, row.max)), " ", h("span", {title: "memory"}, meter(row.memPct, row.max)),
-      row.max != null ? h("span", {class: "muted"}, ` max ${row.max} %`) : h("span", {class: "muted"}, " no env"));
+    tr.querySelector('[data-k="failover"]').replaceChildren(
+      !row.node_failures ? h("span", {class: "muted", title: "the environment tolerates no node failures"}, "0 / 0")
+      : !row.nodes_known ? h("span", {class: "muted"}, "sizes unknown")
+      : h("span", {title: `the ${row.node_failures} largest schedulable node(s)`}, pair(row.failover_cpu, row.failover_mem)));
+    tr.querySelector('[data-k="source"]').replaceChildren(
+      row.reserve_source === "measured" ? " measured" : row.reserve_source === "entered" ? " entered" : h("span", {style: "color:var(--status-critical)"}, " not set"));
+    const binding = (b) => b === "failures" ? `N+${row.node_failures}` : b === "pct" ? `${row.max_pct} %` : "";
+    tr.querySelector('[data-k="limit"]').replaceChildren(row.limit_cpu == null ? h("span", {class: "muted", title: "set an environment"}, "no env") :
+      h("span", {}, h("b", {}, pair(row.limit_cpu, row.limit_mem)), h("span", {class: "muted"}, ` (${binding(row.binding_cpu)}${row.binding_mem !== row.binding_cpu ? " / " + binding(row.binding_mem) : ""})`)));
+    tr.querySelector('[data-k="planned"]').replaceChildren(pair(row.cpu, row.mem));
+    const noRoom = row.limit_cpu === 0 && (row.cpu || row.mem);
+    tr.querySelector('[data-k="use"]').replaceChildren(noRoom
+      ? h("span", {style: "color:var(--status-critical)", title: "the limit for projects is 0"}, h("span", {class: "dot critical"}), " no room")
+      : h("span", {title: `CPU ${fmt(row.cpuPct)} % · memory ${fmt(row.memPct)} % of the limit`},
+          meter(row.cpuPct == null && row.memPct == null ? null : Math.max(row.cpuPct ?? 0, row.memPct ?? 0), 100)));
   }
   // projects
   for (const div of $("projects").querySelectorAll("[data-project]")) {
@@ -401,17 +468,17 @@ function recompute() {
   box.hidden = false;
   box.replaceChildren(...(ev.issues.length
     ? [h("b", {}, `${ev.issues.length} issue${ev.issues.length > 1 ? "s" : ""} in this plan`), h("ul", {}, ev.issues.map(([lvl, t]) => h("li", {}, h("span", {class: `dot ${lvl}`}), t)))]
-    : [h("span", {class: "dot good"}), " No issues: every project fits its budget and every cluster its headroom rule."]));
+    : [h("span", {class: "dot good"}), " No issues: every project fits its budget, and every cluster its limit for projects (node failures, platform reserve, headroom)."]));
   const planned = Object.entries(plan.projects).filter(([, p]) => Object.values(p.allocations).some((a) => a.cpu || a.memory_gib));
   const totalCost = Object.values(ev.projects).reduce((s, p) => s + p.cost, 0);
   const totalBudget = Object.values(plan.projects).reduce((s, p) => s + (p.monthly_budget || 0), 0);
   const overBudget = Object.entries(ev.projects).filter(([n, p]) => plan.projects[n].monthly_budget != null && p.cost > plan.projects[n].monthly_budget + 0.005).length;
-  const overHead = Object.values(ev.clusters).filter((c) => c.max != null && ((c.cpuPct ?? 0) > c.max || (c.memPct ?? 0) > c.max)).length;
+  const overHead = Object.values(ev.clusters).filter((c) => c.limit_cpu != null && (c.cpu > c.limit_cpu + 1e-9 || c.mem > c.limit_mem + 1e-9)).length;
   $("tiles").replaceChildren(
     tile("Projects planned", planned.length, `of ${projectNames().length} shown`),
     tile("Planned cost / month", money(totalCost), totalBudget ? `budgets total ${money(totalBudget)}` : "no budgets set"),
     tile("Projects over budget", overBudget, overBudget ? "see issues above" : "all within budget"),
-    tile("Clusters over headroom", overHead, `of ${data.inventory.clusters.length} clusters`));
+    tile("Clusters over their limit", overHead, `of ${data.inventory.clusters.length} clusters`));
 }
 function tile(label, value, note) {
   return h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), h("div", {class: "note"}, note));

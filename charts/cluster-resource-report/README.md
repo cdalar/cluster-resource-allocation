@@ -165,7 +165,7 @@ a logged-in browser save a plan through Rancher's proxy.
 These are created by the chart. The dashboard's (and planner's) are all read-only.
 
 - **ClusterRole:** `get`/`list` on nodes, namespaces, pods, resourcequotas, limitranges, HPAs and `metrics.k8s.io` pods;
-  with `rancher.isLocalCluster` also on `projects` and `clusters.management.cattle.io`.
+  with `rancher.isLocalCluster` also on `projects`, `clusters` and `nodes.management.cattle.io` (node sizes for the planner's N+1 check).
 - **Role in the Prometheus namespace:** `get` on `services/proxy` for the configured Prometheus service only.
   It is only created when the service proxy is used.
 - **Role (`rancher.namesConfigMap`):** `get` on the `rancher-project-names` ConfigMap only.

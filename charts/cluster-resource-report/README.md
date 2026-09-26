@@ -116,7 +116,7 @@ Anyone who can open the dashboard sees names and sizes of all namespaces and pro
 User guide: [guides/allocation-planner.md](../../guides/allocation-planner.md).
 
 A planning page next to the dashboard for the platform team: a monthly budget per project and a CPU/memory quota
-per cluster, entered either way round (quota directly, or an amount converted with the cluster's unit rates).
+per cluster, entered either way round (quota directly, or an amount converted with the unit rates).
 It checks the plan live against the budgets and each cluster's headroom rule (e.g. Σ quota ≤ 80 % of allocatable
 in prod) and exports it as the allocation files of [docs/04](../../docs/04-technical-design.md#42-allocation-as-code).
 

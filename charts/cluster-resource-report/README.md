@@ -35,22 +35,22 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 | Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
 
 To release, set `appVersion` (and `version`) in `Chart.yaml`, push that commit, then tag it:
-`git tag v0.4.0 && git push origin v0.4.0`. The workflow fails if the tag and `appVersion` differ. The chart's
+`git tag v0.4.1 && git push origin v0.4.1`. The workflow fails if the tag and `appVersion` differ. The chart's
 default image tag is its `appVersion`.
 
 The repository and the GHCR package are public, so clusters with internet access pull the image without a
 pull secret.
 
 Clusters without internet access (most on-prem clusters) pull from an internal registry instead. In that case,
-mirror the image (e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.4.0 registry.example.com/platform/cluster-resource-report:0.4.0`)
+mirror the image (e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.4.1 registry.example.com/platform/cluster-resource-report:0.4.1`)
 and set `image.repository`.
 
 ### Build locally
 
 ```bash
 cd discovery
-docker build -t registry.example.com/platform/cluster-resource-report:0.4.0 .
-docker push registry.example.com/platform/cluster-resource-report:0.4.0
+docker build -t registry.example.com/platform/cluster-resource-report:0.4.1 .
+docker push registry.example.com/platform/cluster-resource-report:0.4.1
 # KUBECTL_VERSION is a build arg
 ```
 
@@ -60,7 +60,7 @@ docker push registry.example.com/platform/cluster-resource-report:0.4.0
 helm upgrade --install resource-report charts/cluster-resource-report \
   -n resource-report --create-namespace \
   --set image.repository=registry.example.com/platform/cluster-resource-report \
-  --set image.tag=0.4.0          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
+  --set image.tag=0.4.1          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
 ```
 
 On a Rancher-managed cluster you can also install it from the Rancher UI (Apps → Charts, from a Git or Helm repo),
@@ -104,7 +104,6 @@ The app has **no login of its own**. Recommended ways to open it, in order:
    **Resource report** in its side menu (a Rancher `NavLink` the chart creates, `rancher.navLink`). It opens
    `https://<rancher-host>/k8s/clusters/<cluster-id>/api/v1/namespaces/resource-report/services/http:resource-report-cluster-resource-report:80/proxy/`
 2. **Port-forward:** `kubectl -n resource-report port-forward svc/resource-report-cluster-resource-report 8080:80`
-3. **Ingress** (`ingress.enabled=true`): only with authentication in front of it, for example oauth2-proxy.
 
 Anyone who can open the dashboard sees names and sizes of all namespaces and projects in the cluster.
 
@@ -161,7 +160,6 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
-| `ingress.*` | disabled | Standard ingress settings |
 | `resources` | 50m / 128Mi, limit 512Mi | Raise the memory limit for clusters with many thousands of pods |
 | `podSecurityContext` / `securityContext` | non-root 65534, read-only root FS, no capabilities | |
 

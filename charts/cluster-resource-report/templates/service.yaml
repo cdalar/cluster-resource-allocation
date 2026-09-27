@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "crr.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: ClusterIP   # never exposed: open it through the Rancher service proxy or kubectl port-forward
   selector:
     {{- include "crr.selectorLabels" . | nindent 4 }}
   ports:
@@ -28,40 +28,4 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.size }}
-{{- end }}
-{{- if .Values.ingress.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ include "crr.fullname" . }}
-  labels:
-    {{- include "crr.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- with .Values.ingress.className }}
-  ingressClassName: {{ . }}
-  {{- end }}
-  {{- with .Values.ingress.tls }}
-  tls:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  rules:
-    {{- range .Values.ingress.hosts }}
-    - host: {{ .host | quote }}
-      http:
-        paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
-            backend:
-              service:
-                name: {{ include "crr.fullname" $ }}
-                port:
-                  name: http
-          {{- end }}
-    {{- end }}
 {{- end }}

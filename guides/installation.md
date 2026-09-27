@@ -34,9 +34,9 @@ flowchart LR
     U -->|Rancher menu entry| R2
 ```
 
-Everything is read-only against the clusters except the name publisher (one Fleet Bundle) and the planners (their
-own plan ConfigMaps). Nothing is exposed outside the cluster:
-you open the pages through Rancher's proxy with your Rancher login.
+Nothing is exposed outside the cluster: you open the pages through Rancher's proxy with your Rancher login.
+Everything is read-only against the clusters except the name publisher (one Fleet Bundle) and the planners
+(their own plan ConfigMaps).
 
 ## Step 0. Check the prerequisites
 
@@ -72,7 +72,7 @@ kubectl config use-context <cluster>
 ```bash
 git clone https://github.com/cdalar/cluster-resource-allocation.git
 cd cluster-resource-allocation
-git checkout v0.4.0        # a release tag; its image is ghcr.io/cdalar/cluster-resource-report:0.4.0
+git checkout v0.4.1        # a release tag; its image is ghcr.io/cdalar/cluster-resource-report:0.4.1
 ```
 
 The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion>`. Choose one:
@@ -82,7 +82,7 @@ The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion
 **b) Mirror to an internal registry** (clusters without internet access, air-gapped):
 
 ```bash
-crane copy ghcr.io/cdalar/cluster-resource-report:0.4.0 registry.example.com/platform/cluster-resource-report:0.4.0
+crane copy ghcr.io/cdalar/cluster-resource-report:0.4.1 registry.example.com/platform/cluster-resource-report:0.4.1
 ```
 
 and add to the values files below:
@@ -90,7 +90,7 @@ and add to the values files below:
 ```yaml
 image:
   repository: registry.example.com/platform/cluster-resource-report
-  tag: "0.4.0"
+  tag: "0.4.1"
 ```
 
 ## Step 2. Install on the Rancher local cluster
@@ -223,8 +223,9 @@ kubectl -n resource-report port-forward svc/resource-report-cluster-resource-rep
 # http://localhost:8080/  (planners: /planner, /capacity)
 ```
 
-The pages have no login of their own. Don't expose them with an Ingress unless authentication (e.g.
-oauth2-proxy) is in front.
+The pages have no login of their own, so the chart never exposes them outside the cluster: the Service is
+always ClusterIP and there is no Ingress option. Rancher's proxy (with your Rancher login) and port-forward are
+the only ways in.
 
 ## Step 6. Verify
 
@@ -251,7 +252,7 @@ Prefer the values file to `--reuse-values`: with `--reuse-values`, values added 
 filled in from its defaults. With option b of step 1, mirror the new image and update `image.tag` first.
 
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
-converted when loaded. Upgrading from 0.3.x to 0.4.0 or later, where plans were files on the PVC: keep `persistence.enabled: true`
+converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep `persistence.enabled: true`
 for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
 that the PVC is no longer needed for the planners.
 
@@ -285,6 +286,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Log shows "prometheus has 0.0 days of data" | Prometheus was just installed | Wait; P95 covers what exists so far. A shorter `collection.window` (e.g. `1d`) gives useful numbers sooner |
 | Prometheus queries time out on a large cluster | 7 days at 5-minute steps is heavy | `collection.step: 15m` |
 | No **Resource report** entry in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
+| Chart fails: "ingress was removed" or "service.type was removed" | Values from an older release that exposed the dashboard | Remove `ingress.*` and `service.type` from your values; open the dashboard through Rancher |
 | Chart fails: "publishNames.enabled needs rancher.isLocalCluster=true" | Name publisher enabled on a downstream cluster | Only enable it on the local cluster |
 | Planner page missing (`/planner` 404) | `planner.enabled` not set | Set it, with `rancher.isLocalCluster: true` |
 | Planner shows "can't read ConfigMap …" or "not saved: … forbidden" | Plan ConfigMap deleted by hand, or RBAC changed | `helm upgrade` again: it recreates the ConfigMap and the Role |

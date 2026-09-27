@@ -60,22 +60,11 @@ rancher:
     key: kubeconfig
   localContext: ""   # context inside that kubeconfig (default: its current-context)
 
+# The dashboard has no login of its own, so it is never exposed outside the cluster: the Service is always
+# ClusterIP and the chart has no Ingress. Open it through the Rancher service proxy (menu entry, navLink above,
+# with your Rancher login and RBAC) or kubectl port-forward.
 service:
-  type: ClusterIP
   port: 80
-
-# The dashboard has no login of its own. Prefer access through the Rancher service proxy or
-# kubectl port-forward (see NOTES); if you enable an ingress, put authentication in front of it.
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: resource-report.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
 
 # Allocation planner (/planner): budgets and quotas per project and cluster, planned only -- nothing is applied
 # to any cluster; the export is the allocation files for the Git/Terraform flow (docs/04). For the platform team,

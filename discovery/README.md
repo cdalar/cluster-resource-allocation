@@ -171,6 +171,10 @@ envelope checked against its quota summed over all clusters. Its plan is `<data-
 python3 -m unittest -v test_discover test_server test_planner
 ```
 
+[`testdata/`](testdata/README.md) has a scenario file for a test cluster: one namespace per situation the dashboard
+and planners distinguish (low / good / over-used efficiency, BestEffort, missing requests, sidecars, HPA, quota,
+pending, unassigned, N+1 breach), applied with `testdata/apply-scenarios.sh`.
+
 The script was verified end-to-end on a k3s cluster with fake Rancher Project objects, a kube-prometheus-stack
 installed under Rancher Monitoring's service name, and fixture workloads (sidecars, init containers,
 BestEffort, pending, HPA, existing quota/LimitRange).

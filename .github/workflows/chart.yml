@@ -57,5 +57,6 @@ jobs:
       - name: Pull back
         run: |
           version=$(awk '/^version:/ {print $2}' "$CHART_DIR/Chart.yaml")
+          mkdir -p pulled
           helm pull "$REGISTRY/cluster-resource-report" --version "$version" --destination pulled
           helm template x pulled/cluster-resource-report-*.tgz > /dev/null

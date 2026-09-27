@@ -72,7 +72,7 @@ kubectl config use-context <cluster>
 ```bash
 git clone https://github.com/cdalar/cluster-resource-allocation.git
 cd cluster-resource-allocation
-git checkout v0.3.1        # a release tag; its image is ghcr.io/cdalar/cluster-resource-report:0.3.1
+git checkout v0.4.0        # a release tag; its image is ghcr.io/cdalar/cluster-resource-report:0.4.0
 ```
 
 The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion>`. Choose one:
@@ -82,7 +82,7 @@ The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion
 **b) Mirror to an internal registry** (clusters without internet access, air-gapped):
 
 ```bash
-crane copy ghcr.io/cdalar/cluster-resource-report:0.3.1 registry.example.com/platform/cluster-resource-report:0.3.1
+crane copy ghcr.io/cdalar/cluster-resource-report:0.4.0 registry.example.com/platform/cluster-resource-report:0.4.0
 ```
 
 and add to the values files below:
@@ -90,7 +90,7 @@ and add to the values files below:
 ```yaml
 image:
   repository: registry.example.com/platform/cluster-resource-report
-  tag: "0.3.1"
+  tag: "0.4.0"
 ```
 
 ## Step 2. Install on the Rancher local cluster
@@ -105,17 +105,13 @@ rancher:
 planner:
   enabled: true               # allocation planner (budgets, rates, costs)
 capacityPlanner:
-  enabled: false              # capacity planner (CPU / memory only, no money); not in 0.3.1, see below
+  enabled: false              # capacity planner (CPU / memory only, no money)
 prometheus:
   enabled: false              # true if Rancher Monitoring runs on the local cluster
 ```
 
 Enable one planner or both. Their plans are stored in ConfigMaps in the `resource-report` namespace, so no
 volume or storage class is needed.
-
-> **Release 0.3.1** doesn't have the capacity planner yet and stores plans on a volume: with 0.3.1, also set
-> `persistence.enabled: true` (needs a storage class). Both changes come with the next release; until then they
-> are in the `main` image (`image.tag: main`).
 
 Install:
 
@@ -255,7 +251,7 @@ Prefer the values file to `--reuse-values`: with `--reuse-values`, values added 
 filled in from its defaults. With option b of step 1, mirror the new image and update `image.tag` first.
 
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
-converted when loaded. Upgrading from 0.3.x, where plans were files on the PVC: keep `persistence.enabled: true`
+converted when loaded. Upgrading from 0.3.x to 0.4.0 or later, where plans were files on the PVC: keep `persistence.enabled: true`
 for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
 that the PVC is no longer needed for the planners.
 

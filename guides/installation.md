@@ -53,7 +53,7 @@ Per cluster:
 |---|---|---|---|
 | **metrics-server** | "now" usage snapshot (always) | `kubectl top pods -A \| head` | Included in k3s, RKE2 and AKS; otherwise install it |
 | **Rancher Monitoring** (Prometheus, kube-state-metrics) | P95 usage and request peaks over 7 days | `kubectl -n cattle-monitoring-system get svc rancher-monitoring-prometheus` | Rancher UI → cluster → **Apps → Charts → Monitoring**; or install without history (step 3) |
-| **Access to `ghcr.io`** (chart and image), or an internal mirror | installing, pulling the image | `helm show chart oci://ghcr.io/cdalar/charts/cluster-resource-report` | Step 1, *Clusters without internet access* |
+| **Access to `ghcr.io` or Docker Hub** (chart and image), or an internal mirror | installing, pulling the image | `helm show chart oci://ghcr.io/cdalar/charts/cluster-resource-report` | Step 1 (Docker Hub, or *Clusters without internet access*) |
 
 Rancher: tested with v2.15. The Rancher menu entries need Rancher's `NavLink` CRD, which every Rancher-managed
 cluster has; on other clusters the chart skips them.
@@ -79,8 +79,12 @@ Both locations hold the same artifacts. The chart's default image is the GHCR on
 (e.g. when your registry proxy only mirrors Docker Hub), set `CHART` to the Docker Hub location below and add
 `image.repository: docker.io/cdalar/cluster-resource-report` to the values files.
 
-Available versions: the [package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)
-or the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the repository.
+Available versions: the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the
+repository, the chart's [GHCR package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)
+or its [Docker Hub tags](https://hub.docker.com/r/cdalar/cluster-resource-report-chart/tags).
+
+Docker Hub limits anonymous pulls per IP address; with many clusters behind one address, prefer GHCR or log in
+to Docker Hub (`imagePullSecrets`).
 
 Set the chart and version once in your shell; every command below uses them:
 
@@ -216,7 +220,8 @@ Rancher repositories belong to one cluster:
 
 1. Cluster → **Apps → Repositories → Create**: name `cluster-resource-report`, target **OCI repository**,
    URL `oci://ghcr.io/cdalar/charts/cluster-resource-report` (the chart's own location; the parent
-   `oci://ghcr.io/cdalar/charts` can't be listed anonymously and fails with *403 Forbidden*). No authentication.
+   `oci://ghcr.io/cdalar/charts` can't be listed anonymously and fails with *403 Forbidden*), or from Docker Hub
+   `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`. No authentication.
 2. **Apps → Charts**, find **cluster-resource-report**, **Install**.
 3. Namespace `resource-report`, name `resource-report` (the menu links and the name publisher expect these),
    version `0.4.1`.
@@ -332,6 +337,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.4.1`); see the package page (step 1) |
 | Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the mirror lacks the tag | Mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
 | Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
+| Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |
 | Project IDs (`p-xxxxx`) instead of names on a downstream dashboard | ConfigMap not there yet, or `rancher.namesConfigMap.enabled` not set | Check `kubectl -n resource-report get configmap rancher-project-names`; on the local cluster check the CronJob's last job and the Bundle's state; names appear after the next collection |
 | ConfigMap delivered to the wrong namespace | Downstream release not in `resource-report` | Install in `resource-report`, or set `rancher.publishNames.targetNamespace` and `rancher.namesConfigMap.namespace` to match |
 | Bundle shown as "Modified" in Continuous Delivery | Something changed the ConfigMap on the downstream cluster | Don't edit it by hand; the next publish restores it |

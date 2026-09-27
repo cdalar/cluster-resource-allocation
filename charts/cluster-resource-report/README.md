@@ -15,6 +15,9 @@ The dashboard shows:
 
 The page is self-contained, with no CDN or external assets, so it works in air-gapped clusters.
 
+Step-by-step installation across the Rancher local and downstream clusters: [guides/installation.md](../../guides/installation.md).
+This README is the reference for the image, values, permissions and endpoints.
+
 ## 1. Image
 
 The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the discovery code, built for

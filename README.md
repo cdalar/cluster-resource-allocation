@@ -17,6 +17,13 @@ to projects/streams based on their budgets, across on-prem Rancher-managed clust
 | [Open questions](docs/open-questions.md) | Items to resolve during discovery |
 | [ADRs](docs/adr/) | Architecture decision records |
 
+## Guides
+
+| Guide | Content |
+|---|---|
+| [Installation](guides/installation.md) | Step by step: dashboard on every cluster, planners and name publisher on the Rancher local cluster, verification, upgrade, troubleshooting |
+| [Allocation planner](guides/allocation-planner.md) | Using the allocation and capacity planners, every parameter explained |
+
 ## Tools
 
 | Tool | Purpose |

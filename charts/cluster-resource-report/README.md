@@ -38,17 +38,11 @@ To release, set `appVersion` (and `version`) in `Chart.yaml`, push that commit, 
 `git tag v0.3.1 && git push origin v0.3.1`. The workflow fails if the tag and `appVersion` differ. The chart's
 default image tag is its `appVersion`.
 
-The repository is private, so the GHCR package is private too. Clusters pulling from GHCR need a pull secret, for
-example with a token that has `read:packages`:
+The repository and the GHCR package are public, so clusters with internet access pull the image without a
+pull secret.
 
-```bash
-kubectl -n resource-report create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<token>
-helm upgrade --install ... --set 'imagePullSecrets[0].name=ghcr-pull'
-```
-
-Most on-prem clusters pull from an internal registry instead. In that case, mirror the image
-(e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.3.1 registry.example.com/platform/cluster-resource-report:0.3.1`)
+Clusters without internet access (most on-prem clusters) pull from an internal registry instead. In that case,
+mirror the image (e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.3.1 registry.example.com/platform/cluster-resource-report:0.3.1`)
 and set `image.repository`.
 
 ### Build locally

@@ -45,7 +45,7 @@ On your workstation:
 |---|---|---|
 | `kubectl` | any recent | `kubectl version --client` |
 | `helm` | 3.x | `helm version` |
-| `git` | any | access to this repository (it is private) |
+| `git` | any | `git --version` |
 
 Per cluster:
 
@@ -77,23 +77,9 @@ git checkout v0.3.1        # a release tag; its image is ghcr.io/cdalar/cluster-
 
 The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion>`. Choose one:
 
-**a) Pull from GHCR.** The package is private, so each cluster needs a pull secret with a GitHub token that
-has `read:packages`. Create it in every cluster after step 2 has created the namespace, or now:
+**a) Pull from GHCR.** The image is public: clusters with internet access need nothing else.
 
-```bash
-kubectl create namespace resource-report
-kubectl -n resource-report create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<token>
-```
-
-and add to the values files below:
-
-```yaml
-imagePullSecrets:
-  - name: ghcr-pull
-```
-
-**b) Mirror to an internal registry** (on-prem, air-gapped):
+**b) Mirror to an internal registry** (clusters without internet access, air-gapped):
 
 ```bash
 crane copy ghcr.io/cdalar/cluster-resource-report:0.3.1 registry.example.com/platform/cluster-resource-report:0.3.1
@@ -177,8 +163,6 @@ for ctx in onprem-prod-01 onprem-test-01 aks-prod; do
     -n resource-report --create-namespace -f values-downstream.yaml
 done
 ```
-
-(With option a of step 1, create the pull secret in each cluster before installing.)
 
 Check on each cluster:
 
@@ -291,7 +275,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Pod `ImagePullBackOff` | No access to the private GHCR package | Pull secret (step 1a) or internal mirror (step 1b) |
+| Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the internal mirror lacks the tag | Mirror the image (step 1b) and set `image.repository` / `image.tag`; with an authenticated registry add `imagePullSecrets` |
 | Project IDs (`p-xxxxx`) instead of names on a downstream dashboard | ConfigMap not there yet, or `rancher.namesConfigMap.enabled` not set | Check `kubectl -n resource-report get configmap rancher-project-names`; on the local cluster check the CronJob's last job and the Bundle's state; names appear after the next collection |
 | ConfigMap delivered to the wrong namespace | Downstream release not in `resource-report` | Install in `resource-report`, or set `rancher.publishNames.targetNamespace` and `rancher.namesConfigMap.namespace` to match |
 | Bundle shown as "Modified" in Continuous Delivery | Something changed the ConfigMap on the downstream cluster | Don't edit it by hand; the next publish restores it |

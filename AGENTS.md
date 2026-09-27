@@ -39,4 +39,5 @@ several namespaces each), plus some AKS clusters.
 - CI (`.github/workflows/image.yml`) builds the image on pushes to `main` that touch `discovery/` or `charts/`.
   Releases are tags `vX.Y.Z` that must match `version` and `appVersion` in `charts/cluster-resource-report/Chart.yaml`;
   on a tag, `image.yml` pushes the image and `.github/workflows/chart.yml` pushes the chart to
-  `oci://ghcr.io/cdalar/charts/cluster-resource-report`.
+  `oci://ghcr.io/cdalar/charts/cluster-resource-report`; both then call `dockerhub.yml`, which copies them to
+  Docker Hub (`cdalar/cluster-resource-report`, `cdalar/cluster-resource-report-chart`).

@@ -5,6 +5,7 @@ name: image
 #   push to main  -> :main and :sha-<short>
 #   tag vX.Y.Z    -> :X.Y.Z, :X.Y and :latest (tag must match the chart appVersion)
 #   manual run    -> same as the ref it runs on
+# On release tags the image is then copied to Docker Hub (dockerhub.yml).
 on:
   push:
     branches: [main]
@@ -98,3 +99,12 @@ jobs:
         run: |
           docker run --rm --entrypoint kubectl "${IMAGE}:sha-${GITHUB_SHA::7}" version --client
           docker run --rm "${IMAGE}:sha-${GITHUB_SHA::7}" --help | head -3
+
+  dockerhub:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/dockerhub.yml
+    with:
+      tag: ${{ github.ref_name }}
+      what: image
+    secrets: inherit

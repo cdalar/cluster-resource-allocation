@@ -68,12 +68,16 @@ kubectl config use-context <cluster>
 
 ## Step 1. Choose the chart version and image source
 
-Every release is published on GHCR, public, with no login needed:
+Every release is published on GHCR and copied to Docker Hub, public, with no login needed:
 
-| | Location | Version |
-|---|---|---|
-| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | the release, e.g. `0.4.1` |
-| **Image** | `ghcr.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
+| | GHCR (default) | Docker Hub | Version |
+|---|---|---|---|
+| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.4.1` |
+| **Image** | `ghcr.io/cdalar/cluster-resource-report` | `docker.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
+
+Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub instead
+(e.g. when your registry proxy only mirrors Docker Hub), set `CHART` to the Docker Hub location below and add
+`image.repository: docker.io/cdalar/cluster-resource-report` to the values files.
 
 Available versions: the [package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)
 or the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the repository.
@@ -82,6 +86,7 @@ Set the chart and version once in your shell; every command below uses them:
 
 ```bash
 CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
+# or: CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
 VERSION=0.4.1
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled

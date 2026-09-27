@@ -20,12 +20,19 @@ This README is the reference for the image, values, permissions and endpoints.
 
 ## 1. Chart and image
 
-Each release `vX.Y.Z` publishes both, public on GHCR:
+Each release `vX.Y.Z` publishes both, public, on GHCR and (copied from there) on Docker Hub:
 
-| | Where | Built by |
-|---|---|---|
-| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report`, version `X.Y.Z` | `.github/workflows/chart.yml` |
-| Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` (the chart's default) | `.github/workflows/image.yml` |
+| | GHCR (source) | Docker Hub (copy) | Built by |
+|---|---|---|---|
+| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report`, version `X.Y.Z` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, version `X.Y.Z` | `.github/workflows/chart.yml` |
+| Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` (the chart's default) | `docker.io/cdalar/cluster-resource-report:X.Y.Z` (also `X.Y`, `latest`) | `.github/workflows/image.yml` |
+
+On Docker Hub the chart has its own repository (`-chart`), since image and chart share the tag `X.Y.Z`.
+`.github/workflows/dockerhub.yml` does the copy after each push to GHCR (`crane copy`, nothing is rebuilt). It
+needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with Read &
+Write) and optionally the variable `DOCKERHUB_NAMESPACE` (default `cdalar`); without the secrets it only warns.
+To copy an existing release, run it manually (Actions → dockerhub → Run workflow, input `tag`).
+To use the image from Docker Hub, set `image.repository=docker.io/cdalar/cluster-resource-report`.
 
 `chart.yml` runs on version tags: it checks that the tag matches the chart's `version` and `appVersion`, lints,
 runs `helm package` and `helm push` to `oci://ghcr.io/cdalar/charts`, and pulls the chart back as a check. To

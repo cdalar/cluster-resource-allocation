@@ -1,0 +1,82 @@
+name: dockerhub
+
+# Copies a release from GHCR to Docker Hub (GHCR stays the source; nothing is rebuilt):
+#   image  ghcr.io/<owner>/cluster-resource-report:X.Y.Z        -> docker.io/<ns>/cluster-resource-report:X.Y.Z, X.Y, latest
+#   chart  ghcr.io/<owner>/charts/cluster-resource-report:X.Y.Z -> docker.io/<ns>/cluster-resource-report-chart:X.Y.Z
+# The chart gets its own repository because image and chart tags (X.Y.Z) would collide in one.
+# Called by image.yml and chart.yml on release tags; run manually to copy an existing release.
+# Needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Docker Hub access token, Read & Write); without them
+# it only warns. Namespace: variable DOCKERHUB_NAMESPACE, default cdalar.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      what:
+        type: string
+        default: both
+      latest:
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to copy (e.g. v0.4.1)
+        required: true
+      what:
+        description: What to copy
+        type: choice
+        options: [both, image, chart]
+        default: both
+      latest:
+        description: Also move the image's `latest` tag to this release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      WHAT: ${{ inputs.what }}
+      LATEST: ${{ inputs.latest }}
+      SRC: ghcr.io/${{ github.repository_owner }}
+      DST: docker.io/${{ vars.DOCKERHUB_NAMESPACE || 'cdalar' }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Without Docker Hub credentials
+        if: env.DOCKERHUB_TOKEN == ''
+        run: echo "::warning::secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN are not set; nothing copied to Docker Hub"
+
+      - uses: imjasonh/setup-crane@v0.7
+        if: env.DOCKERHUB_TOKEN != ''
+
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_TOKEN != ''
+        run: echo "$DOCKERHUB_TOKEN" | crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Copy image
+        if: env.DOCKERHUB_TOKEN != '' && inputs.what != 'chart'
+        run: |
+          version="${TAG#v}"
+          crane copy "$SRC/cluster-resource-report:$version" "$DST/cluster-resource-report:$version"
+          crane tag "$DST/cluster-resource-report:$version" "${version%.*}"
+          if [ "$LATEST" = "true" ]; then crane tag "$DST/cluster-resource-report:$version" latest; fi
+
+      - name: Copy chart
+        if: env.DOCKERHUB_TOKEN != '' && inputs.what != 'image'
+        run: |
+          version="${TAG#v}"
+          crane copy "$SRC/charts/cluster-resource-report:$version" "$DST/cluster-resource-report-chart:$version"
+
+      - name: Check
+        if: env.DOCKERHUB_TOKEN != ''
+        run: |
+          version="${TAG#v}"
+          if [ "$WHAT" != chart ]; then crane digest "$DST/cluster-resource-report:$version"; fi
+          if [ "$WHAT" != image ]; then crane digest "$DST/cluster-resource-report-chart:$version"; fi

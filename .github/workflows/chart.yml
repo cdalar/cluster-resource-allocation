@@ -4,6 +4,7 @@ name: chart
 #   oci://ghcr.io/<owner>/charts/cluster-resource-report:<version>
 #   tag vX.Y.Z   -> chart version X.Y.Z (tag must match the chart version and appVersion)
 #   manual run   -> publishes the chart of an existing release tag (input `tag`), e.g. to republish it
+# Then copied to Docker Hub as <ns>/cluster-resource-report-chart (dockerhub.yml).
 on:
   push:
     tags: ["v*"]
@@ -60,3 +61,11 @@ jobs:
           mkdir -p pulled
           helm pull "$REGISTRY/cluster-resource-report" --version "$version" --destination pulled
           helm template x pulled/cluster-resource-report-*.tgz > /dev/null
+
+  dockerhub:
+    needs: chart
+    uses: ./.github/workflows/dockerhub.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+      what: chart
+    secrets: inherit

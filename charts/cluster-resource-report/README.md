@@ -114,18 +114,21 @@ User guide: [guides/allocation-planner.md](../../guides/allocation-planner.md).
 
 **Without money:** `--set capacityPlanner.enabled=true` adds the capacity planner (`/capacity`, *Capacity planner*
 in the Rancher menu): no rates, budgets or costs, each project gets a CPU and memory envelope instead. It can run
-alone or next to the allocation planner, with its own plan (`capacity-plan.json`).
+alone or next to the allocation planner, with its own plan (ConfigMap `<release>-cluster-resource-report-capacity`).
 
 A planning page next to the dashboard for the platform team: a monthly budget per project and a CPU/memory quota
 per cluster, entered either way round (quota directly, or an amount converted with the cluster's unit rates).
 It checks the plan live against the budgets and each cluster's headroom rule (e.g. Σ quota ≤ 80 % of allocatable
 in prod) and exports it as the allocation files of [docs/04](../../docs/04-technical-design.md#42-allocation-as-code).
 
-**It applies nothing.** The plan is saved in the data volume (`planner.json`, plus the last 30 versions in
-`planner-history/`); quotas still reach Rancher only through the Git / Terraform flow.
+**It applies nothing.** The plan is saved in a ConfigMap in the release namespace
+(`<release>-cluster-resource-report-planner`, compressed, with the last 30 versions), so no volume or storage
+class is needed. The chart creates it empty and keeps it on `helm uninstall`. Quotas still reach Rancher only
+through the Git / Terraform flow. A plan file from an older version on the volume (`/data/planner.json`) is read
+until the first save, which moves it to the ConfigMap.
 
 ```bash
-helm upgrade --install ... --set rancher.isLocalCluster=true --set persistence.enabled=true --set planner.enabled=true
+helm upgrade --install ... --set rancher.isLocalCluster=true --set planner.enabled=true
 ```
 
 It reads all clusters (capacity, requests) and Rancher Projects (current quota) from the local cluster, so one
@@ -153,27 +156,29 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
 | `capacityPlanner.enabled` | `false` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
-| `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, and `persistence.enabled`) |
+| `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`); plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `""` | Menu entry in the Rancher UI that opens the dashboard through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
-| `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately |
+| `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
 | `ingress.*` | disabled | Standard ingress settings |
 | `resources` | 50m / 128Mi, limit 512Mi | Raise the memory limit for clusters with many thousands of pods |
 | `podSecurityContext` / `securityContext` | non-root 65534, read-only root FS, no capabilities | |
 
 ## Permissions
 
-These are created by the chart. The dashboard's (and planner's) are all read-only.
+These are created by the chart. The dashboard's are all read-only; the planners can write only their own plan
+ConfigMaps.
 
 - **ClusterRole:** `get`/`list` on nodes, namespaces, pods, resourcequotas, limitranges, HPAs and `metrics.k8s.io` pods;
   with `rancher.isLocalCluster` also on `projects`, `clusters` and `nodes.management.cattle.io` (node sizes for the planner's N+1 check).
 - **Role in the Prometheus namespace:** `get` on `services/proxy` for the configured Prometheus service only.
   It is only created when the service proxy is used.
 - **Role (`rancher.namesConfigMap`):** `get` on the `rancher-project-names` ConfigMap only.
+- **Planners (`planner` / `capacityPlanner`):** `get`/`update` on exactly their plan ConfigMaps
+  (`<fullname>-planner`, `<fullname>-capacity`) in the release namespace. No `create`: the chart creates them.
 - **Name publisher (`rancher.publishNames`, own service account):** read on `projects`/`clusters.management.cattle.io`,
-  and `create` bundles plus `get`/`patch`/`update` on the `rancher-project-names` Bundle in the Fleet workspace --
-  the only write permission in the chart.
+  and `create` bundles plus `get`/`patch`/`update` on the `rancher-project-names` Bundle in the Fleet workspace.
 - **NavLinks** (`ui.cattle.io`) are created by Helm at install time, not by the running app.
 
 ## Endpoints

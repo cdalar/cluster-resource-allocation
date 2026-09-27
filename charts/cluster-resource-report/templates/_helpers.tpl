@@ -40,3 +40,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "crr.namesNamespace" -}}
 {{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
 {{- end -}}
+
+{{/* Non-empty when the allocation planner or the capacity planner is enabled */}}
+{{- define "crr.planners" -}}
+{{- if or (dig "enabled" false (.Values.planner | default dict)) (dig "enabled" false (.Values.capacityPlanner | default dict)) -}}
+true
+{{- end -}}
+{{- end }}

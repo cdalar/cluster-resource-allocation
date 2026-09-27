@@ -153,16 +153,21 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
   max % × (allocatable − platform reserve)), per CPU and memory; projects missing in Rancher; clusters without
   environment/platform/platform reserve. The platform reserve is measured (`system` requests) for the cluster the
   collector scans and entered for the others.
-- **Storage:** `<data-dir>/planner.json` with a version number (a save based on an older version is refused with
-  409, so two people can't overwrite each other) and the last 30 versions in `planner-history/`.
+- **Storage:** with `--plan-configmaps NAMESPACE/PREFIX` (the chart sets it), a ConfigMap `PREFIX-planner` in the
+  cluster the server runs in: current plan and the last 30 versions gzip-compressed in `binaryData`, trimmed to
+  stay below the 1 MiB ConfigMap limit. It needs `get`/`update` on that ConfigMap only (`create` if it doesn't
+  exist). Without the flag: `<data-dir>/planner.json` and the last 30 versions in `planner-history/`. Each save
+  carries a version number: a save based on an older version is refused with 409, so two people can't overwrite
+  each other; with the ConfigMap, the API server's resourceVersion check also catches two saves at the same
+  moment. A `planner.json` left in `--data-dir` by an older version is read until the first save moves it over.
 - **Export:** `/api/planner/export.yaml`, one document per project in the allocation-file format of docs/04, with
   `limits.memory` = requests × the environment's factor.
 
-It never writes to a cluster; applying stays with the Git / Terraform flow.
+Apart from its own plan ConfigMap it never writes to a cluster; applying stays with the Git / Terraform flow.
 
 `server.py --capacity-planner` adds the same planner without money at `/capacity` (`GET|PUT /api/capacity`,
 `/api/capacity/export.yaml`): no platforms, rates, budgets or costs; each project has an optional CPU / memory
-envelope checked against its quota summed over all clusters. Its plan is `<data-dir>/capacity-plan.json`
+envelope checked against its quota summed over all clusters. Its plan is the ConfigMap `PREFIX-capacity` (or `<data-dir>/capacity-plan.json`)
 (history in `capacity-history/`); both planners share `planner.py` (`mode="budget"` / `"capacity"`).
 
 ## Tests

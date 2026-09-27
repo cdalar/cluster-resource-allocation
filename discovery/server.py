@@ -118,13 +118,20 @@ class Collector:
 
 
 class PlannerBackend:
-    """The planner's plan file plus a short-lived cache of the Rancher inventory it plans against."""
+    """The planner's stored plan (ConfigMap, or a file in --data-dir) plus a short-lived cache of the Rancher inventory it plans against."""
 
     INVENTORY_TTL = 30  # seconds; the page reloads it on every open and save
 
-    def __init__(self, args, collector, inventory_loader=None, mode="budget"):
+    def __init__(self, args, collector, inventory_loader=None, mode="budget", store=None):
         self.collector, self.mode = collector, mode
-        self.store = planner.PlanStore(args.data_dir, mode)
+        if store is None:
+            if getattr(args, "plan_configmaps", None):
+                namespace, prefix = args.plan_configmaps.split("/", 1)
+                store = planner.ConfigMapPlanStore(namespace, f"{prefix}-{planner.STATE_FILES[mode][2]}", mode,
+                                                   legacy_dir=args.data_dir)
+            else:
+                store = planner.PlanStore(args.data_dir, mode)
+        self.store = store
         self.save_lock = threading.Lock()
         if inventory_loader is None:
             if args.rancher_local_self:
@@ -210,6 +217,8 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
             elif what == "api":
                 try:
                     self._json(200, backend.view())
+                except planner.PlanStoreError as e:
+                    self._json(502, {"error": discover.first_line(e)})
                 except discover.KubectlError as e:
                     self._json(502, {"error": f"could not read the Rancher inventory: {discover.first_line(e)}"})
                 except Exception as e:  # a bug must show up on the page, not as a dropped connection
@@ -218,6 +227,8 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
             elif what == "export":
                 try:
                     data = backend.export()
+                except planner.PlanStoreError as e:
+                    return self._send(502, discover.first_line(e), "text/plain")
                 except discover.KubectlError as e:
                     return self._send(502, f"could not read the Rancher inventory: {discover.first_line(e)}",
                                       "text/plain")
@@ -272,6 +283,8 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                 self._json(409, {"error": str(e), "version": e.version})
             except planner.PlanError as e:
                 self._json(400, {"error": str(e)})
+            except planner.PlanStoreError as e:
+                self._json(502, {"error": f"not saved: {discover.first_line(e)}"})
             except discover.KubectlError as e:
                 self._json(502, {"error": f"saved, but could not read the Rancher inventory: {discover.first_line(e)}"})
 
@@ -300,8 +313,13 @@ def main():
     ap.add_argument("--capacity-planner", action="store_true",
                     help="also serve the capacity planner: the allocation planner without money, with a CPU and "
                          "memory envelope per project (same Rancher access as --planner)")
+    ap.add_argument("--plan-configmaps", metavar="NAMESPACE/PREFIX",
+                    help="keep the planners' plans in the ConfigMaps PREFIX-planner and PREFIX-capacity (in this "
+                         "cluster; needs get/update on them) instead of files in --data-dir")
     args = ap.parse_args()
     parse_duration(args.interval)
+    if args.plan_configmaps and "/" not in args.plan_configmaps:
+        ap.error("--plan-configmaps must be NAMESPACE/PREFIX")
     if (args.planner or args.capacity_planner) and not (
             args.rancher_local_self or args.rancher_local_context or args.rancher_local_kubeconfig):
         ap.error("--planner / --capacity-planner need the Rancher local cluster: --rancher-local-self, "

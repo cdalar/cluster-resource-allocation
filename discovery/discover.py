@@ -118,11 +118,11 @@ class KubectlError(Exception):
     pass
 
 
-def kubectl(context, args, timeout=120, kubeconfig=None):
+def kubectl(context, args, timeout=120, kubeconfig=None, stdin=None):
     cmd = (["kubectl"] + (["--kubeconfig", kubeconfig] if kubeconfig else [])
            + (["--context", context] if context else []) + args)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise KubectlError(f"timeout: {' '.join(cmd)}")
     if p.returncode != 0:

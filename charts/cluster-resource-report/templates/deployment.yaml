@@ -1,7 +1,4 @@
 {{- if or (dig "enabled" false (.Values.planner | default dict)) (dig "enabled" false (.Values.capacityPlanner | default dict)) }}
-{{- if not .Values.persistence.enabled }}
-{{- fail "planner.enabled / capacityPlanner.enabled need persistence.enabled=true: the plan is stored in the data volume" }}
-{{- end }}
 {{- if not (or .Values.rancher.isLocalCluster .Values.rancher.localKubeconfigSecret.name) }}
 {{- fail "planner.enabled / capacityPlanner.enabled need the Rancher inventory: set rancher.isLocalCluster (or rancher.localKubeconfigSecret)" }}
 {{- end }}
@@ -75,6 +72,9 @@ spec:
             {{- end }}
             {{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}
             - --capacity-planner
+            {{- end }}
+            {{- if include "crr.planners" . }}
+            - --plan-configmaps={{ .Release.Namespace }}/{{ include "crr.fullname" . }}
             {{- end }}
             {{- if .Values.rancher.isLocalCluster }}
             - --rancher-local-self

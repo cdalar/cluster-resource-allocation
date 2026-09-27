@@ -27,8 +27,10 @@ several namespaces each), plus some AKS clusters.
 - Docs are Markdown and keep the existing structure: numbered files, tables for comparisons, Mermaid for diagrams.
   Update `README.md` when adding a doc or tool, and `docs/open-questions.md` when a question is answered or raised.
 - `discovery/` code uses the Python standard library and `kubectl` only; no third-party packages.
-  It must stay read-only against clusters. Sole exception: `publish_rancher_names.py` writes one Fleet Bundle
-  (`rancher-project-names`) on the Rancher local cluster, with its own service account.
+  It must stay read-only against clusters. Exceptions: `publish_rancher_names.py` writes one Fleet Bundle
+  (`rancher-project-names`) on the Rancher local cluster, with its own service account; the planners write
+  their own plan ConfigMaps (`<fullname>-planner`, `<fullname>-capacity`) in their own namespace. Never
+  workloads, quotas or Rancher objects.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
 - Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`.
   After changing the chart: `helm lint charts/cluster-resource-report`.

@@ -2,8 +2,9 @@
 
 The planner is a planning aid for the platform team on the Rancher local cluster (docs/04, "Allocation
 planner"). It reads the Rancher inventory (clusters with their capacity, projects with their current quota) and
-keeps the plan in a JSON file in the report's data directory. It writes nothing to any cluster: the output is
-the allocation files of docs/04 ("Allocation as code"), which go through the Git / Terraform flow.
+keeps the plan in a ConfigMap in its own namespace (a JSON file when run without a cluster). That ConfigMap is
+the only thing it writes: no quota, workload or Rancher object. The output is the allocation files of docs/04
+("Allocation as code"), which go through the Git / Terraform flow.
 
 The plan holds, per project, a monthly budget and a CPU/memory quota per cluster. Either can drive the other:
 the page converts a budget into quota with the cluster's unit rates, and the checks here compare the cost of the
@@ -17,6 +18,8 @@ computed for CPU and memory separately. The platform reserve is what platform co
 monitoring, ...) request: measured for the cluster this collector scans, entered per cluster for the others.
 """
 
+import base64
+import gzip
 import json
 import math
 import os
@@ -299,19 +302,28 @@ def validate_state(raw, mode="budget"):
 
 class PlanStore:
     """A plan in <data_dir> (planner.json, or capacity-plan.json for the capacity planner), with a version for
-    optimistic locking and a short history."""
+    optimistic locking and a short history. Used without a cluster (local runs, tests); in the chart the plan is
+    kept in a ConfigMap instead (ConfigMapPlanStore)."""
 
     def __init__(self, data_dir, mode="budget"):
         self.data_dir, self.mode = data_dir, mode
         self.state_file, self.history_dir, self.prefix = STATE_FILES[mode]
         self.path = os.path.join(data_dir, self.state_file)
 
-    def load(self):
-        """The stored plan, normalised: fields added in later versions get their defaults."""
+    def _read(self):
+        """(stored plan dict or None, backend token passed back to _write)."""
         try:
             with open(self.path) as f:
-                stored = json.load(f)
+                return json.load(f), None
         except FileNotFoundError:
+            return None, None
+
+    def load(self):
+        """The stored plan, normalised: fields added in later versions get their defaults."""
+        return self._normalise(self._read()[0])
+
+    def _normalise(self, stored):
+        if stored is None:
             return empty_state(self.mode)
         try:
             plan = validate_state(stored, self.mode)
@@ -323,20 +335,23 @@ class PlanStore:
 
     def save(self, raw, expected_version):
         """Validate and write raw if the stored version is still expected_version; returns the saved plan."""
-        current = self.load()
+        stored, token = self._read()
+        current = self._normalise(stored)
         if expected_version != current.get("version", 0):
             raise PlanConflict(current.get("version", 0))
         plan = validate_state(raw, self.mode)
         plan["version"] = current.get("version", 0) + 1
         plan["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._write(plan, json.dumps(plan, indent=1, sort_keys=True), token)
+        return plan
+
+    def _write(self, plan, data, token):
         os.makedirs(self.data_dir, exist_ok=True)
-        data = json.dumps(plan, indent=1, sort_keys=True)
         fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=f".{self.prefix}-")
         with os.fdopen(fd, "w") as f:
             f.write(data)
         os.replace(tmp, self.path)
         self._keep_history(plan, data)
-        return plan
 
     def _keep_history(self, plan, data):
         hist = os.path.join(self.data_dir, self.history_dir)
@@ -348,6 +363,90 @@ class PlanStore:
                 os.remove(os.path.join(hist, old))
         except OSError as e:
             discover.log(f"planner: could not write history: {e}")
+
+
+class ConfigMapPlanStore(PlanStore):
+    """The plan in a ConfigMap in the planner's own namespace, so no volume (and no storage class) is needed.
+
+    binaryData holds the current plan (plan.json.gz) and earlier versions (v00012.json.gz), gzip-compressed.
+    History is trimmed to HISTORY_KEEP versions and to MAX_BYTES in total, below the 1 MiB ConfigMap limit.
+    Writes use `kubectl replace` with the ConfigMap's resourceVersion, so a save that raced another one (from
+    this or another pod) is refused by the API server and reported as a conflict, like a stale plan version.
+
+    The chart creates the ConfigMap empty; the planner may only get and update it. A plan file left in data_dir
+    by an older version (legacy_dir) is read while the ConfigMap holds no plan, and moves over on the first save.
+    """
+
+    PLAN_KEY = "plan.json.gz"
+    MAX_BYTES = 900 * 1024
+    _HIST_RE = re.compile(r"^v(\d+)\.json\.gz$")
+
+    def __init__(self, namespace, name, mode="budget", legacy_dir=None, context=None, kubectl=None):
+        super().__init__(legacy_dir or "", mode)
+        self.namespace, self.name, self.context = namespace, name, context
+        self.legacy_dir = legacy_dir
+        self._kubectl = kubectl or discover.kubectl
+
+    def _get(self):
+        try:
+            return json.loads(self._kubectl(self.context, ["get", "configmap", self.name, "-n", self.namespace,
+                                                           "-o", "json"]))
+        except discover.KubectlError as e:
+            if "NotFound" in str(e) or "not found" in str(e):
+                return None
+            raise PlanStoreError(f"can't read ConfigMap {self.namespace}/{self.name}: {e}")
+
+    def _read(self):
+        cm = self._get()
+        blob = ((cm or {}).get("binaryData") or {}).get(self.PLAN_KEY)
+        if blob:
+            return json.loads(_gunzip(blob)), cm
+        if self.legacy_dir:  # plan file of an older version, not yet saved to the ConfigMap
+            stored, _ = super()._read()
+            if stored is not None:
+                return stored, cm
+        return None, cm
+
+    def _write(self, plan, data, cm):
+        blob = _gzip(data)
+        if len(blob) > self.MAX_BYTES:
+            raise PlanError(f"the plan is too large to store ({len(blob) // 1024} KiB compressed)")
+        binary = {k: v for k, v in ((cm or {}).get("binaryData") or {}).items() if self._HIST_RE.match(k)}
+        binary[f'v{plan["version"]:05d}.json.gz'] = blob
+        history = sorted(binary, key=lambda k: int(self._HIST_RE.match(k).group(1)))
+        while len(history) > HISTORY_KEEP or (
+                len(history) > 1 and sum(len(binary[k]) for k in history) + len(blob) > self.MAX_BYTES):
+            del binary[history.pop(0)]
+        binary[self.PLAN_KEY] = blob
+        if cm is None:
+            obj = {"apiVersion": "v1", "kind": "ConfigMap",
+                   "metadata": {"name": self.name, "namespace": self.namespace}, "binaryData": binary}
+            verb = ["create", "-f", "-"]
+        else:
+            meta = {k: v for k, v in cm["metadata"].items() if k != "managedFields"}
+            obj = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta, "binaryData": binary}
+            if cm.get("data"):
+                obj["data"] = cm["data"]
+            verb = ["replace", "-f", "-"]
+        try:
+            self._kubectl(self.context, verb + ["-o", "name"], stdin=json.dumps(obj))
+        except discover.KubectlError as e:
+            if "the object has been modified" in str(e) or "AlreadyExists" in str(e) or "already exists" in str(e):
+                stored, _ = self._read()
+                raise PlanConflict((stored or {}).get("version", 0))
+            raise PlanStoreError(f"can't write ConfigMap {self.namespace}/{self.name}: {e}")
+
+
+def _gzip(text):
+    return base64.b64encode(gzip.compress(text.encode(), mtime=0)).decode()
+
+
+def _gunzip(b64):
+    return gzip.decompress(base64.b64decode(b64)).decode()
+
+
+class PlanStoreError(Exception):
+    """The plan's storage (the ConfigMap) can't be reached."""
 
 
 class PlanConflict(Exception):

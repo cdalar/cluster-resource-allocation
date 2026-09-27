@@ -200,6 +200,108 @@ class Store(unittest.TestCase):
             self.assertFalse(os.path.exists(store.path))
 
 
+class FakeConfigMaps:
+    """A stand-in for `kubectl get/create/replace configmap` with the API server's resourceVersion check."""
+
+    def __init__(self):
+        self.objects, self.rv, self.calls = {}, 0, []
+
+    def put(self, name, obj):
+        self.rv += 1
+        obj["metadata"]["resourceVersion"] = str(self.rv)
+        self.objects[name] = obj
+
+    def __call__(self, context, args, timeout=120, kubeconfig=None, stdin=None):
+        self.calls.append(args[0])
+        if args[0] == "get":
+            if args[2] not in self.objects:
+                raise planner.discover.KubectlError(f'configmaps "{args[2]}" not found')
+            return json.dumps(self.objects[args[2]])
+        obj = json.loads(stdin)
+        name = obj["metadata"]["name"]
+        if args[0] == "create":
+            if name in self.objects:
+                raise planner.discover.KubectlError(f'configmaps "{name}" already exists')
+        elif obj["metadata"].get("resourceVersion") != self.objects[name]["metadata"]["resourceVersion"]:
+            raise planner.discover.KubectlError("Operation cannot be fulfilled: the object has been modified")
+        self.put(name, obj)
+        return f"configmap/{name}"
+
+
+class ConfigMapStore(unittest.TestCase):
+    def store(self, api, **kw):
+        return planner.ConfigMapPlanStore("resource-report", "rr-planner", kubectl=api, **kw)
+
+    def test_save_load_and_version_conflict(self):
+        api = FakeConfigMaps()
+        api.put("rr-planner", {"apiVersion": "v1", "kind": "ConfigMap",  # created empty by the chart
+                               "metadata": {"name": "rr-planner", "labels": {"app": "rr"}}})
+        store = self.store(api)
+        self.assertEqual(store.load()["version"], 0)
+        self.assertEqual(store.save(planner.empty_state(), 0)["version"], 1)
+        self.assertEqual(api.calls[-1], "replace")
+        self.assertEqual(store.load()["version"], 1)
+        with self.assertRaises(planner.PlanConflict):
+            store.save(planner.empty_state(), 0)
+        cm = api.objects["rr-planner"]
+        self.assertEqual(cm["metadata"]["labels"], {"app": "rr"})  # Helm's labels survive a save
+        self.assertEqual(sorted(cm["binaryData"]), ["plan.json.gz", "v00001.json.gz"])
+
+    def test_concurrent_write_is_a_conflict(self):
+        # another pod saved between our read and our write: the API server refuses the stale resourceVersion
+        api = FakeConfigMaps()
+        store = self.store(api)
+        store.save(planner.empty_state(), 0)
+        stored, cm = store._read()
+        store.save(planner.empty_state(), 1)
+        with self.assertRaises(planner.PlanConflict) as e:
+            store._write(dict(stored, version=2), json.dumps(stored), cm)
+        self.assertEqual(e.exception.version, 2)
+
+    def test_created_when_missing(self):
+        api = FakeConfigMaps()
+        self.store(api).save(planner.empty_state(), 0)
+        self.assertEqual(api.calls[-1], "create")
+
+    def test_history_is_trimmed(self):
+        api = FakeConfigMaps()
+        store = self.store(api)
+        for v in range(planner.HISTORY_KEEP + 5):
+            store.save(planner.empty_state(), v)
+        keys = sorted(api.objects["rr-planner"]["binaryData"])
+        self.assertEqual(len(keys), planner.HISTORY_KEEP + 1)
+        self.assertEqual(keys[0], "plan.json.gz")
+        self.assertEqual(keys[-1], f"v{planner.HISTORY_KEEP + 5:05d}.json.gz")
+
+    def test_history_is_trimmed_by_size(self):
+        api = FakeConfigMaps()
+        store = self.store(api)
+        store.MAX_BYTES = 1  # every plan is "large": only the current version is kept
+        with self.assertRaises(planner.PlanError):
+            store.save(planner.empty_state(), 0)
+        store.MAX_BYTES = len(planner._gzip(json.dumps(planner.empty_state(), indent=1))) * 3
+        for v in range(4):
+            store.save(planner.empty_state(), v)
+        self.assertLessEqual(len(api.objects["rr-planner"]["binaryData"]), 3)
+
+    def test_plan_file_of_an_older_version_moves_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            planner.PlanStore(d).save(planner.empty_state(), 0)
+            planner.PlanStore(d).save(planner.empty_state(), 1)
+            api = FakeConfigMaps()
+            store = self.store(api, legacy_dir=d)
+            self.assertEqual(store.load()["version"], 2)
+            self.assertEqual(store.save(planner.empty_state(), 2)["version"], 3)
+            os.remove(os.path.join(d, "planner.json"))
+            self.assertEqual(store.load()["version"], 3)  # now read from the ConfigMap
+
+    def test_unreachable_api(self):
+        def broken(*a, **kw):
+            raise planner.discover.KubectlError('configmaps "rr-planner" is forbidden')
+        with self.assertRaises(planner.PlanStoreError):
+            self.store(broken).load()
+
+
 class Evaluate(unittest.TestCase):
     """prod-01 in prod: lose the largest node (4 CPU / 16 GiB), platform reserve 1 CPU / 4 GiB.
     CPU limit = min(10 - 4 - 1, 80 % x (10 - 1)) = min(5, 7.2) = 5; memory = min(40 - 16 - 4, 80 % x 36) = 20."""

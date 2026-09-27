@@ -23,7 +23,8 @@ export into a pull request, change a quota in Rancher, move a namespace, open a 
    served from Rancher's own address. Their JavaScript can call Rancher's API with the user's own session (and
    Rancher's CSRF token). Then Rancher's RBAC decides what the user may do (a project owner can change their own
    Project's namespace quotas, a platform admin any quota), and Rancher's audit log records who did it. The
-   backend keeps no write permissions and stays as in the `read-only` tag.
+   backend gets no write permissions on anything that affects workloads, quotas or Rancher. (It may write
+   its own plan documents: since the `read-only` tag the planners keep their plans in their own ConfigMaps.)
 2. **Preview, then confirm.** Every action shows the change as before → after (quota values, the namespace's
    new Project, the pull request's files) and runs only after an explicit confirmation.
 3. **Say where a change goes.** Git (pull request, reviewed and applied by Terraform) or directly to Rancher.

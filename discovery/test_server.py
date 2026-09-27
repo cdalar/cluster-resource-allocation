@@ -156,6 +156,51 @@ class PlannerServer(unittest.TestCase):
         self.assertEqual(self.req("/api/planner", "PUT", None, {"X-Planner": "1", "Content-Type": "application/json"})[0], 413)
 
 
+class PlannerServerConfigMap(unittest.TestCase):
+    """The planner with its plan in a ConfigMap (fake API), and an unreachable one."""
+
+    def serve(self, kubectl):
+        import test_planner
+        args = server.discover.build_parser().parse_args(["--rancher-local-self"])
+        args.data_dir, args.interval, args.no_collect = "/nonexistent", "30m", True
+        store = server.planner.ConfigMapPlanStore("rr", "rr-planner", kubectl=kubectl)
+        backend = server.PlannerBackend(args, server.Collector(args), inventory_loader=test_planner.inventory,
+                                        store=store)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(backend.collector, backend))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        return f"http://127.0.0.1:{httpd.server_port}"
+
+    def call(self, base, method="GET", body=None):
+        h = {"Content-Type": "application/json", "X-Planner": "1"}
+        req = urllib.request.Request(base + "/api/planner", method=method, headers=h,
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_save_to_configmap(self):
+        import test_planner
+        api = test_planner.FakeConfigMaps()
+        base = self.serve(api)
+        code, view = self.call(base)
+        self.assertEqual(code, 200)
+        code, saved = self.call(base, "PUT", {"version": 0, "plan": view["plan"]})
+        self.assertEqual((code, saved["plan"]["version"]), (200, 1))
+        self.assertIn("plan.json.gz", api.objects["rr-planner"]["binaryData"])
+        self.assertEqual(self.call(base, "PUT", {"version": 0, "plan": view["plan"]})[0], 409)
+
+    def test_unreachable_configmap(self):
+        def forbidden(*a, **kw):
+            raise server.discover.KubectlError('configmaps "rr-planner" is forbidden')
+        base = self.serve(forbidden)
+        code, body = self.call(base)
+        self.assertEqual(code, 502)
+        self.assertIn("forbidden", body["error"])
+
+
 class CapacityServer(unittest.TestCase):
     """Both planners side by side: /planner and /capacity with separate plans."""
 

@@ -1,0 +1,45 @@
+{{- if include "crr.planners" . }}
+{{- $names := list }}
+{{- if dig "enabled" false (.Values.planner | default dict) }}{{ $names = append $names (printf "%s-planner" (include "crr.fullname" .)) }}{{ end }}
+{{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}{{ $names = append $names (printf "%s-capacity" (include "crr.fullname" .)) }}{{ end }}
+{{- range $names }}
+# Plan storage for the planner (no volume needed). Created empty; the planner writes the plan into binaryData.
+# Kept on uninstall so the plans survive a reinstall.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "crr.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+---
+{{- end }}
+# The planners may read and update exactly their own plan ConfigMaps -- nothing else is writable
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "crr.fullname" . }}-plans
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: {{ toJson $names }}
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "crr.fullname" . }}-plans
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "crr.fullname" . }}-plans
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "crr.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

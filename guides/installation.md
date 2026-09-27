@@ -34,7 +34,8 @@ flowchart LR
     U -->|Rancher menu entry| R2
 ```
 
-Everything except the name publisher is read-only against the clusters. Nothing is exposed outside the cluster:
+Everything is read-only against the clusters except the name publisher (one Fleet Bundle) and the planners (their
+own plan ConfigMaps). Nothing is exposed outside the cluster:
 you open the pages through Rancher's proxy with your Rancher login.
 
 ## Step 0. Check the prerequisites
@@ -54,7 +55,6 @@ Per cluster:
 | **metrics-server** | "now" usage snapshot (always) | `kubectl top pods -A \| head` | Included in k3s, RKE2 and AKS; otherwise install it |
 | **Rancher Monitoring** (Prometheus, kube-state-metrics) | P95 usage and request peaks over 7 days | `kubectl -n cattle-monitoring-system get svc rancher-monitoring-prometheus` | Rancher UI → cluster → **Apps → Charts → Monitoring**; or install without history (step 3) |
 | **Image pull** from `ghcr.io/cdalar/cluster-resource-report` or an internal mirror | the pods | — | Step 1 |
-| **A storage class** (Rancher local cluster only) | the planners' saved plans | `kubectl get storageclass` (one marked `(default)`) | Install one (e.g. local-path, Longhorn), or set `persistence.storageClass` |
 
 Rancher: tested with v2.15. The Rancher menu entries need Rancher's `NavLink` CRD, which every Rancher-managed
 cluster has; on other clusters the chart skips them.
@@ -106,14 +106,16 @@ planner:
   enabled: true               # allocation planner (budgets, rates, costs)
 capacityPlanner:
   enabled: false              # capacity planner (CPU / memory only, no money); not in 0.3.1, see below
-persistence:
-  enabled: true               # required by the planners: the plans are stored on this volume
 prometheus:
   enabled: false              # true if Rancher Monitoring runs on the local cluster
 ```
 
-Enable one planner or both. The capacity planner is not in release 0.3.1; until the next release, use it with
-`image.tag: main` (built from the `main` branch).
+Enable one planner or both. Their plans are stored in ConfigMaps in the `resource-report` namespace, so no
+volume or storage class is needed.
+
+> **Release 0.3.1** doesn't have the capacity planner yet and stores plans on a volume: with 0.3.1, also set
+> `persistence.enabled: true` (needs a storage class). Both changes come with the next release; until then they
+> are in the `main` image (`image.tag: main`).
 
 Install:
 
@@ -126,8 +128,9 @@ helm upgrade --install resource-report charts/cluster-resource-report \
 Check:
 
 ```bash
-kubectl -n resource-report get pods,pvc,cronjob
-# pod Running, PVC Bound, CronJob resource-report-cluster-resourc-publish-names (name shortened to 52 characters)
+kubectl -n resource-report get pods,configmap,cronjob
+# pod Running; ConfigMaps resource-report-cluster-resource-report-planner (and -capacity) for the plans;
+# CronJob resource-report-cluster-resourc-publish-names (name shortened to 52 characters)
 kubectl -n fleet-default get bundle rancher-project-names     # appears after the first CronJob run (≤ 10 min)
 ```
 
@@ -237,7 +240,7 @@ oauth2-proxy) is in front.
 | Enough history | Pod log: `prometheus has N days of data (window 7d)` | N reaches the window after that many days of Prometheus data |
 | N+1 | Cluster summary | **Room for projects (N+1)** tile and dashed line in the capacity bar |
 | Planner inventory | Planner, *Clusters* table | Every Rancher cluster with nodes, allocatable and largest node |
-| Planner storage | Planner, **Save plan** | Saved without error; still there after `kubectl -n resource-report rollout restart deploy/resource-report-cluster-resource-report` |
+| Planner storage | Planner, **Save plan** | Saved without error; still there after `kubectl -n resource-report rollout restart deploy/resource-report-cluster-resource-report`; `binaryData` of the planner ConfigMap holds `plan.json.gz` |
 
 ## Upgrade
 
@@ -251,7 +254,10 @@ helm upgrade --install resource-report charts/cluster-resource-report -n resourc
 Prefer the values file to `--reuse-values`: with `--reuse-values`, values added in a newer chart version are not
 filled in from its defaults. With option b of step 1, mirror the new image and update `image.tag` first.
 
-Saved plans are kept across upgrades (they're on the PVC); older plan files are converted when loaded.
+Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
+converted when loaded. Upgrading from 0.3.x, where plans were files on the PVC: keep `persistence.enabled: true`
+for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
+that the PVC is no longer needed for the planners.
 
 ## Uninstall
 
@@ -260,12 +266,12 @@ helm uninstall resource-report -n resource-report
 kubectl delete namespace resource-report
 ```
 
-**On the local cluster this deletes the PVC and so the saved plans.** Export them first (**Export YAML** in the
-planner) or copy the files:
+The plan ConfigMaps are kept (`helm.sh/resource-policy: keep`), so the plans survive `helm uninstall` and a
+reinstall picks them up again. Deleting the namespace deletes them too; back them up first:
 
 ```bash
-kubectl -n resource-report cp <pod>:/data/planner.json planner.json
-kubectl -n resource-report cp <pod>:/data/capacity-plan.json capacity-plan.json
+kubectl -n resource-report get configmap resource-report-cluster-resource-report-planner -o yaml > planner-backup.yaml
+kubectl -n resource-report get configmap resource-report-cluster-resource-report-capacity -o yaml > capacity-backup.yaml
 ```
 
 Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bundle it wrote; delete it with
@@ -284,7 +290,8 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Prometheus queries time out on a large cluster | 7 days at 5-minute steps is heavy | `collection.step: 15m` |
 | No **Resource report** entry in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
 | Chart fails: "publishNames.enabled needs rancher.isLocalCluster=true" | Name publisher enabled on a downstream cluster | Only enable it on the local cluster |
-| Planner page missing (`/planner` 404) | `planner.enabled` not set, or no Rancher inventory | Needs `rancher.isLocalCluster: true` and `persistence.enabled: true` |
-| PVC `Pending` on the local cluster | No default storage class | Set `persistence.storageClass`, or install a provisioner |
+| Planner page missing (`/planner` 404) | `planner.enabled` not set | Set it, with `rancher.isLocalCluster: true` |
+| Planner shows "can't read ConfigMap …" or "not saved: … forbidden" | Plan ConfigMap deleted by hand, or RBAC changed | `helm upgrade` again: it recreates the ConfigMap and the Role |
+| Planner shows version 0 after upgrading from 0.3.x | Old plan file not on the volume any more (persistence was turned off before the first save) | Turn `persistence.enabled` on again for the upgrade (step "Upgrade") |
 | Pod OOMKilled on a large cluster | Many thousands of pods | Raise `resources.limits.memory` |
-| Dashboard empty after a pod restart | No persistence, first collection not finished | Wait for the collection, or set `persistence.enabled: true` |
+| Dashboard empty after a pod restart | No persistence, first collection not finished | Wait for the collection, or set `persistence.enabled: true` (needs a storage class) |

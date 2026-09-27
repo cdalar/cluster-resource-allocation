@@ -11,7 +11,7 @@ capacity.
 
 It is a **planning tool only**. It never changes a cluster or a Rancher quota:
 
-- **Save plan** stores the plan inside the planner itself (on its data volume).
+- **Save plan** stores the plan inside the planner itself (in its own ConfigMap).
 - **Export YAML** produces the allocation files (`allocations/projects/<project>.yaml`).
 - Those files go through the normal pull request, CI validation and Terraform flow
   ([04](../docs/04-technical-design.md#42-allocation-as-code)), which is what actually sets the Rancher Project quotas.
@@ -206,8 +206,8 @@ version 4, saved …").
 - **No silent overwrites.** If someone else saved while you were editing, your save is refused with *the plan was
   changed by someone else*. Your edits stay on screen: note what you changed, reload the page, and apply your
   changes to the newer version.
-- **History.** The last 30 saved versions are kept on the planner's volume
-  (`planner-history/planner-v00004.json`), so an administrator can recover an earlier plan.
+- **History.** The last 30 saved versions are kept next to the plan in its ConfigMap (`v00004.json.gz`), so an
+  administrator can recover an earlier plan (see *Data* below).
 - **Leaving with unsaved changes** triggers the browser's "leave page?" warning.
 - **Invalid input** (negative numbers, text in a number field, a line break in a cost center) is refused with a
   message naming the field.
@@ -325,7 +325,6 @@ and is installed once, on the Rancher local cluster:
 ```bash
 helm upgrade --install resource-report charts/cluster-resource-report -n resource-report --create-namespace \
   --set rancher.isLocalCluster=true \
-  --set persistence.enabled=true \
   --set planner.enabled=true
 ```
 
@@ -334,11 +333,13 @@ helm upgrade --install resource-report charts/cluster-resource-report -n resourc
 | `planner.enabled=true` | Turns the planner on (`/planner`) and adds the *Allocation planner* entry to the local cluster's Rancher menu |
 | `capacityPlanner.enabled=true` | The capacity planner (`/capacity`, *Capacity planner* menu entry); can be used alone or next to the allocation planner |
 | `rancher.isLocalCluster=true` | Lets it read clusters, nodes and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
-| `persistence.enabled=true` | Stores the plans on a volume (`planner.json`, `capacity-plan.json`); without it the chart refuses to install, so a pod restart can't lose the plan |
 
-- **Permissions:** read-only (`get`/`list` on Rancher `projects`, `clusters` and `nodes`). The planner has no permission to
-  change a cluster or a quota.
-- **Data:** the plan is `planner.json` on the volume, with the last 30 versions in `planner-history/`. Back up that
-  volume if the plan matters before it is exported.
+- **Permissions:** read-only on Rancher (`get`/`list` on `projects`, `clusters` and `nodes`). The only thing the
+  planner can write is its own plan ConfigMap; it has no permission to change a cluster or a quota.
+- **Data:** the plan is the ConfigMap `resource-report-cluster-resource-report-planner` (capacity planner:
+  `…-capacity`) in the release namespace, with the last 30 versions; no volume or storage class is needed.
+  It is kept on `helm uninstall`. It is part of any backup of the local cluster (Rancher Backup, Velero), or
+  copy it: `kubectl -n resource-report get configmap <name> -o yaml > plan-backup.yaml`. To read a version:
+  `kubectl -n resource-report get configmap <name> -o jsonpath='{.binaryData.v00004\.json\.gz}' | base64 -d | gunzip`.
 - **Security:** saving requires the page's own request header, so another website can't make a logged-in browser
   change the plan through Rancher's proxy.

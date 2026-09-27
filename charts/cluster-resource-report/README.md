@@ -30,8 +30,9 @@ Each release `vX.Y.Z` publishes both, public on GHCR:
 `chart.yml` runs on version tags: it checks that the tag matches the chart's `version` and `appVersion`, lints,
 runs `helm package` and `helm push` to `oci://ghcr.io/cdalar/charts`, and pulls the chart back as a check. To
 publish the chart of an existing tag again, run it manually (Actions → chart → Run workflow, input `tag`).
-Rancher (2.9 or later) can use the OCI location as a repository: **Apps → Repositories → Create**, target
-*OCI repository*, `oci://ghcr.io/cdalar/charts`.
+Rancher can use it as a repository: **Apps → Repositories → Create**, target *OCI repository*, URL
+`oci://ghcr.io/cdalar/charts/cluster-resource-report` (the chart's own location: GHCR refuses to list the parent
+`oci://ghcr.io/cdalar/charts` without a login, which Rancher reports as *403 Forbidden*). Tested with Rancher 2.15.
 
 ### Image
 

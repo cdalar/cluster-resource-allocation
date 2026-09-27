@@ -53,7 +53,7 @@ Per cluster:
 |---|---|---|---|
 | **metrics-server** | "now" usage snapshot (always) | `kubectl top pods -A \| head` | Included in k3s, RKE2 and AKS; otherwise install it |
 | **Rancher Monitoring** (Prometheus, kube-state-metrics) | P95 usage and request peaks over 7 days | `kubectl -n cattle-monitoring-system get svc rancher-monitoring-prometheus` | Rancher UI → cluster → **Apps → Charts → Monitoring**; or install without history (step 3) |
-| **Image pull** from `ghcr.io/cdalar/cluster-resource-report` or an internal mirror | the pods | — | Step 1 |
+| **Access to `ghcr.io`** (chart and image), or an internal mirror | installing, pulling the image | `helm show chart oci://ghcr.io/cdalar/charts/cluster-resource-report` | Step 1, *Clusters without internet access* |
 
 Rancher: tested with v2.15. The Rancher menu entries need Rancher's `NavLink` CRD, which every Rancher-managed
 cluster has; on other clusters the chart skips them.
@@ -66,51 +66,57 @@ kubectl config get-contexts
 kubectl config use-context <cluster>
 ```
 
-## Step 1. Get the chart and the image
+## Step 1. Choose the chart version and image source
 
-The chart is published with every release as an OCI artifact on GHCR, next to the image (both public):
+Every release is published on GHCR, public, with no login needed:
 
-| | Where | Version |
+| | Location | Version |
 |---|---|---|
-| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | release, e.g. `0.4.1` |
-| Image | `ghcr.io/cdalar/cluster-resource-report` | the chart's `appVersion` (same number) |
+| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | the release, e.g. `0.4.1` |
+| **Image** | `ghcr.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
-Set these once in your shell; the commands below use them:
+Available versions: the [package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)
+or the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the repository.
+
+Set the chart and version once in your shell; every command below uses them:
 
 ```bash
 CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
 VERSION=0.4.1
-helm show chart $CHART --version $VERSION      # check that the chart can be pulled
+
+helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
+helm show values $CHART --version $VERSION     # all values with their defaults
 ```
 
-Without internet access, mirror the chart into your own OCI registry and set `CHART` to it:
+There is no `helm repo add`: OCI charts are installed straight from their `oci://` location.
+
+### Clusters without internet access
+
+Mirror both the chart and the image into your internal registry, then point `CHART` and the values at it:
 
 ```bash
-helm pull $CHART --version $VERSION
+helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.4.1.tgz
 helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
+crane copy ghcr.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
+
 CHART=oci://registry.example.com/platform/charts/cluster-resource-report
 ```
 
-(To use the chart from source instead: `git clone https://github.com/cdalar/cluster-resource-allocation.git`,
-`git checkout v$VERSION`, and `CHART=./charts/cluster-resource-report`; Helm ignores `--version` for a local path.)
-
-The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion>`. Choose one:
-
-**a) Pull from GHCR.** The image is public: clusters with internet access need nothing else.
-
-**b) Mirror to an internal registry** (clusters without internet access, air-gapped):
-
-```bash
-crane copy ghcr.io/cdalar/cluster-resource-report:0.4.1 registry.example.com/platform/cluster-resource-report:0.4.1
-```
-
-and add to the values files below:
+and add to every values file below:
 
 ```yaml
 image:
   repository: registry.example.com/platform/cluster-resource-report
-  tag: "0.4.1"
+imagePullSecrets:            # only if the registry needs a login
+  - name: registry-pull
 ```
+
+The image tag defaults to the chart's `appVersion`, so it follows `VERSION` without being set.
+
+### From source (optional)
+
+For a development build: `git clone https://github.com/cdalar/cluster-resource-allocation.git`,
+`git checkout v$VERSION` and `CHART=./charts/cluster-resource-report`; Helm ignores `--version` for a local path.
 
 ## Step 2. Install on the Rancher local cluster
 
@@ -198,6 +204,22 @@ over the window. Install Rancher Monitoring later and set `prometheus.enabled: t
 (reached through the API server proxy), or `prometheus.url` plus `prometheus.tokenSecret` for a direct URL.
 It must have the cAdvisor metrics and kube-state-metrics.
 
+### Alternatively: install from the Rancher UI
+
+Instead of `helm` on the command line, the chart can be installed as a Rancher app. Do this per cluster, since
+Rancher repositories belong to one cluster:
+
+1. Cluster → **Apps → Repositories → Create**: name `cluster-resource-report`, target **OCI repository**,
+   URL `oci://ghcr.io/cdalar/charts/cluster-resource-report` (the chart's own location; the parent
+   `oci://ghcr.io/cdalar/charts` can't be listed anonymously and fails with *403 Forbidden*). No authentication.
+2. **Apps → Charts**, find **cluster-resource-report**, **Install**.
+3. Namespace `resource-report`, name `resource-report` (the menu links and the name publisher expect these),
+   version `0.4.1`.
+4. In the YAML step, paste the content of `values-local.yaml` or `values-downstream.yaml`, then **Install**.
+
+Upgrades then show up under **Apps → Installed Apps** when a new version is published (after the repository
+refreshes, or **Refresh** on the repository).
+
 ## Step 4. Clusters outside Rancher (optional)
 
 For a cluster that Rancher doesn't manage (e.g. a standalone AKS), there are no Rancher Projects and no Fleet.
@@ -260,19 +282,23 @@ the only ways in.
 
 ## Upgrade
 
-Run the same `helm upgrade --install` with the new version and the same values file:
+Run the same `helm upgrade --install` with the new version and the same values file, on the local cluster first
+and then on the downstream clusters:
 
 ```bash
 VERSION=<new-version>
-helm upgrade --install resource-report $CHART --version $VERSION -n resource-report -f values-downstream.yaml
+helm upgrade --install resource-report $CHART --version $VERSION -n resource-report -f values-local.yaml       # local
+helm upgrade --install resource-report $CHART --version $VERSION -n resource-report -f values-downstream.yaml  # each downstream
+helm -n resource-report list                                     # CHART column shows cluster-resource-report-<new-version>
 ```
 
 Prefer the values file to `--reuse-values`: with `--reuse-values`, values added in a newer chart version are not
-filled in from its defaults. With option b of step 1, mirror the new chart and image and update `image.tag` first.
+filled in from their defaults. Without internet access, mirror the new chart and image first (step 1). Installed
+from the Rancher UI: **Apps → Installed Apps → resource-report → Upgrade**.
 
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
-converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep `persistence.enabled: true`
-for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
+converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep
+`persistence.enabled: true` for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
 that the PVC is no longer needed for the planners.
 
 ## Uninstall
@@ -297,7 +323,10 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the internal mirror lacks the tag | Mirror the image (step 1b) and set `image.repository` / `image.tag`; with an authenticated registry add `imagePullSecrets` |
+| `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
+| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.4.1`); see the package page (step 1) |
+| Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the mirror lacks the tag | Mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
+| Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
 | Project IDs (`p-xxxxx`) instead of names on a downstream dashboard | ConfigMap not there yet, or `rancher.namesConfigMap.enabled` not set | Check `kubectl -n resource-report get configmap rancher-project-names`; on the local cluster check the CronJob's last job and the Bundle's state; names appear after the next collection |
 | ConfigMap delivered to the wrong namespace | Downstream release not in `resource-report` | Install in `resource-report`, or set `rancher.publishNames.targetNamespace` and `rancher.namesConfigMap.namespace` to match |
 | Bundle shown as "Modified" in Continuous Delivery | Something changed the ConfigMap on the downstream cluster | Don't edit it by hand; the next publish restores it |

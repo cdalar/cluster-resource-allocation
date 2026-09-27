@@ -7,7 +7,7 @@ the [chart README](../charts/cluster-resource-report/README.md); for using the p
 
 ## What gets installed where
 
-One Helm chart, `charts/cluster-resource-report`, installed once per cluster with different values:
+One Helm chart, `cluster-resource-report`, installed once per cluster with different values:
 
 | Cluster | Role | What runs there |
 |---|---|---|
@@ -45,8 +45,7 @@ On your workstation:
 | Tool | Version | Check |
 |---|---|---|
 | `kubectl` | any recent | `kubectl version --client` |
-| `helm` | 3.x | `helm version` |
-| `git` | any | `git --version` |
+| `helm` | 3.8 or later (OCI charts) | `helm version` |
 
 Per cluster:
 
@@ -69,11 +68,31 @@ kubectl config use-context <cluster>
 
 ## Step 1. Get the chart and the image
 
+The chart is published with every release as an OCI artifact on GHCR, next to the image (both public):
+
+| | Where | Version |
+|---|---|---|
+| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | release, e.g. `0.4.1` |
+| Image | `ghcr.io/cdalar/cluster-resource-report` | the chart's `appVersion` (same number) |
+
+Set these once in your shell; the commands below use them:
+
 ```bash
-git clone https://github.com/cdalar/cluster-resource-allocation.git
-cd cluster-resource-allocation
-git checkout v0.4.1        # a release tag; its image is ghcr.io/cdalar/cluster-resource-report:0.4.1
+CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
+VERSION=0.4.1
+helm show chart $CHART --version $VERSION      # check that the chart can be pulled
 ```
+
+Without internet access, mirror the chart into your own OCI registry and set `CHART` to it:
+
+```bash
+helm pull $CHART --version $VERSION
+helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
+CHART=oci://registry.example.com/platform/charts/cluster-resource-report
+```
+
+(To use the chart from source instead: `git clone https://github.com/cdalar/cluster-resource-allocation.git`,
+`git checkout v$VERSION`, and `CHART=./charts/cluster-resource-report`; Helm ignores `--version` for a local path.)
 
 The chart's default image is `ghcr.io/cdalar/cluster-resource-report:<appVersion>`. Choose one:
 
@@ -117,7 +136,7 @@ Install:
 
 ```bash
 kubectl config use-context <rancher-local>
-helm upgrade --install resource-report charts/cluster-resource-report \
+helm upgrade --install resource-report $CHART --version $VERSION \
   -n resource-report --create-namespace -f values-local.yaml
 ```
 
@@ -158,7 +177,7 @@ delivers the ConfigMap to the namespace `resource-report` by default):
 ```bash
 for ctx in onprem-prod-01 onprem-test-01 aks-prod; do
   kubectl config use-context "$ctx"
-  helm upgrade --install resource-report charts/cluster-resource-report \
+  helm upgrade --install resource-report $CHART --version $VERSION \
     -n resource-report --create-namespace -f values-downstream.yaml
 done
 ```
@@ -193,7 +212,7 @@ prometheus:
 ```
 
 ```bash
-helm upgrade --install resource-report charts/cluster-resource-report \
+helm upgrade --install resource-report $CHART --version $VERSION \
   -n resource-report --create-namespace -f values-standalone.yaml
 ```
 
@@ -241,15 +260,15 @@ the only ways in.
 
 ## Upgrade
 
-Check out the new release tag and run the same `helm upgrade --install` with the same values file:
+Run the same `helm upgrade --install` with the new version and the same values file:
 
 ```bash
-git fetch --tags && git checkout v<new-version>
-helm upgrade --install resource-report charts/cluster-resource-report -n resource-report -f values-downstream.yaml
+VERSION=<new-version>
+helm upgrade --install resource-report $CHART --version $VERSION -n resource-report -f values-downstream.yaml
 ```
 
 Prefer the values file to `--reuse-values`: with `--reuse-values`, values added in a newer chart version are not
-filled in from its defaults. With option b of step 1, mirror the new image and update `image.tag` first.
+filled in from its defaults. With option b of step 1, mirror the new chart and image and update `image.tag` first.
 
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
 converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep `persistence.enabled: true`

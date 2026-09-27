@@ -18,12 +18,27 @@ The page is self-contained, with no CDN or external assets, so it works in air-g
 Step-by-step installation across the Rancher local and downstream clusters: [guides/installation.md](../../guides/installation.md).
 This README is the reference for the image, values, permissions and endpoints.
 
-## 1. Image
+## 1. Chart and image
+
+Each release `vX.Y.Z` publishes both, public on GHCR:
+
+| | Where | Built by |
+|---|---|---|
+| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report`, version `X.Y.Z` | `.github/workflows/chart.yml` |
+| Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` (the chart's default) | `.github/workflows/image.yml` |
+
+`chart.yml` runs on version tags: it checks that the tag matches the chart's `version` and `appVersion`, lints,
+runs `helm package` and `helm push` to `oci://ghcr.io/cdalar/charts`, and pulls the chart back as a check. To
+publish the chart of an existing tag again, run it manually (Actions → chart → Run workflow, input `tag`).
+Rancher (2.9 or later) can use the OCI location as a repository: **Apps → Repositories → Create**, target
+*OCI repository*, `oci://ghcr.io/cdalar/charts`.
+
+### Image
 
 The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the discovery code, built for
 `linux/amd64` and `linux/arm64`.
 
-### Built by CI
+#### Built by CI
 
 `.github/workflows/image.yml` runs the unit tests and `helm lint`, then builds the image and pushes it to
 `ghcr.io/cdalar/cluster-resource-report`:
@@ -34,8 +49,8 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 | Git tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest` |
 | Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
 
-To release, set `appVersion` (and `version`) in `Chart.yaml`, push that commit, then tag it:
-`git tag v0.4.1 && git push origin v0.4.1`. The workflow fails if the tag and `appVersion` differ. The chart's
+To release, set `version` and `appVersion` in `Chart.yaml` to the same number, push that commit, then tag it:
+`git tag v0.4.1 && git push origin v0.4.1`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
 default image tag is its `appVersion`.
 
 The repository and the GHCR package are public, so clusters with internet access pull the image without a
@@ -45,7 +60,7 @@ Clusters without internet access (most on-prem clusters) pull from an internal r
 mirror the image (e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.4.1 registry.example.com/platform/cluster-resource-report:0.4.1`)
 and set `image.repository`.
 
-### Build locally
+#### Build locally
 
 ```bash
 cd discovery
@@ -57,14 +72,15 @@ docker push registry.example.com/platform/cluster-resource-report:0.4.1
 ## 2. Install
 
 ```bash
-helm upgrade --install resource-report charts/cluster-resource-report \
+helm upgrade --install resource-report oci://ghcr.io/cdalar/charts/cluster-resource-report --version 0.4.1 \
   -n resource-report --create-namespace \
   --set image.repository=registry.example.com/platform/cluster-resource-report \
   --set image.tag=0.4.1          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
 ```
 
-On a Rancher-managed cluster you can also install it from the Rancher UI (Apps → Charts, from a Git or Helm repo),
-or roll it out to all clusters with Fleet.
+From a checkout, use `charts/cluster-resource-report` instead of the `oci://` location. On a Rancher-managed
+cluster you can also install it from the Rancher UI (Apps → Charts, after adding the OCI repository above), or
+roll it out to all clusters with Fleet.
 
 ### Show Rancher Project names instead of IDs
 

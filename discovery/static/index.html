@@ -216,7 +216,10 @@ const state = { data: null, status: null, cluster: null, cats: new Set(["tenant"
                 sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1] } };
 
 // ---------- formatting ----------
-const nf = (d) => new Intl.NumberFormat(undefined, { maximumFractionDigits: d, minimumFractionDigits: 0 });
+// Fixed format, not the browser locale: "." as decimal point and a narrow space between thousands, so 5.574 cores
+// never reads as 5,574 (a Turkish or German browser writes 5.574 as "5,574", an English one 5574 as "5,574").
+const nf = (d) => { const f = new Intl.NumberFormat("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+  return { format: (n) => f.format(n).replace(/,/g, "\u202f") }; };
 const f0 = nf(0), f1 = nf(1), f2 = nf(2);
 function num(v, digits) {
   if (v === "" || v === null || v === undefined) return "–";

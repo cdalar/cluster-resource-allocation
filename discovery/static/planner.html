@@ -193,8 +193,11 @@ function h(tag, attrs, ...children) {
   for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
   return el;
 }
-const fmt = (n, d = 1) => n == null || Number.isNaN(n) ? "—" : Number(n).toLocaleString(undefined, {maximumFractionDigits: d});
-const money = (n) => n == null ? "—" : Number(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + " " + (plan.settings.currency || "");
+// Fixed format, not the browser locale: "." as decimal point and a narrow space between thousands, so 5.574 cores
+// never reads as 5,574 (a Turkish or German browser writes 5.574 as "5,574", an English one 5574 as "5,574").
+const num_ = (n, min, max) => Number(n).toLocaleString("en-US", {minimumFractionDigits: min, maximumFractionDigits: max}).replace(/,/g, "\u202f");
+const fmt = (n, d = 1) => n == null || Number.isNaN(n) ? "—" : num_(n, 0, d);
+const money = (n) => n == null ? "—" : num_(n, 2, 2) + " " + (plan.settings.currency || "");
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
 
@@ -377,8 +380,8 @@ function renderReference() {
         h("p", {}, ref.onprem.method),
         h("div", {class: "table-wrap"}, h("table", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Cost per node and month (assumption)"), h("th", {}, cur))),
-          h("tbody", {}, ref.onprem.items.map(([label, v]) => h("tr", {}, h("td", {}, label), h("td", {}, v.toLocaleString()))),
-            h("tr", {}, h("td", {}, h("b", {}, "Total")), h("td", {}, h("b", {}, ref.onprem.total.toLocaleString())))))),
+          h("tbody", {}, ref.onprem.items.map(([label, v]) => h("tr", {}, h("td", {}, label), h("td", {}, fmt(v, 2)))),
+            h("tr", {}, h("td", {}, h("b", {}, "Total")), h("td", {}, h("b", {}, fmt(ref.onprem.total, 2))))))),
         h("p", {}, `Sold as quota: ${ref.onprem.capacity}; ${ref.onprem.split}.`),
         h("div", {class: "table-wrap"}, h("table", {},
           h("thead", {}, h("tr", {}, h("th", {}, "Result"), h("th", {}, "per vCPU / per GiB"), h("th", {}))),

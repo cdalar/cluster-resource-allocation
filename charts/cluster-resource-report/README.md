@@ -281,7 +281,7 @@ ConfigMaps.
 | `POST /api/refresh` | Trigger a collection |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/healthz` | Liveness and readiness |
-| `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml` | Allocation planner, with `planner.enabled` |
-| `/capacity`, `/api/capacity` (`GET`, `PUT`), `/api/capacity/export.yaml` | Capacity planner, with `capacityPlanner.enabled` |
+| `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml`, `/api/planner/history[/<n>]` | Allocation planner, with `planner.enabled` |
+| `/capacity`, `/api/capacity` (`GET`, `PUT`), `/api/capacity/export.yaml`, `/api/capacity/history[/<n>]` | Capacity planner, with `capacityPlanner.enabled` |
 
 All links in the page are relative, so it also works behind path-prefix proxies such as Rancher's.

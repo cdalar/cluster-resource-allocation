@@ -104,6 +104,10 @@ details summary { cursor: pointer; }
 #whatif ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
 .status { font-size: 13px; color: var(--text-secondary); }
 .status.error { color: var(--status-critical); }
+.banner.preview { border-color: var(--series-1); }
+.banner .actions { margin-top: 8px; }
+#history-list td.l { white-space: normal; min-width: 200px; }
+#history-list tr.current td { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -118,17 +122,26 @@ details summary { cursor: pointer; }
       <span class="status" id="status" role="status"></span>
       <a class="button" href="./">Dashboard</a>
       <a class="button" href="api/planner/export.yaml" id="export">Export YAML</a>
+      <button type="button" id="history-toggle" aria-expanded="false" aria-controls="history">History</button>
       <button type="button" class="primary" id="save" disabled>Save plan</button>
     </div>
   </header>
 
   <div class="banner" id="notice">
-    <b>Planning only.</b> Nothing here changes a cluster: saving stores the plan in this dashboard's data volume,
+    <b>Planning only.</b> Nothing here changes a cluster: saving stores the plan in the planner's own ConfigMap,
     and <i>Export YAML</i> produces the allocation files (<code>allocations/projects/&lt;project&gt;.yaml</code>)
     that go through the usual pull request and Terraform flow.
     <span class="cap-text">This is the <b>capacity planner</b>: no money, only CPU and memory —
     each project gets an envelope (its total CPU and memory across all clusters), split into quota per cluster.</span>
   </div>
+  <div class="card" id="history" hidden>
+    <div class="card-head"><h2>Saved versions</h2><span class="sub">Every save keeps a copy of the whole plan (the last 30, fewer for large plans). <i>Preview</i> shows a version with today's clusters; restoring saves it again as a new version, so nothing is overwritten. Versions have no author: the planner doesn't know who is logged in to Rancher.</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Version</th><th class="l">Saved</th><th>Projects planned</th><th>Planned CPU / GiB</th><th class="money">Budgets / month</th><th class="l">Changes against the version before</th><th></th></tr></thead>
+      <tbody id="history-list"></tbody>
+    </table></div>
+  </div>
+  <div class="banner preview" id="preview" hidden></div>
   <div class="banner" id="issues" hidden></div>
   <div class="tiles" id="tiles"></div>
 
@@ -226,6 +239,7 @@ const BUILTIN = ["System", "Default"];
 let data = null;         // {plan, inventory, evaluation} as last loaded/saved
 let plan = null;         // working copy being edited
 let dirty = false;
+let preview = null;      // {version, updated_at} while an earlier version is shown instead of the current plan
 // Two planners share this page: /planner (budgets and unit rates) and /capacity (CPU / memory envelopes, no money).
 const API = /\/capacity\/?$/.test(location.pathname) ? "api/capacity" : "api/planner";
 let CAP = false;
@@ -252,7 +266,7 @@ const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0;
 const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
 
 function setStatus(text, error) { const s = $("status"); s.textContent = text; s.classList.toggle("error", !!error); }
-function markDirty() { dirty = true; $("save").disabled = false; setStatus("Unsaved changes"); recompute(); }
+function markDirty() { dirty = true; $("save").disabled = false; setStatus(preview ? "Changed — restore to save it" : "Unsaved changes"); recompute(); }
 window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
@@ -281,31 +295,115 @@ function applyMode() {
   }
 }
 
+const savedAt = (p) => new Date(p.updated_at).toLocaleString();
+
 function apply(body) {
   data = body;
   applyMode();
-  plan = JSON.parse(JSON.stringify(body.plan));
+  show(body.plan, null);
+}
+
+// Shows the current plan (old = null) or an earlier version from the history (old = that version's plan).
+function show(shown, old) {
+  plan = JSON.parse(JSON.stringify(shown));
   plan.clusters = plan.clusters || {};
   plan.projects = plan.projects || {};
+  preview = old && {version: old.version, updated_at: old.updated_at};
   dirty = false;
   $("save").disabled = true;
-  const v = plan.version || 0;
-  $("meta").textContent = v ? `Plan version ${v}, saved ${new Date(plan.updated_at).toLocaleString()}` : "No plan saved yet";
-  $("version").textContent = versionText(body.versions);
+  $("save").hidden = $("export").hidden = !!preview;
+  const v = data.plan.version || 0;
+  const restored = (p) => p.restored_from ? ` (restored from version ${p.restored_from})` : "";
+  $("meta").textContent = preview ? `Previewing version ${preview.version}, saved ${savedAt(old)}${restored(old)} — the current plan is version ${v}`
+    : v ? `Plan version ${v}, saved ${savedAt(data.plan)}${restored(data.plan)}` : "No plan saved yet";
+  renderPreview();
+  $("version").textContent = versionText(data.versions);
   render();
+  if (!$("history").hidden) loadHistory();
+}
+
+async function put(body) {
+  const r = await fetch(API, {method: "PUT", headers: {"Content-Type": "application/json", "X-Planner": "1"}, body: JSON.stringify(body)});
+  return [r, await r.json().catch(() => ({}))];
 }
 
 async function save() {
   $("save").disabled = true;
   setStatus("Saving…");
-  const r = await fetch(API, {
-    method: "PUT", headers: {"Content-Type": "application/json", "X-Planner": "1"},
-    body: JSON.stringify({version: data.plan.version || 0, plan}),
-  });
-  const body = await r.json().catch(() => ({}));
+  const [r, body] = await put({version: data.plan.version || 0, plan});
   if (r.ok) { apply(body); setStatus("Saved"); return; }
   $("save").disabled = false;
   setStatus(r.status === 409 ? body.error + " — your edits are still here; copy what you need, then reload." : (body.error || `Saving failed (${r.status})`), true);
+}
+
+// ---- history: list, preview and restore earlier versions ----
+async function loadHistory() {
+  const r = await fetch(`${API}/history`, {cache: "no-store"});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { $("history-list").replaceChildren(h("tr", {}, h("td", {colspan: 7, class: "empty"}, body.error || `Loading the history failed (${r.status})`))); return; }
+  const list = (names) => names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
+  const changes = (v) => {
+    const parts = [];
+    if (v.restored_from) parts.push(`restored from version ${v.restored_from}`);
+    if (!v.changes) return parts.length ? parts.join("; ") : h("span", {class: "muted"}, "oldest kept version");
+    if (v.changes.projects.length) parts.push(`${v.changes.projects.length === 1 ? "project" : "projects"} ${list(v.changes.projects)}`);
+    if (v.changes.clusters) parts.push("cluster settings");
+    if (v.changes.settings) parts.push(CAP ? "rules" : "rates and rules");
+    return parts.length ? parts.join("; ") : h("span", {class: "muted"}, "no changes");
+  };
+  $("history-list").replaceChildren(...(body.versions.length ? body.versions.map((v) => {
+    const current = v.version === body.current, shown = preview ? preview.version === v.version : current;
+    return h("tr", {class: current ? "current" : null},
+      h("td", {}, v.version),
+      h("td", {class: "l"}, v.updated_at ? new Date(v.updated_at).toLocaleString() : "—", current && h("span", {class: "muted"}, " (current)")),
+      h("td", {}, v.projects), h("td", {}, pair(v.cpu, v.memory_gib)),
+      h("td", {class: "money"}, v.budget != null ? money(v.budget) : "—"),
+      h("td", {class: "l"}, changes(v)),
+      h("td", {}, shown ? h("span", {class: "muted"}, "shown")
+        : current ? h("button", {type: "button", class: "small", onclick: backToCurrent}, "Show")
+        : h("button", {type: "button", class: "small", onclick: () => openVersion(v.version)}, "Preview")));
+  }) : [h("tr", {}, h("td", {colspan: 7, class: "empty"}, "No saved versions yet"))]));
+}
+
+async function openVersion(n) {
+  if (dirty && !confirm("Discard your unsaved changes and preview version " + n + "?")) return;
+  setStatus(`Loading version ${n}…`);
+  const r = await fetch(`${API}/history/${n}`, {cache: "no-store"});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { setStatus(body.error || `Loading version ${n} failed (${r.status})`, true); return; }
+  show(body.plan, body.plan);
+  setStatus("");
+  window.scrollTo({top: 0});
+}
+
+function backToCurrent() {
+  if (dirty && !confirm("Discard your changes to this preview?")) return;
+  show(data.plan, null);
+  setStatus("");
+}
+
+function renderPreview() {
+  const box = $("preview");
+  box.hidden = !preview;
+  if (!preview) { box.replaceChildren(); return; }
+  const next = (data.plan.version || 0) + 1;
+  box.replaceChildren(
+    h("b", {}, `Previewing version ${preview.version}`), ` from ${savedAt(preview)}. `,
+    `The checks below compare it with today's clusters. Restoring saves it as version ${next}; the current version ${data.plan.version} stays in the history. Changes you make here are restored with it.`,
+    h("div", {class: "actions"},
+      h("button", {type: "button", class: "primary", id: "restore", onclick: restore}, `Restore version ${preview.version}`),
+      h("button", {type: "button", onclick: backToCurrent}, "Back to the current plan")));
+}
+
+async function restore() {
+  const from = preview.version;
+  if (!confirm(`Save version ${from} as the new current plan (version ${(data.plan.version || 0) + 1})?`)) return;
+  $("restore").disabled = true;
+  setStatus("Restoring…");
+  const [r, body] = await put({version: data.plan.version || 0, plan, restored_from: from});
+  if (r.ok) { apply(body); setStatus(`Version ${from} restored as version ${body.plan.version}`); return; }
+  $("restore").disabled = false;
+  setStatus(r.status === 409 ? `${body.error} — someone saved in between; go back to the current plan and look at the history again.` : (body.error || `Restoring failed (${r.status})`), true);
 }
 
 // ---- model helpers (mirror planner.evaluate for live feedback; the server re-checks on save) ----
@@ -851,6 +949,12 @@ function initPanels() {
 initPanels();
 
 $("save").onclick = save;
+$("history-toggle").onclick = () => {
+  const open = $("history").hidden;
+  $("history").hidden = !open;
+  $("history-toggle").setAttribute("aria-expanded", String(open));
+  if (open) loadHistory();
+};
 $("show-builtin").onchange = () => { renderProjects(); recompute(); };
 $("export").onclick = (e) => { if (dirty && !confirm("The export uses the last saved plan. Export without your unsaved changes?")) e.preventDefault(); };
 load().catch((e) => setStatus(`Loading failed: ${e}`, true));

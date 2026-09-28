@@ -367,10 +367,13 @@ class PlanStore:
             discover.log(f"planner: stored plan doesn't validate ({e}); showing it unnormalised")
             return stored
         plan["version"], plan["updated_at"] = stored.get("version", 0), stored.get("updated_at")
+        if stored.get("restored_from"):
+            plan["restored_from"] = stored["restored_from"]
         return plan
 
-    def save(self, raw, expected_version):
-        """Validate and write raw if the stored version is still expected_version; returns the saved plan."""
+    def save(self, raw, expected_version, restored_from=None):
+        """Validate and write raw if the stored version is still expected_version; returns the saved plan.
+        restored_from: the earlier version raw was taken from (a restore from the history), shown in the history."""
         stored, token = self._read()
         current = self._normalise(stored)
         if expected_version != current.get("version", 0):
@@ -378,8 +381,61 @@ class PlanStore:
         plan = validate_state(raw, self.mode)
         plan["version"] = current.get("version", 0) + 1
         plan["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if restored_from is not None:
+            if not isinstance(restored_from, int) or isinstance(restored_from, bool) or \
+                    not 0 < restored_from < plan["version"]:
+                raise PlanError("restored_from must be an earlier version number")
+            plan["restored_from"] = restored_from
         self._write(plan, json.dumps(plan, indent=1, sort_keys=True), token)
         return plan
+
+    def _stored_versions(self):
+        """{version: stored plan as JSON text} for the versions kept in the history (the current one included)."""
+        hist, out = os.path.join(self.data_dir, self.history_dir), {}
+        pattern = re.compile(rf"^{re.escape(self.prefix)}-v(\d+)\.json$")
+        try:
+            names = os.listdir(hist)
+        except OSError:
+            return out
+        for name in names:
+            m = pattern.match(name)
+            if m:
+                try:
+                    with open(os.path.join(hist, name)) as f:
+                        out[int(m.group(1))] = f.read()
+                except OSError as e:
+                    discover.log(f"planner: can't read {name}: {e}")
+        return out
+
+    def _parsed_versions(self):
+        out = {}
+        for v, text in self._stored_versions().items():
+            try:
+                out[v] = self._normalise(json.loads(text))
+            except (ValueError, TypeError) as e:
+                discover.log(f"planner: history version {v} is unreadable: {e}")
+        return out
+
+    def history(self):
+        """Summaries of the stored versions, newest first, each with what changed against the version before."""
+        plans = self._parsed_versions()
+        out, previous = [], None
+        for v in sorted(plans):
+            entry = summarize(plans[v], self.mode)
+            entry["version"], entry["updated_at"] = v, plans[v].get("updated_at")
+            if plans[v].get("restored_from"):
+                entry["restored_from"] = plans[v]["restored_from"]
+            entry["changes"] = None if previous is None or previous[0] != v - 1 else changes(previous[1], plans[v])
+            out.append(entry)
+            previous = (v, plans[v])
+        return out[::-1]
+
+    def version(self, n):
+        """The stored plan of version n, normalised; PlanNotFound if it is no longer kept."""
+        text = self._stored_versions().get(n)
+        if text is None:
+            raise PlanNotFound(n)
+        return self._normalise(json.loads(text))
 
     def _write(self, plan, data, token):
         os.makedirs(self.data_dir, exist_ok=True)
@@ -443,6 +499,20 @@ class ConfigMapPlanStore(PlanStore):
                 return stored, cm
         return None, cm
 
+    def _stored_versions(self):
+        cm = self._get()
+        out = {}
+        for k, blob in ((cm or {}).get("binaryData") or {}).items():
+            m = self._HIST_RE.match(k)
+            if m:
+                try:
+                    out[int(m.group(1))] = _gunzip(blob)
+                except (OSError, ValueError, EOFError) as e:
+                    discover.log(f"planner: history entry {k} is unreadable: {e}")
+        if not out and self.legacy_dir:  # history of an older version, not yet moved to the ConfigMap
+            out = super()._stored_versions()
+        return out
+
     def _write(self, plan, data, cm):
         blob = _gzip(data)
         if len(blob) > self.MAX_BYTES:
@@ -483,6 +553,49 @@ def _gunzip(b64):
 
 class PlanStoreError(Exception):
     """The plan's storage (the ConfigMap) can't be reached."""
+
+
+class PlanNotFound(Exception):
+    def __init__(self, version):
+        super().__init__(f"version {version} is not in the history (only the last {HISTORY_KEEP} are kept)")
+        self.version = version
+
+
+def summarize(plan, mode="budget"):
+    """Totals of a plan for the history list: projects with quota, Σ CPU / memory quota (and Σ budgets)."""
+    cpu = mem = 0.0
+    planned = 0
+    for p in (plan.get("projects") or {}).values():
+        allocs = (p.get("allocations") or {}).values()
+        if any(a.get("cpu") or a.get("memory_gib") for a in allocs):
+            planned += 1
+        cpu += sum(a.get("cpu") or 0 for a in allocs)
+        mem += sum(a.get("memory_gib") or 0 for a in allocs)
+    out = {"projects": planned, "cpu": round(cpu, 3), "memory_gib": round(mem, 3)}
+    if mode == "budget":
+        out["budget"] = round(sum(p.get("monthly_budget") or 0 for p in (plan.get("projects") or {}).values()), 2)
+    return out
+
+
+def changes(before, after):
+    """What changed between two versions: {"projects": [names], "clusters": bool, "settings": bool}."""
+    # the page adds a row for every project and cluster it shows; rows left without values are no change
+    def blank(v):
+        return v in (None, "", []) or (isinstance(v, dict) and all(blank(x) for x in v.values()))
+
+    def project(p):
+        p = dict(p or {})
+        p["allocations"] = {c: x for c, x in (p.get("allocations") or {}).items()
+                            if x.get("cpu") or x.get("memory_gib")}
+        return {k: v for k, v in p.items() if not blank(v)}
+
+    def clusters(plan):
+        return {c: x for c, x in (plan.get("clusters") or {}).items() if not blank(x)}
+
+    b, a = before.get("projects") or {}, after.get("projects") or {}
+    names = sorted(n for n in set(b) | set(a) if project(b.get(n)) != project(a.get(n)))
+    return {"projects": names, "clusters": clusters(before) != clusters(after),
+            "settings": before.get("settings") != after.get("settings")}
 
 
 class PlanConflict(Exception):

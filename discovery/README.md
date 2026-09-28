@@ -168,13 +168,19 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
   fewest nodes of a given size to add (each adds allocatable, may become the largest node for N+1, and adds its
   platform DaemonSets to the reserve), and their Rancher licence cost (`settings.license`: per node or per vCPU
   and year, saved with the plan).
+- **History:** `GET /api/planner/history` lists the stored versions, newest first, with their time, totals
+  (projects with quota, Σ CPU / memory, Σ budgets) and what changed against the version before (projects,
+  cluster settings, rates and rules); `GET /api/planner/history/<n>` returns one (404 once trimmed). The page
+  previews a version and restores it with a normal `PUT` plus `"restored_from": <n>`: the old content becomes a
+  new version, the version check applies as for any save, and the history shows the restore. No author is
+  stored: the planner doesn't know the Rancher user behind a request.
 - **Export:** `/api/planner/export.yaml`, one document per project in the allocation-file format of docs/04, with
   `limits.memory` = requests × the environment's factor.
 
 Apart from its own plan ConfigMap it never writes to a cluster; applying stays with the Git / Terraform flow.
 
 `server.py --capacity-planner` adds the same planner without money at `/capacity` (`GET|PUT /api/capacity`,
-`/api/capacity/export.yaml`): no platforms, rates, budgets or costs; each project has an optional CPU / memory
+`/api/capacity/export.yaml`, `/api/capacity/history[/<n>]`): no platforms, rates, budgets or costs; each project has an optional CPU / memory
 envelope checked against its quota summed over all clusters. Its plan is the ConfigMap `PREFIX-capacity` (or `<data-dir>/capacity-plan.json`)
 (history in `capacity-history/`); both planners share `planner.py` (`mode="budget"` / `"capacity"`).
 

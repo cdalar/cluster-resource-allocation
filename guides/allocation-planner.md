@@ -46,7 +46,7 @@ not in the plan.
 
 | Part | What it shows or does |
 | --- | --- |
-| Header | Plan version and when it was last saved; buttons **Dashboard**, **Export YAML** and **Save plan** (enabled once you have unsaved changes) |
+| Header | Plan version and when it was last saved; buttons **Dashboard**, **Export YAML**, **History** (earlier versions, see [Saving and versions](#saving-and-versions)) and **Save plan** (enabled once you have unsaved changes) |
 | Planning only notice | Reminder that nothing is applied to any cluster |
 | Issues | Everything in the plan that breaks a rule, or "No issues" when every budget and every cluster limit fits |
 | Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over their limit |
@@ -215,11 +215,35 @@ version 4, saved …").
 - **No silent overwrites.** If someone else saved while you were editing, your save is refused with *the plan was
   changed by someone else*. Your edits stay on screen: note what you changed, reload the page, and apply your
   changes to the newer version.
-- **History.** The last 30 saved versions are kept next to the plan in its ConfigMap (`v00004.json.gz`), so an
-  administrator can recover an earlier plan (see *Data* below).
+- **History.** The last 30 saved versions are kept next to the plan in its ConfigMap (fewer if the plan is large, to
+  stay below the ConfigMap size limit). See *Earlier versions* below.
 - **Leaving with unsaved changes** triggers the browser's "leave page?" warning.
 - **Invalid input** (negative numbers, text in a number field, a line break in a cost center) is refused with a
   message naming the field.
+
+### Earlier versions
+
+Click **History** to open the list of saved versions, newest first:
+
+| Column | What it shows |
+| --- | --- |
+| Version, Saved | The version number and when it was saved; the current one is marked *(current)* |
+| Projects planned, Planned CPU / GiB | How many projects have quota, and the quota summed over all projects and clusters |
+| Budgets / month | The sum of the project budgets (allocation planner only) |
+| Changes against the version before | The projects whose budget, envelope, owners or quota changed, and whether cluster settings or rates and rules changed; *restored from version 2* for a restore |
+
+Click **Preview** on a row to show that version on the page. The header says *Previewing version 2*, and the checks
+and tiles compare it with **today's** clusters in Rancher, so a version that fitted when it was saved may show issues
+now. **Save plan** and **Export YAML** are hidden while you preview.
+
+- **Restore version 2** saves that version again as a new version (for example version 8 when the current one is
+  7). Nothing is overwritten: version 7 stays in the history, and the restore shows up as *restored from version 2*.
+  A restore is refused like any other save if someone saved in the meantime.
+- **Back to the current plan** leaves the preview without saving.
+- Edits you make during a preview are restored together with the version.
+
+Versions have a number and a time, but **no author**: the planner doesn't know which Rancher user is behind a
+request. Versions older than the last 30 are gone; for a longer record, back up the ConfigMap (see *Data* below).
 
 ## From plan to applied quota
 
@@ -352,6 +376,9 @@ clusters, checks, saving and export applies as described above, minus the money.
 
 ## Limitations and FAQ
 
+**Can I see who saved a version?** No. The page is opened through Rancher's proxy, which doesn't pass the user on
+to the planner, so versions have no author. Agree in the team who edits the plan, or note it in the project owners.
+
 **Why doesn't saving change the quota in Rancher?** By design. Allocations are managed as code: Git is the source of
 truth and the pull request is the approval. The planner prepares those files, it doesn't bypass them.
 
@@ -396,6 +423,8 @@ helm upgrade --install resource-report charts/cluster-resource-report -n resourc
   `…-capacity`) in the release namespace, with the last 30 versions; no volume or storage class is needed.
   It is kept on `helm uninstall`. It is part of any backup of the local cluster (Rancher Backup, Velero), or
   copy it: `kubectl -n resource-report get configmap <name> -o yaml > plan-backup.yaml`. To read a version:
-  `kubectl -n resource-report get configmap <name> -o jsonpath='{.binaryData.v00004\.json\.gz}' | base64 -d | gunzip`.
+  `kubectl -n resource-report get configmap <name> -o jsonpath='{.binaryData.v00004\.json\.gz}' | base64 -d | gunzip`,
+  or `GET /api/planner/history/4` (`/api/capacity/history/4`). To go back to a version, use *History → Preview →
+  Restore* on the page.
 - **Security:** saving requires the page's own request header, so another website can't make a logged-in browser
   change the plan through Rancher's proxy.

@@ -70,6 +70,17 @@ class Inventory(unittest.TestCase):
         self.assertEqual((crm["requests_cpu"], crm["requests_mem_gib"]), (0.35, 0.5))
         self.assertIsNone(pay["requests_cpu"])
 
+    def test_platform_projects_are_marked_system(self):
+        import re
+        inv = inventory()
+        inv["projects"].append(dict(inv["projects"][0], name="Platform Services", project_id="p-plat1"))
+        inv = planner.add_report_requests(inv, {})
+        marked = {p["name"]: p["system"] for p in inv["projects"]}
+        self.assertTrue(marked["Platform Services"])
+        self.assertFalse(marked["payments"])
+        inv = planner.add_report_requests(inventory(), {}, re.compile("^payments$", re.IGNORECASE))
+        self.assertTrue(next(p for p in inv["projects"] if p["name"] == "payments")["system"])
+
 
 class Validate(unittest.TestCase):
     def test_defaults_are_valid(self):

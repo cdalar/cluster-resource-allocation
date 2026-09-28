@@ -180,11 +180,13 @@ def load_inventory(local_context=None, local_kubeconfig=None):
         discover.kget(local_context, "nodes.management.cattle.io", kubeconfig=local_kubeconfig))
 
 
-def add_report_requests(inventory, report):
+def add_report_requests(inventory, report, system_project_re=discover.DEFAULT_SYSTEM_PROJECT_RE):
     """Current requests per project, and the measured platform reserve, from this collector's own report.
 
     Both only for the cluster the collector scans: the platform reserve is what the report classes as `system`
-    (Rancher's System project and the system namespaces: cattle-*, kube-system, monitoring, ...).
+    (Rancher's System project, *platform* projects and the system namespaces: cattle-*, kube-system, ...).
+    Projects whose name matches `system_project_re` are marked `system`: they are in the platform reserve, so the
+    page hides them like Rancher's own projects instead of planning a quota for them as well.
     """
     report = report or {}
     scanned = {c.get("cluster") for c in report.get("clusters", [])}
@@ -199,6 +201,7 @@ def add_report_requests(inventory, report):
         if p.get("project_id"):
             by_key[p["project_id"]] = p
     for p in inventory["projects"]:
+        p["system"] = bool(system_project_re.match(p.get("name") or ""))
         r = by_key.get(f'{p["cluster_id"]}:{p["project_id"]}')
         p["requests_cpu"] = round(r["cpu_requests"], 3) if r else None
         p["requests_mem_gib"] = round(r["mem_requests_gib"], 3) if r else None

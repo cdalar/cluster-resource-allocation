@@ -162,7 +162,7 @@ details summary { cursor: pointer; }
     <div class="card-head">
       <h2>Projects</h2>
       <div class="actions">
-        <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default projects</label>
+        <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default and platform projects</label>
       </div>
     </div>
     <div class="note" style="margin:-4px 0 8px"><span class="money">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</span><span class="cap-text">Give each project an envelope (its total CPU and memory across all clusters) and split it into quota per cluster; <i>Requests +25 %</i> starts a row from today's requests. Planned quota is compared with the envelope.</span></div>
@@ -264,7 +264,9 @@ function allocCost(cid, a) {
 function projectNames() {
   const names = new Set(Object.keys(plan.projects));
   for (const p of data.inventory.projects) names.add(p.name);
-  return [...names].filter((n) => $("show-builtin").checked || !BUILTIN.includes(n) || plan.projects[n]).sort((a, b) => a.localeCompare(b));
+  // Platform projects (collection.systemProjectRegex) are in the platform reserve already: hidden like Rancher's own.
+  const system = new Set(data.inventory.projects.filter((p) => p.system).map((p) => p.name));
+  return [...names].filter((n) => $("show-builtin").checked || !(BUILTIN.includes(n) || system.has(n)) || plan.projects[n]).sort((a, b) => a.localeCompare(b));
 }
 function ensureProject(name) {
   return plan.projects[name] ||= (CAP ? {owners: [], cpu_envelope: null, memory_gib_envelope: null, allocations: {}}

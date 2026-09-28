@@ -90,6 +90,23 @@ class Classify(unittest.TestCase):
             values = f.read()
         self.assertIn(f"  systemNamespaceRegex: '{DEFAULT_SYSTEM_NS_REGEX}'\n", values)
 
+    def test_platform_projects_are_system(self):
+        from discover import DEFAULT_SYSTEM_NS_REGEX
+        rx = re.compile(DEFAULT_SYSTEM_NS_REGEX)
+        for project in ("System", "Platform", "platform-services", "Shared Platform Team"):
+            self.assertEqual(classify("app", project, True, rx), "system", project)
+        for project in ("payments", "Default", "p-7678f", "systems-integration"):
+            self.assertEqual(classify("app", project, True, rx), "tenant", project)
+        custom = re.compile(r"^(system|infra)$", re.IGNORECASE)
+        self.assertEqual(classify("app", "Infra", True, rx, custom), "system")
+        self.assertEqual(classify("app", "Platform", True, rx, custom), "tenant")
+
+    def test_chart_default_project_regex(self):
+        import os
+        from discover import DEFAULT_SYSTEM_PROJECT_REGEX
+        with open(os.path.join(os.path.dirname(__file__), "..", "charts", "cluster-resource-report", "values.yaml")) as f:
+            self.assertIn(f"  systemProjectRegex: '{DEFAULT_SYSTEM_PROJECT_REGEX}'\n", f.read())
+
     def test_system_and_ingress_keywords(self):
         from discover import DEFAULT_SYSTEM_NS_REGEX
         rx = re.compile(DEFAULT_SYSTEM_NS_REGEX)

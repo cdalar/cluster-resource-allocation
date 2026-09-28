@@ -19,6 +19,9 @@ collection:
   # Must match the whole name; add names with "|" before the closing ")$". The keyword entries at the end
   # match any name containing "storage", "system" or "ingress" (local-path-storage, longhorn-system, ingress-nginx). "" = the same built-in list.
   systemNamespaceRegex: '^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*)$'
+  # Rancher Projects whose namespaces all count as System, matched against the project name (ignoring case):
+  # Rancher's System project and any project with "platform" in its name. The planner hides them like System.
+  systemProjectRegex: '^(system|.*platform.*)$'
 
 prometheus:
   enabled: true

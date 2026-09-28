@@ -63,7 +63,7 @@ Key columns:
 
 | Column | Meaning |
 |---|---|
-| `category` | `tenant` (in a Rancher Project / has `--project-label`), `system` (Rancher *System* project or matches `--system-ns-regex`), `unassigned` (no project) |
+| `category` | `tenant` (in a Rancher Project / has `--project-label`), `system` (project name matches `--system-project-regex`: Rancher's *System* project or a name containing `platform`; or the namespace matches `--system-ns-regex`), `unassigned` (no project) |
 | `cpu_requests`, `mem_requests_gib` | Σ **effective** pod requests of non-terminated pods (as the scheduler and ResourceQuota count them: incl. init/sidecar containers and pod overhead). Includes pending pods |
 | `cpu_requests_pending`, … | Part of the above from pods not yet scheduled |
 | `cpu_limits`, `mem_limits_gib` | Σ limits that are set (containers without a limit add 0) |

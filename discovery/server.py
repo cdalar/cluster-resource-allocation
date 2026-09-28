@@ -142,6 +142,8 @@ class PlannerBackend:
             inventory_loader = lambda: planner.load_inventory(ctx, kubeconfig)  # noqa: E731
         self._load_inventory = inventory_loader
         self._inventory, self._inventory_at = None, 0.0
+        self._system_project_re = re.compile(
+            getattr(args, "system_project_regex", None) or discover.DEFAULT_SYSTEM_PROJECT_REGEX, re.IGNORECASE)
 
     def inventory(self):
         now = time.monotonic()
@@ -149,7 +151,7 @@ class PlannerBackend:
             self._inventory, self._inventory_at = self._load_inventory(), now
         with self.collector.lock:
             report = self.collector.report
-        return planner.add_report_requests(copy.deepcopy(self._inventory), report)
+        return planner.add_report_requests(copy.deepcopy(self._inventory), report, self._system_project_re)
 
     def view(self, plan=None):
         plan = plan or self.store.load()

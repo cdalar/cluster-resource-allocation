@@ -315,7 +315,18 @@ The default, for reference (also in the chart's `values.yaml` and in `discover.p
 ^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*)$
 ```
 
-A match counts as *System* **even when the namespace is in a tenant Rancher Project**: it then drops out of that
+**Whole projects**: every namespace of a Rancher Project whose name matches `collection.systemProjectRegex`
+counts as *System* too. The default is Rancher's *System* project and any project with `platform` in its name
+(ignoring case, e.g. `Platform`, `platform-services`); the planner hides those projects like *System*, since
+they are in the platform reserve already. It needs the project names (step 2, name publisher); with only IDs
+(`p-xxxxx`) the name can't match. To add names, e.g. a project `Infra`:
+
+```yaml
+collection:
+  systemProjectRegex: '^(system|.*platform.*|infra)$'
+```
+
+A namespace match counts as *System* **even when the namespace is in a tenant Rancher Project**: it then drops out of that
 project's totals and counts toward the platform reserve in the planner. Check that no tenant namespace contains
 `system`, `ingress` or `storage` (e.g. `payments-ingress`, `photo-storage`): on the dashboard, tick only the *System* category and look for
 namespaces that have a tenant project. If there are some, remove the keyword entries (`.*storage.*`, `.*system.*`,

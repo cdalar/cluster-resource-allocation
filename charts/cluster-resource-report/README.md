@@ -172,6 +172,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `collection.window` / `collection.step` | `7d` / `5m` | Prometheus usage window and resolution; use `step: 15m` on large clusters |
 | `collection.projectLabel` | `""` | Namespace label to group by when there are no Rancher Projects (e.g. AKS outside Rancher) |
 | `collection.systemNamespaceRegex` | `kube-.*`, `cattle-.*`, … `.*storage.*`, `.*system.*`, `.*ingress.*` (see `values.yaml`) | Namespaces counted as System (platform), whatever their Rancher Project; must match the whole name. See the [installation guide](../../guides/installation.md#mark-more-namespaces-as-system) |
+| `collection.systemProjectRegex` | `^(system|.*platform.*)$` | Rancher Project names (ignoring case) whose namespaces count as System: Rancher's System project and any name containing `platform`. The planner hides these projects like System / Default |
 | `prometheus.enabled` | `true` | `false` = no usage history (metrics-server snapshot only) |
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |

@@ -40,6 +40,12 @@ DEFAULT_SYSTEM_NS_REGEX = (
     r".*storage.*|.*system.*|.*ingress.*)$"
 )
 
+# Rancher Projects whose namespaces all count as System (platform), matched against the project's display name,
+# ignoring case: Rancher's own System project and any project with "platform" in its name. Same value as
+# collection.systemProjectRegex in the chart's values.yaml (test_discover checks it).
+DEFAULT_SYSTEM_PROJECT_REGEX = r"^(system|.*platform.*)$"
+DEFAULT_SYSTEM_PROJECT_RE = re.compile(DEFAULT_SYSTEM_PROJECT_REGEX, re.IGNORECASE)
+
 DEFAULT_PROM_SERVICE = "cattle-monitoring-system/http:rancher-monitoring-prometheus:9090"
 
 _SUFFIXES = [
@@ -233,8 +239,8 @@ NS_NUMERIC = [
 NS_FIELDS = ["cluster", "category", "project_id", "project", "namespace"] + NS_NUMERIC
 
 
-def classify(ns_name, project_name, has_project, system_re):
-    if project_name == "System" or system_re.match(ns_name):
+def classify(ns_name, project_name, has_project, system_re, system_project_re=DEFAULT_SYSTEM_PROJECT_RE):
+    if (has_project and system_project_re.match(project_name or "")) or system_re.match(ns_name):
         return "system"
     return "tenant" if has_project else "unassigned"
 
@@ -263,6 +269,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
         hpas = []
 
     system_re = re.compile(args.system_ns_regex)
+    system_project_re = re.compile(args.system_project_regex, re.IGNORECASE)
     ns_rows = {}
     rancher_cluster_id = None
     for ns in namespaces:
@@ -279,7 +286,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
             project_id = f"label:{project_name}"
         row = {k: 0.0 for k in NS_NUMERIC}
         row.update(namespace=name, project_id=project_id, project=project_name,
-                   category=classify(name, project_name, bool(project_id), system_re))
+                   category=classify(name, project_name, bool(project_id), system_re, system_project_re))
         ns_rows[name] = row
 
     cluster_name = args.cluster_name or rancher_clusters.get(rancher_cluster_id) or label
@@ -555,6 +562,9 @@ def build_parser():
     ap.add_argument("--step", default="5m", help="subquery resolution (default: 5m)")
     ap.add_argument("--system-ns-regex", default=DEFAULT_SYSTEM_NS_REGEX,
                     help="namespaces treated as platform/system")
+    ap.add_argument("--system-project-regex", default=DEFAULT_SYSTEM_PROJECT_REGEX,
+                    help="Rancher Project names (ignoring case) whose namespaces are treated as platform/system "
+                         "(default: System and any name containing 'platform')")
     return ap
 
 

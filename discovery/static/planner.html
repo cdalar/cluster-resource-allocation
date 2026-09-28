@@ -147,7 +147,7 @@ details summary { cursor: pointer; }
       <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
         <li><b>Allocatable</b> of the schedulable nodes,</li>
         <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
-        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
+        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
         <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
       </ol>
       The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.

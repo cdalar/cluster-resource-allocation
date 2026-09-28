@@ -106,8 +106,10 @@ table; per resource (CPU and memory separately):
 
 1. **Allocatable** of the schedulable nodes,
 2. **minus the largest node(s):** the environment's *node failures to tolerate* largest nodes (N+1),
-3. **minus the platform reserve:** what platform components (cattle-*, kube-system, monitoring, ingress …)
-   request. They are in no project quota but take capacity first,
+3. **minus the platform reserve:** what platform components (cattle-*, kube-system, monitoring, ingress,
+   storage …) request, i.e. the namespaces the dashboard counts as *System* (`collection.systemNamespaceRegex`,
+   see the [installation guide](installation.md#mark-more-namespaces-as-system)). They are in no project quota but
+   take capacity first,
 4. **and at most the environment's max %** of (allocatable − platform reserve).
 
 The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a platform reserve of 1 CPU in prod:

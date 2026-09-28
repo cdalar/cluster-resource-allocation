@@ -226,6 +226,57 @@ class Store(unittest.TestCase):
             self.assertEqual(store.save(planner.empty_state(), 1)["version"], 2)
             self.assertEqual(len(os.listdir(os.path.join(d, planner.HISTORY_DIR))), 2)
 
+    def test_history_list_version_and_restore(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = planner.PlanStore(d)
+            self.assertEqual(store.history(), [])
+            store.save(plan_with(), 0)
+            store.save(plan_with(payments={"monthly_budget": 100,
+                                           "allocations": {"c-m-1": {"cpu": 2, "memory_gib": 8}}}), 1)
+            raw = store.load()
+            raw["settings"]["envs"]["prod"]["max_quota_pct"] = 70
+            store.save(raw, 2)
+            hist = store.history()
+            self.assertEqual([v["version"] for v in hist], [3, 2, 1])
+            self.assertEqual({k: hist[1][k] for k in ("projects", "cpu", "memory_gib", "budget")},
+                             {"projects": 1, "cpu": 2, "memory_gib": 8, "budget": 100})
+            self.assertEqual(hist[1]["changes"], {"projects": ["payments"], "clusters": False, "settings": False})
+            self.assertEqual(hist[0]["changes"], {"projects": [], "clusters": False, "settings": True})
+            self.assertIsNone(hist[2]["changes"])  # oldest kept version
+            self.assertEqual(store.version(1)["projects"], {})
+            with self.assertRaises(planner.PlanNotFound):
+                store.version(9)
+            # a restore is a normal save of the old content, with a pointer to where it came from
+            with self.assertRaises(planner.PlanConflict):
+                store.save(store.version(1), 2, restored_from=1)
+            with self.assertRaises(planner.PlanError):
+                store.save(store.version(1), 3, restored_from=4)
+            restored = store.save(store.version(1), 3, restored_from=1)
+            self.assertEqual((restored["version"], restored["restored_from"]), (4, 1))
+            self.assertEqual(store.load()["restored_from"], 1)
+            top = store.history()[0]
+            self.assertEqual((top["version"], top["restored_from"], top["projects"]), (4, 1, 0))
+            self.assertEqual(top["changes"]["projects"], ["payments"])
+            self.assertNotIn("restored_from", store.save(store.load(), 4))
+
+    def test_changes_ignore_rows_left_empty(self):
+        before = plan_with(payments={"allocations": {"c-m-1": {"cpu": 1, "memory_gib": 2}}})
+        after = json.loads(json.dumps(before))
+        after["clusters"]["local"] = {"env": "", "platform": "", "platform_cpu": None, "platform_mem_gib": None}
+        after["projects"]["crm"] = {"cost_center": "", "owners": [], "monthly_budget": None,
+                                    "allocations": {"local": {"cpu": 0, "memory_gib": 0}}}
+        after["projects"]["payments"]["allocations"]["local"] = {"cpu": 0, "memory_gib": 0}
+        self.assertEqual(planner.changes(before, after), {"projects": [], "clusters": False, "settings": False})
+        after["clusters"]["local"]["platform_cpu"] = 0.0  # a reserve of 0 is a value
+        after["projects"]["crm"]["monthly_budget"] = 0.0
+        self.assertEqual(planner.changes(before, after), {"projects": ["crm"], "clusters": True, "settings": False})
+
+    def test_capacity_history_has_no_money(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = planner.PlanStore(d, "capacity")
+            store.save(planner.empty_state("capacity"), 0)
+            self.assertNotIn("budget", store.history()[0])
+
     def test_old_plan_file_gets_new_defaults_on_load(self):
         # a plan saved before node failures / platform reserve existed must still evaluate
         with tempfile.TemporaryDirectory() as d:
@@ -335,6 +386,19 @@ class ConfigMapStore(unittest.TestCase):
         for v in range(4):
             store.save(planner.empty_state(), v)
         self.assertLessEqual(len(api.objects["rr-planner"]["binaryData"]), 3)
+
+    def test_history_from_the_configmap(self):
+        api = FakeConfigMaps()
+        store = self.store(api)
+        for v in range(planner.HISTORY_KEEP + 2):
+            store.save(plan_with(payments={"allocations": {"c-m-1": {"cpu": v, "memory_gib": 1}}}), v)
+        hist = store.history()
+        self.assertEqual(len(hist), planner.HISTORY_KEEP)
+        self.assertEqual((hist[0]["version"], hist[0]["cpu"]), (planner.HISTORY_KEEP + 2, planner.HISTORY_KEEP + 1))
+        self.assertIsNone(hist[-1]["changes"])
+        self.assertEqual(store.version(5)["projects"]["payments"]["allocations"]["c-m-1"]["cpu"], 4)
+        with self.assertRaises(planner.PlanNotFound):
+            store.version(1)  # trimmed
 
     def test_plan_file_of_an_older_version_moves_over(self):
         with tempfile.TemporaryDirectory() as d:

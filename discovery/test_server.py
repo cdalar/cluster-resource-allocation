@@ -156,6 +156,24 @@ class PlannerServer(unittest.TestCase):
         self.assertIn("attachment", headers["Content-Disposition"])
         self.assertIn(b'requests.cpu: "4"', body)
 
+        # history: save a second version, then restore the first as version 3
+        plan2 = saved["plan"]
+        plan2["projects"]["payments"]["allocations"]["c-m-1"]["cpu"] = 2
+        self.assertEqual(self.put({"version": 1, "plan": plan2})[0], 200)
+        hist = json.loads(self.req("/api/planner/history")[2])
+        self.assertEqual((hist["current"], [v["version"] for v in hist["versions"]]), (2, [2, 1]))
+        self.assertEqual(hist["versions"][0]["changes"]["projects"], ["payments"])
+        code, _, body = self.req("/api/planner/history/1")
+        self.assertEqual(code, 200)
+        v1 = json.loads(body)["plan"]
+        self.assertEqual(v1["projects"]["payments"]["allocations"]["c-m-1"]["cpu"], 4)
+        self.assertEqual(self.req("/api/planner/history/99")[0], 404)
+        self.assertEqual(self.req("/api/planner/history/x")[0], 404)
+        code, _, body = self.put({"version": 2, "plan": v1, "restored_from": 1})
+        self.assertEqual(code, 200, body)
+        self.assertEqual((json.loads(body)["plan"]["version"], json.loads(body)["plan"]["restored_from"]), (3, 1))
+        self.assertEqual(self.put({"version": 3, "plan": v1, "restored_from": "1"})[0], 400)
+
     def test_save_needs_header_json_and_valid_plan(self):
         self.assertEqual(self.put({"version": 0, "plan": {}}, **{"X-Planner": ""})[0], 400)
         self.assertEqual(self.put({"version": 0, "plan": {}}, **{"Content-Type": "text/plain"})[0], 400)
@@ -257,6 +275,10 @@ class CapacityServer(unittest.TestCase):
         saved = json.loads(body)
         self.assertTrue(any("above its envelope of 2" in i["text"] for i in saved["evaluation"]["issues"]))
         self.assertIn(b"by the capacity planner", self.req("/api/capacity/export.yaml")[1])
+        hist = json.loads(self.req("/api/capacity/history")[1])
+        self.assertEqual((hist["mode"], len(hist["versions"])), ("capacity", 1))
+        self.assertNotIn("budget", hist["versions"][0])
+        self.assertEqual(json.loads(self.req("/api/planner/history")[1])["versions"], [])
         # the budget planner has its own, untouched plan
         self.assertEqual(json.loads(self.req("/api/planner")[1])["plan"]["version"], 0)
         status = json.loads(self.req("/api/report")[1])["status"]

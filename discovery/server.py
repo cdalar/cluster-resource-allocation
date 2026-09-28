@@ -11,10 +11,13 @@ Endpoints (all relative, so the app also works behind the Rancher/API server ser
 With --planner (Rancher local cluster only), also the allocation planner (planner.py):
   GET  /planner                  planner page
   GET  /api/planner              plan + Rancher inventory + checks
-  PUT  /api/planner              save the plan ({"version": n, "plan": {...}}; needs header X-Planner: 1)
+  PUT  /api/planner              save the plan ({"version": n, "plan": {...}}; needs header X-Planner: 1);
+                                 a restore adds "restored_from": <earlier version>
   GET  /api/planner/export.yaml  the plan as allocation files (docs/04)
+  GET  /api/planner/history      the stored versions, newest first (time, totals, what changed)
+  GET  /api/planner/history/<n>  one stored version ({"plan": {...}})
 With --capacity-planner, the same without money (CPU / memory envelopes per project instead of budgets):
-  GET  /capacity, GET|PUT /api/capacity, GET /api/capacity/export.yaml
+  GET  /capacity, GET|PUT /api/capacity, GET /api/capacity/export.yaml, GET /api/capacity/history[/<n>]
 The planners only write their own plan files in --data-dir, never to a cluster.
 """
 
@@ -171,11 +174,17 @@ class PlannerBackend:
     def export(self):
         return planner.export_yaml(self.store.load(), self.inventory(), self.mode)
 
+    def history(self):
+        return {"mode": self.mode, "current": self.store.load().get("version", 0), "versions": self.store.history()}
+
+    def version(self, n):
+        return {"mode": self.mode, "plan": self.store.version(n)}
+
     def save(self, body):
         if not isinstance(body, dict) or not isinstance(body.get("version"), int):
             raise planner.PlanError('expected {"version": <int>, "plan": {...}}')
         with self.save_lock:
-            return self.view(self.store.save(body.get("plan"), body["version"]))
+            return self.view(self.store.save(body.get("plan"), body["version"], body.get("restored_from")))
 
 
 def make_handler(collector, planner_backend=None, capacity_backend=None):
@@ -183,7 +192,8 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
     planners = {name: b for name, b in (("planner", planner_backend), ("capacity", capacity_backend)) if b}
 
     def planner_route(path):
-        """(backend, what) for /<name>, /api/<name> and /api/<name>/export.yaml, else (None, None)."""
+        """(backend, what) for /<name>, /api/<name>, /api/<name>/export.yaml, /api/<name>/history and
+        /api/<name>/history/<n> (what = the version number), else (None, None)."""
         for name, backend in planners.items():
             if path == f"/{name}":
                 return backend, "page"
@@ -191,6 +201,11 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                 return backend, "api"
             if path == f"/api/{name}/export.yaml":
                 return backend, "export"
+            if path == f"/api/{name}/history":
+                return backend, "history"
+            m = re.fullmatch(rf"/api/{name}/history/(\d{{1,9}})", path)
+            if m:
+                return backend, int(m.group(1))
         return None, None
 
     class Handler(BaseHTTPRequestHandler):
@@ -232,6 +247,13 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                 except Exception as e:  # a bug must show up on the page, not as a dropped connection
                     discover.log(f"planner: {type(e).__name__}: {e}")
                     self._json(500, {"error": f"planner error: {type(e).__name__}: {e}"})
+            elif what == "history" or isinstance(what, int):
+                try:
+                    self._json(200, backend.history() if what == "history" else backend.version(what))
+                except planner.PlanNotFound as e:
+                    self._json(404, {"error": str(e)})
+                except planner.PlanStoreError as e:
+                    self._json(502, {"error": discover.first_line(e)})
             elif what == "export":
                 try:
                     data = backend.export()

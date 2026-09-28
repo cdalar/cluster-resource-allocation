@@ -61,7 +61,7 @@ spec:
             - --project-label={{ . }}
             {{- end }}
             {{- with .Values.collection.systemNamespaceRegex }}
-            - --system-ns-regex={{ . }}
+            - {{ printf "--system-ns-regex=%s" . | quote }}
             {{- end }}
             {{- if not .Values.prometheus.enabled }}
             - --prometheus=none

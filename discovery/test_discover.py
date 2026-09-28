@@ -83,6 +83,24 @@ class Classify(unittest.TestCase):
         self.assertIn(DEFAULT_SYSTEM_NS_REGEX, guide)
         self.assertIn(f"systemNamespaceRegex: '{DEFAULT_SYSTEM_NS_REGEX[:-2]}|", guide)
 
+    def test_chart_default_is_the_built_in_list(self):
+        import os
+        from discover import DEFAULT_SYSTEM_NS_REGEX
+        with open(os.path.join(os.path.dirname(__file__), "..", "charts", "cluster-resource-report", "values.yaml")) as f:
+            values = f.read()
+        self.assertIn(f"  systemNamespaceRegex: '{DEFAULT_SYSTEM_NS_REGEX}'\n", values)
+
+    def test_system_and_ingress_keywords(self):
+        from discover import DEFAULT_SYSTEM_NS_REGEX
+        rx = re.compile(DEFAULT_SYSTEM_NS_REGEX)
+        for name in ("longhorn-system", "gatekeeper-system", "cis-operator-system", "app-routing-system",
+                     "ingress-nginx", "haproxy-ingress", "my-ingress-controller", "systemd-exporter", "otel",
+                     "monitoring", "local-path-storage", "rook-ceph", "openebs", "csi-driver-nfs", "vsphere-csi",
+                     "nfs-subdir-external-provisioner", "storage"):
+            self.assertEqual(classify(name, "", False, rx), "system", name)
+        for name in ("payments-api", "otel-demo", "monitoring-app", "legacy"):
+            self.assertEqual(classify(name, "", False, rx), "unassigned", name)
+
 
 class Aggregate(unittest.TestCase):
     def test_projects_and_efficiency(self):

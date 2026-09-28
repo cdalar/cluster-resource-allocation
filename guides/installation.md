@@ -294,24 +294,32 @@ the only ways in.
 
 The dashboard puts every namespace in one of three categories: **Tenant** (in a Rancher Project),
 **System** (Rancher's *System* project, or its name matches the system list) and **Unassigned** (neither).
-Platform components that are in no Rancher Project, such as a monitoring or OTel namespace, show up as
-*Unassigned*. To count them as *System* without moving them in Rancher, extend the system list in the values file.
-This only changes the report; nothing in Rancher or the cluster changes.
+Platform components that are in no Rancher Project show up as *Unassigned* unless their name is in the system
+list. The list is `collection.systemNamespaceRegex` in the chart values; its default (below) includes the Rancher
+and Kubernetes namespaces, `otel`, `monitoring`, storage providers (`rook-*`, `openebs*`, CSI drivers, `*provisioner*`) and **every name that contains `system`, `ingress` or `storage`**. To count
+more namespaces as *System* without moving them in Rancher, add them to the list. This only changes the report;
+nothing in Rancher or the cluster changes.
 
-`collection.systemNamespaceRegex` **replaces** the built-in list, so copy the whole value below and add your
-namespaces at the end, separated by `|` (here `otel|monitoring`, as an example). The expression must match the
-whole namespace name; `.*` matches any rest, e.g. `team-infra-.*`.
+Setting the value **replaces** the default, so copy the whole value and add your namespaces before the closing
+`)$`, separated by `|` (here `vault|team-infra-.*`, as an example). The expression must match the whole
+namespace name; `.*` matches any rest.
 
 ```yaml
 collection:
-  systemNamespaceRegex: '^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|cis-operator-system|longhorn-system|gatekeeper-system|kyverno|cert-manager|ingress-nginx|app-routing-system|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|otel|monitoring)$'
+  systemNamespaceRegex: '^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*|vault|team-infra-.*)$'
 ```
 
-The built-in list (the default when the value is empty), for reference:
+The default, for reference (also in the chart's `values.yaml` and in `discover.py`):
 
 ```
-^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|cis-operator-system|longhorn-system|gatekeeper-system|kyverno|cert-manager|ingress-nginx|app-routing-system|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+)$
+^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*)$
 ```
+
+A match counts as *System* **even when the namespace is in a tenant Rancher Project**: it then drops out of that
+project's totals and counts toward the platform reserve in the planner. Check that no tenant namespace contains
+`system`, `ingress` or `storage` (e.g. `payments-ingress`, `photo-storage`): on the dashboard, tick only the *System* category and look for
+namespaces that have a tenant project. If there are some, remove the keyword entries (`.*storage.*`, `.*system.*`,
+`.*ingress.*`, …) and list the platform namespaces by name.
 
 Apply it with the same `helm upgrade --install ... -f values-downstream.yaml` as in [Upgrade](#upgrade), or in
 the Rancher UI under **Apps → Installed Apps → resource-report → Upgrade** (YAML, `collection` section). The

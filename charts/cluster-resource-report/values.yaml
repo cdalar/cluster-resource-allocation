@@ -15,7 +15,10 @@ collection:
   window: 7d         # Prometheus usage history window (Rancher Monitoring keeps ~10d by default)
   step: 5m           # Prometheus subquery resolution; use 15m on large clusters
   projectLabel: ""   # namespace label to group by when there is no Rancher Project (e.g. non-Rancher AKS)
-  systemNamespaceRegex: ""   # override the built-in list of platform/system namespaces
+  # Namespaces counted as System (platform) rather than Tenant/Unassigned, whatever their Rancher Project.
+  # Must match the whole name; add names with "|" before the closing ")$". The keyword entries at the end
+  # match any name containing "storage", "system" or "ingress" (local-path-storage, longhorn-system, ingress-nginx). "" = the same built-in list.
+  systemNamespaceRegex: '^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*)$'
 
 prometheus:
   enabled: true

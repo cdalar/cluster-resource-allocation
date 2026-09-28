@@ -30,10 +30,14 @@ GIB = 2**30
 RANCHER_PROJECT_ANNOTATION = "field.cattle.io/projectId"  # "<cluster-id>:<project-id>"
 NAMES_CONFIGMAP = "rancher-project-names"  # written by publish_rancher_names.py, delivered by Fleet
 
+# Same value as collection.systemNamespaceRegex in the chart's values.yaml (test_discover checks it).
+# Storage providers, then keywords: any name containing "storage", "system" or "ingress"
+# (local-path-storage, longhorn-system, ingress-nginx, ...).
 DEFAULT_SYSTEM_NS_REGEX = (
-    r"^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|cis-operator-system|"
-    r"longhorn-system|gatekeeper-system|kyverno|cert-manager|ingress-nginx|"
-    r"app-routing-system|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+)$"
+    r"^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|"
+    r"local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|"
+    r"rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|"
+    r".*storage.*|.*system.*|.*ingress.*)$"
 )
 
 DEFAULT_PROM_SERVICE = "cattle-monitoring-system/http:rancher-monitoring-prometheus:9090"

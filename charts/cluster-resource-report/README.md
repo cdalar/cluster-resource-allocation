@@ -171,7 +171,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `collection.interval` | `30m` | Time between collections; the dashboard also has a "Collect now" button |
 | `collection.window` / `collection.step` | `7d` / `5m` | Prometheus usage window and resolution; use `step: 15m` on large clusters |
 | `collection.projectLabel` | `""` | Namespace label to group by when there are no Rancher Projects (e.g. AKS outside Rancher) |
-| `collection.systemNamespaceRegex` | built-in | Namespaces treated as platform/system |
+| `collection.systemNamespaceRegex` | built-in | Namespaces treated as platform/system; replaces the built-in list. Copy-paste example with the full list: [installation guide](../../guides/installation.md#mark-more-namespaces-as-system) |
 | `prometheus.enabled` | `true` | `false` = no usage history (metrics-server snapshot only) |
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |

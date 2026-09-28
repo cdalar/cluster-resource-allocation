@@ -74,6 +74,15 @@ class Classify(unittest.TestCase):
             self.assertEqual(classify(name, "", False, rx), "system", name)
         self.assertEqual(classify("local-payments", "", False, rx), "unassigned")
 
+    def test_installation_guide_has_the_current_list(self):
+        # The guide has a copy-paste value that starts from the built-in list.
+        import os
+        from discover import DEFAULT_SYSTEM_NS_REGEX
+        with open(os.path.join(os.path.dirname(__file__), "..", "guides", "installation.md")) as f:
+            guide = f.read()
+        self.assertIn(DEFAULT_SYSTEM_NS_REGEX, guide)
+        self.assertIn(f"systemNamespaceRegex: '{DEFAULT_SYSTEM_NS_REGEX[:-2]}|", guide)
+
 
 class Aggregate(unittest.TestCase):
     def test_projects_and_efficiency(self):

@@ -20,7 +20,7 @@ several namespaces each), plus some AKS clusters.
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
 | `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `kibana-dashboard.md`), separate from the design docs |
 | `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
-| `kibana/` | `build_dashboard.py` generates `cluster-resources-as-is.ndjson` (Kibana dashboard on the OTel metrics in the central Elastic; stdlib only); `otel-collector-fragment.yaml` lists the collector settings it needs. Regenerate and commit both after changing queries |
+| `kibana/` | `build_dashboard.py` generates `cluster-resources-as-is.ndjson` and, with `--no-project`, `cluster-resources-as-is-no-project.ndjson` (Kibana dashboard on the OTel metrics in the central Elastic; stdlib only); `otel-collector-fragment.yaml` lists the collector settings it needs. Regenerate and commit the script and both `.ndjson` files after changing queries |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 
 ## Conventions

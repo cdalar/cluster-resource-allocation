@@ -105,6 +105,7 @@ flowchart LR
 | [5. Process](docs/05-process.md) | Onboarding, change requests, reviews, capacity planning, RACI |
 | [6. Rollout](docs/06-rollout.md) | Phased rollout and risks |
 | [7. Actions](docs/07-actions.md) | Plan for actions from the planner and dashboard (pull request, apply to Rancher, right-sizing, …) |
+| [8. Fleet deployment](docs/08-fleet-deployment.md) | Plan: install and upgrade the chart on chosen downstream clusters with a Fleet HelmOp from the local release |
 | [Open questions](docs/open-questions.md) | Items to resolve during discovery |
 | [ADRs](docs/adr/) | Architecture decision records |
 

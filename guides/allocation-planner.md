@@ -39,6 +39,9 @@ its own; it relies on Rancher's.
 ## The page at a glance
 
 The page reads top to bottom: settings first, then the what-if calculator, clusters and projects. Every number updates as you type.
+*Rates and rules* and *What-if* start collapsed; click their title to open them. Every panel (rules, what-if,
+clusters, projects) has a handle ⠿ on its left: drag it to put the panel elsewhere, or focus it and press ↑ / ↓.
+The order is remembered in your browser only, not in the plan.
 
 | Part | What it shows or does |
 | --- | --- |
@@ -277,7 +280,7 @@ For round numbers the example uses rates of 25 per vCPU and 6.25 per GiB (not th
 
 ## What-if calculator: a new application
 
-The **What-if** card between *Rates and rules* and *Clusters* answers: *a new application needs 4 vCPU / 16 GiB, does it
+The **What-if** panel (collapsed by default, between *Rates and rules* and *Clusters* unless you moved it) answers: *a new application needs 4 vCPU / 16 GiB, does it
 fit on prod-01, and if not, how many nodes must we add and what does the Rancher licence for them cost?* It saves
 nothing and changes nothing; it uses the same rules as the cluster limits above.
 

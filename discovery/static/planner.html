@@ -88,6 +88,11 @@ details summary { cursor: pointer; }
 .reference td:not(:first-child) { white-space: nowrap; }
 .grid2-ref { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 20px; }
 .empty { color: var(--text-muted); padding: 16px 0; text-align: center; }
+.panel { position: relative; padding-left: 36px; }
+.drag-handle { position: absolute; left: 8px; top: 14px; padding: 0 4px; border: 0; background: none; color: var(--text-muted); cursor: grab; font-size: 16px; line-height: 1.2; touch-action: none; }
+.drag-handle:hover, .drag-handle:focus-visible { color: var(--text-primary); background: var(--hover); }
+.panel.dragging { opacity: .5; outline: 2px dashed var(--series-1); }
+#whatif-box > .whatif-form { margin-top: 12px; }
 .whatif-form { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .whatif-form fieldset { border: 1px solid var(--grid); border-radius: 8px; padding: 6px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .whatif-form legend { color: var(--text-secondary); font-size: 12px; padding: 0 4px; }
@@ -126,7 +131,8 @@ details summary { cursor: pointer; }
   <div class="banner" id="issues" hidden></div>
   <div class="tiles" id="tiles"></div>
 
-  <div class="card">
+  <div id="panels">
+  <div class="card panel" data-panel="rules">
     <details id="settings-box">
       <summary><h2 style="display:inline" id="settings-title">Rates and rules</h2> <span class="muted" id="settings-sub">— unit rates per platform; node failures, headroom and memory limit per environment</span></summary>
       <div class="settings-grid">
@@ -149,8 +155,9 @@ details summary { cursor: pointer; }
     </details>
   </div>
 
-  <div class="card" id="whatif-card">
-    <div class="card-head"><h2>What-if: a new application</h2><span class="sub">Does it fit on a cluster, with N+1 and the platform reserve, or how many nodes must be added? Not saved; changes nothing.</span></div>
+  <div class="card panel" data-panel="whatif" id="whatif-card">
+    <details id="whatif-box">
+    <summary><h2 style="display:inline">What-if: a new application</h2> <span class="muted">— does it fit on a cluster, with N+1 and the platform reserve, or how many nodes (and licences) must be added? Not saved; changes nothing.</span></summary>
     <div class="whatif-form">
       <fieldset><legend>Application</legend>
         <label>Cluster <select id="wi-cluster" aria-label="cluster for the new application"></select></label>
@@ -175,9 +182,10 @@ details summary { cursor: pointer; }
       </fieldset>
     </div>
     <div id="whatif"></div>
+    </details>
   </div>
 
-  <div class="card">
+  <div class="card panel" data-panel="clusters">
     <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity and node sizes from Rancher; planned = Σ of the quotas below. Values are CPU / GiB.</span></div>
     <div class="banner" style="margin-bottom:12px">
       <b>How much each cluster can give to projects</b> (CPU and memory separately):
@@ -195,7 +203,7 @@ details summary { cursor: pointer; }
     </table></div>
   </div>
 
-  <div class="card">
+  <div class="card panel" data-panel="projects">
     <div class="card-head">
       <h2>Projects</h2>
       <div class="actions">
@@ -204,6 +212,7 @@ details summary { cursor: pointer; }
     </div>
     <div class="note" style="margin:-4px 0 8px"><span class="money">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</span><span class="cap-text">Give each project an envelope (its total CPU and memory across all clusters) and split it into quota per cluster; <i>Requests +25 %</i> starts a row from today's requests. Planned quota is compared with the envelope.</span></div>
     <div id="projects"></div>
+  </div>
   </div>
 </div>
 
@@ -758,6 +767,43 @@ function renderWhatIf(ev) {
 function tile(label, value, note) {
   return h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), h("div", {class: "note"}, note));
 }
+
+// ---- movable panels: drag a panel by its handle (or focus the handle and press ↑ / ↓); the order is kept per browser ----
+const PANEL_KEY = "planner-panel-order";
+function initPanels() {
+  const box = $("panels");
+  const panels = () => [...box.querySelectorAll(":scope > .panel")];
+  const saveOrder = () => { try { localStorage.setItem(PANEL_KEY, JSON.stringify(panels().map((p) => p.dataset.panel))); } catch (e) { /* no storage: order not kept */ } };
+  try {
+    for (const id of JSON.parse(localStorage.getItem(PANEL_KEY)) || []) { const el = box.querySelector(`:scope > [data-panel="${id}"]`); if (el) box.append(el); }
+  } catch (e) { /* no or bad stored order: keep the default */ }
+  let dragging = null;
+  for (const panel of panels()) {
+    const title = panel.querySelector("h2").textContent;
+    const handle = h("button", {type: "button", class: "drag-handle", title: "Drag to move this panel (or press ↑ / ↓)", "aria-label": `Move the ${title} panel`}, "⠿");
+    // Only draggable while held by the handle, so text in inputs and tables can still be selected.
+    handle.addEventListener("pointerdown", () => { panel.draggable = true; });
+    handle.addEventListener("pointerup", () => { panel.draggable = false; });
+    handle.addEventListener("keydown", (e) => {
+      const prev = panel.previousElementSibling, next = panel.nextElementSibling;
+      if (e.key === "ArrowUp" && prev) box.insertBefore(panel, prev);
+      else if (e.key === "ArrowDown" && next) box.insertBefore(next, panel);
+      else return;
+      e.preventDefault(); handle.focus(); saveOrder();
+    });
+    panel.addEventListener("dragstart", (e) => { dragging = panel; panel.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", panel.dataset.panel); });
+    panel.addEventListener("dragend", () => { panel.draggable = false; panel.classList.remove("dragging"); dragging = null; saveOrder(); });
+    panel.prepend(handle);
+  }
+  box.addEventListener("dragover", (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const next = panels().filter((p) => p !== dragging).find((p) => { const r = p.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+    if (next !== dragging.nextElementSibling) box.insertBefore(dragging, next || null);
+  });
+  box.addEventListener("drop", (e) => { if (dragging) e.preventDefault(); });
+}
+initPanels();
 
 $("save").onclick = save;
 $("show-builtin").onchange = () => { renderProjects(); recompute(); };

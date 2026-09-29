@@ -49,7 +49,9 @@ metadata:
   labels:
     {{- include "crr.labels" . | nindent 4 }}
 spec:
-  namespace: {{ $d.namespace }}
+  # defaultNamespace, not namespace: Fleet's `namespace` forbids the chart's cluster-scoped objects
+  # (ClusterRole, ClusterRoleBinding, NavLink)
+  defaultNamespace: {{ $d.namespace }}
   helm:
     releaseName: {{ $d.releaseName }}
     repo: {{ $chart.repo | quote }}         # OCI: the chart's full URL, with no chart field (Fleet rejects both)

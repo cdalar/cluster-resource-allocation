@@ -119,7 +119,7 @@ It renders one `HelmOp`:
 | Field | Value |
 |---|---|
 | name / namespace | `crr.fullname` / `workspace`, with `crr.labels` |
-| `spec.namespace` | `deployDownstream.namespace` |
+| `spec.defaultNamespace` | `deployDownstream.namespace`. Not `spec.namespace`: with it Fleet rejects every cluster-scoped object ("invalid cluster scoped object … NavLink"), found in the test |
 | `spec.helm.releaseName` | `deployDownstream.releaseName` |
 | `spec.helm.repo` | The chart's full OCI URL, with no `chart` field. Tested on Fleet v0.16.2: `chart: oci://…` without `repo` is rejected ("non-tarball chart with an empty repo field"), and so is `repo` + `chart` for OCI ("OCI repository with a non-empty chart field") |
 | `spec.helm.version` | `chart.version`, default `.Chart.Version` |

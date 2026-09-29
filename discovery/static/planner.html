@@ -161,9 +161,9 @@ details summary { cursor: pointer; }
     <div class="whatif-form">
       <fieldset><legend>Application</legend>
         <label>Cluster <select id="wi-cluster" aria-label="cluster for the new application"></select></label>
-        <label>CPU <input type="number" id="wi-cpu" min="0" step="0.5" value="4"></label>
-        <label>Memory GiB <input type="number" id="wi-mem" min="0" step="1" value="16"></label>
-        <label title="the CPU and memory above are for all replicas together; each replica must fit on one node">Replicas <input type="number" id="wi-replicas" min="1" step="1" value="1" style="width:60px"></label>
+        <label title="CPU request of one replica (pod)">CPU per replica <input type="number" id="wi-cpu" min="0" step="0.5" value="4"></label>
+        <label title="memory request of one replica (pod)">Memory GiB per replica <input type="number" id="wi-mem" min="0" step="1" value="16"></label>
+        <label title="the application needs CPU and memory per replica × replicas as quota; each replica must fit on one node">Replicas <input type="number" id="wi-replicas" min="1" step="1" value="1" style="width:60px"></label>
       </fieldset>
       <fieldset><legend>Already in use on the cluster</legend>
         <label><select id="wi-basis" aria-label="what the application is added to">
@@ -353,10 +353,10 @@ function limitsWithNodes(c, cfg, env, base, node, overhead, added) {
     {platform_cpu: base.reserve_cpu + added * overhead.cpu, platform_mem_gib: base.reserve_mem + added * overhead.mem}, env);
 }
 const fitsIn = (lim, need) => need.cpu <= lim.limit_cpu + 1e-9 && need.mem <= lim.limit_mem + 1e-9;
-// Fewest nodes to add so that `need` fits the limit for projects; null if even maxAdd nodes are not enough.
-function nodesNeeded(c, cfg, env, need, node, overhead, maxAdd = 200) {
+// Fewest nodes to add (at least minAdd) so that `need` fits the limit for projects; null if even maxAdd nodes are not enough.
+function nodesNeeded(c, cfg, env, need, node, overhead, minAdd = 0, maxAdd = 200) {
   const base = clusterLimits(c, cfg, env);
-  for (let k = 0; k <= maxAdd; k++) {
+  for (let k = minAdd; k <= maxAdd; k++) {
     const lim = limitsWithNodes(c, cfg, env, base, node, overhead, k);
     if (fitsIn(lim, need)) return {added: k, limits: lim};
     if (!node.cpu && !node.mem) return null;
@@ -699,11 +699,23 @@ function renderWhatIf(ev) {
   const {env, envName} = clusterRules(c.id);
   if (!env) { out.replaceChildren(h("div", {class: "verdict"}, h("span", {class: "dot warning"}), `Set an environment for ${c.name} in the Clusters table first: it decides N+1 and the headroom.`)); return; }
   const cfg = plan.clusters[c.id] || {};
-  const app = {cpu: num($("wi-cpu").value), mem: num($("wi-mem").value)};
+  const pod = {cpu: num($("wi-cpu").value), mem: num($("wi-mem").value)};   // one replica
   const replicas = Math.max(1, Math.round(num($("wi-replicas").value) || 1));
+  const app = {cpu: pod.cpu * replicas, mem: pod.mem * replicas};
   const node = {cpu: num($("wi-node-cpu").value), mem: num($("wi-node-mem").value)};
   const overhead = {cpu: num($("wi-ov-cpu").value), mem: num($("wi-ov-mem").value)};
   const base = clusterLimits(c, cfg, env);
+
+  // Quota is not enough: each replica has to fit on one node, next to that node's platform DaemonSets. This depends
+  // on the replica's size only, not on how many replicas there are.
+  const podFits = (n) => pod.cpu <= n.cpu - overhead.cpu + 1e-9 && pod.mem <= n.mem - overhead.mem + 1e-9;
+  const existing = (c.node_sizes || []).map((n) => ({cpu: n.cpu, mem: n.mem_gib}));
+  const fitsToday = !c.node_sizes || existing.some(podFits);   // sizes unknown: can't tell, assume it does
+  const fitsNewNode = (node.cpu || node.mem) ? podFits(node) : false;
+  const tooBig = !fitsToday && !fitsNewNode;
+  // Fits only on the new node size: enough new nodes for all replicas, plus N spare ones for N+1.
+  const perNewNode = Math.floor(Math.min(pod.cpu ? (node.cpu - overhead.cpu) / pod.cpu : Infinity, pod.mem ? (node.mem - overhead.mem) / pod.mem : Infinity));
+  const minAdd = !fitsToday && fitsNewNode ? Math.ceil(replicas / Math.max(1, perNewNode)) : 0;
 
   // What is already on the cluster: the plan's quota, or the projects' requests now (all requests minus the platform reserve).
   const planned = {cpu: ev.clusters[c.id]?.cpu || 0, mem: ev.clusters[c.id]?.mem || 0};
@@ -714,19 +726,18 @@ function renderWhatIf(ev) {
     : {cpu: Math.max(planned.cpu, requests.cpu), mem: Math.max(planned.mem, requests.mem)};
   const need = {cpu: used.cpu + app.cpu, mem: used.mem + app.mem};
 
-  const result = nodesNeeded(c, cfg, env, need, node, overhead);
-  const withoutN1 = env.node_failures ? nodesNeeded(c, cfg, {...env, node_failures: 0}, need, node, overhead) : null;
+  const result = nodesNeeded(c, cfg, env, need, node, overhead, minAdd ? minAdd + env.node_failures : 0);
+  const withoutN1 = env.node_failures ? nodesNeeded(c, cfg, {...env, node_failures: 0}, need, node, overhead, minAdd) : null;
   const k = result ? result.added : null;
   const after = result ? result.limits : null;
   const lic = plan.settings.license;
   const licPerNode = lic ? (lic.unit === "vcpu" ? node.cpu * lic.per_year : lic.per_year) : 0;
 
-  // Quota is not enough: every replica has to fit on one node, next to that node's platform DaemonSets.
-  const perReplica = {cpu: app.cpu / replicas, mem: app.mem / replicas};
-  const biggest = (c.node_sizes || []).reduce((a, n) => ({cpu: Math.max(a.cpu, n.cpu), mem: Math.max(a.mem, n.mem_gib)}), {cpu: node.cpu, mem: node.mem});
-  const tooBig = perReplica.cpu > biggest.cpu - overhead.cpu + 1e-9 || perReplica.mem > biggest.mem - overhead.mem + 1e-9;
-
-  const replicaLine = tooBig && h("div", {class: "verdict"}, h("span", {class: "dot critical"}), h("span", {}, h("b", {}, "Can't be scheduled: "), `one replica (${fmt(perReplica.cpu, 2)} CPU / ${fmt(perReplica.mem)} GiB) is larger than any node has left after its platform DaemonSets (${fmt(biggest.cpu - overhead.cpu, 2)} CPU / ${fmt(biggest.mem - overhead.mem)} GiB). Use more replicas or larger nodes; the check below only counts quota.`));
+  const largest = existing.reduce((a, n) => (!a || n.cpu > a.cpu || (n.cpu === a.cpu && n.mem > a.mem)) ? n : a, null);
+  const replicaLine = tooBig && h("div", {class: "verdict"}, h("span", {class: "dot critical"}), h("span", {}, h("b", {}, "Can't be scheduled: "),
+    `one replica (${fmt(pod.cpu, 2)} CPU / ${fmt(pod.mem)} GiB) fits on no node after its platform DaemonSets`,
+    largest ? ` — today's largest leaves ${fmt(largest.cpu - overhead.cpu, 2)} / ${fmt(largest.mem - overhead.mem)},` : "",
+    ` the new node size ${fmt(node.cpu - overhead.cpu, 2)} / ${fmt(node.mem - overhead.mem)}. Choose a larger node size or split the application into smaller replicas; the check below only counts quota.`));
   let verdict;
   if (!result) verdict = [h("span", {class: "dot critical"}), (!node.cpu && !node.mem) ? `Doesn't fit on ${c.name}; enter a node size to see how many nodes to add.` : `Doesn't fit on ${c.name} even with 200 more nodes of this size: the platform per node or the headroom rule leaves too little room.`];
   else if (k === 0) verdict = [h("span", {class: "dot good"}), h("span", {}, "Fits on ", h("b", {}, c.name), ` (${envName}) without new nodes. Room left after it: `, h("b", {}, pair(base.limit_cpu - need.cpu, base.limit_mem - need.mem)), " CPU / GiB.")];
@@ -744,7 +755,7 @@ function renderWhatIf(ev) {
     return h("span", {style: r.cpu < -1e-9 || r.mem < -1e-9 ? "color:var(--status-critical)" : ""}, pair(r.cpu, r.mem)); };
   const nodeCount = base.nodes_known ? base.node_count : (c.nodes ?? "?");
   const labels = ["Nodes", "Allocatable", `− largest node(s) (N+${env.node_failures})`, "− platform reserve", "= limit for projects",
-    `Already in use (${{max: "higher of plan and requests", plan: "planned quota", requests: "requests now"}[basis]})`, "+ this application", "= room left"];
+    `Already in use (${{max: "higher of plan and requests", plan: "planned quota", requests: "requests now"}[basis]})`, `+ this application (${replicas} × ${fmt(pod.cpu, 2)} / ${fmt(pod.mem)})`, "= room left"];
   const today = col(base, nodeCount, [pair(used.cpu, used.mem), pair(app.cpu, app.mem), room(base)]);
   const cols = [today];
   if (k) cols.push(col(after, typeof nodeCount === "number" ? `${nodeCount + k} (+${k})` : `+${k}`, [pair(used.cpu, used.mem), pair(app.cpu, app.mem), room(after)]));
@@ -753,6 +764,7 @@ function renderWhatIf(ev) {
     h("tbody", {}, labels.map((l, i) => h("tr", {}, h("td", {}, l), cols.map((cl) => h("td", {}, cl[i])))))));
 
   const notes = [];
+  if (minAdd) notes.push(`One replica fits on none of today's nodes, only on the new node size (${Math.max(1, perNewNode)} per node): at least ${minAdd} new node(s) for ${replicas} replica(s)${env.node_failures ? `, plus ${env.node_failures} for N+${env.node_failures}` : ""}.`);
   if (withoutN1 && result && withoutN1.added !== k)
     notes.push(`N+${env.node_failures} costs ${k - withoutN1.added} node(s) here: without tolerating a node failure it would ${withoutN1.added ? `need ${withoutN1.added} new node(s)` : "fit without new nodes"}.`);
   if (k && lic) notes.push(h("span", {class: "money"}, `Licence per new node: ${money(licPerNode)} a year (${lic.unit === "vcpu" ? `${fmt(node.cpu, 2)} vCPU × ${money(lic.per_year)}; counted on the node's allocatable CPU, check what your contract counts` : "per node"}). Hardware or VM cost of the node is not included.`));

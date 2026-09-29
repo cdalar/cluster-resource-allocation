@@ -39,9 +39,10 @@ its own; it relies on Rancher's.
 ## The page at a glance
 
 The page reads top to bottom: settings first, then the what-if calculator, clusters and projects. Every number updates as you type.
-*Rates and rules* and *What-if* start collapsed; click their title to open them. Every panel (rules, what-if,
-clusters, projects) has a handle ⠿ on its left: drag it to put the panel elsewhere, or focus it and press ↑ / ↓.
-The order is remembered in your browser only, not in the plan.
+Every panel (rules, what-if, clusters, projects) collapses: click its title. *Rates and rules* and *What-if* start
+collapsed, *Clusters* and *Projects* open. Each panel also has a handle ⠿ on its left: drag it to put the panel
+elsewhere, or focus it and press ↑ / ↓. Which panels are open and their order are remembered in your browser only,
+not in the plan.
 
 | Part | What it shows or does |
 | --- | --- |

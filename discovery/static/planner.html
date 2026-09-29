@@ -186,8 +186,9 @@ details summary { cursor: pointer; }
   </div>
 
   <div class="card panel" data-panel="clusters">
-    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity and node sizes from Rancher; planned = Σ of the quotas below. Values are CPU / GiB.</span></div>
-    <div class="banner" style="margin-bottom:12px">
+    <details id="clusters-box" open>
+    <summary><h2 style="display:inline">Clusters</h2> <span class="muted">— capacity and node sizes from Rancher; planned = Σ of the project quotas. Values are CPU / GiB.</span></summary>
+    <div class="banner" style="margin:12px 0">
       <b>How much each cluster can give to projects</b> (CPU and memory separately):
       <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
         <li><b>Allocatable</b> of the schedulable nodes,</li>
@@ -201,17 +202,18 @@ details summary { cursor: pointer; }
       <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
+    </details>
   </div>
 
   <div class="card panel" data-panel="projects">
-    <div class="card-head">
-      <h2>Projects</h2>
-      <div class="actions">
-        <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default and platform projects</label>
-      </div>
+    <details id="projects-box" open>
+    <summary><h2 style="display:inline">Projects</h2> <span class="muted">— quota per project and cluster</span></summary>
+    <div class="actions" style="margin:10px 0 4px">
+      <label class="sub"><input type="checkbox" id="show-builtin"> Show Rancher's System / Default and platform projects</label>
     </div>
-    <div class="note" style="margin:-4px 0 8px"><span class="money">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</span><span class="cap-text">Give each project an envelope (its total CPU and memory across all clusters) and split it into quota per cluster; <i>Requests +25 %</i> starts a row from today's requests. Planned quota is compared with the envelope.</span></div>
+    <div class="note" style="margin:0 0 8px"><span class="money">Enter CPU and memory quota directly, or an amount per month and a CPU share and press <i>Convert</i> — the quota is then computed with that cluster's unit rates. Planned cost is compared with the project's monthly budget.</span><span class="cap-text">Give each project an envelope (its total CPU and memory across all clusters) and split it into quota per cluster; <i>Requests +25 %</i> starts a row from today's requests. Planned quota is compared with the envelope.</span></div>
     <div id="projects"></div>
+    </details>
   </div>
   </div>
 </div>
@@ -769,7 +771,7 @@ function tile(label, value, note) {
 }
 
 // ---- movable panels: drag a panel by its handle (or focus the handle and press ↑ / ↓); the order is kept per browser ----
-const PANEL_KEY = "planner-panel-order";
+const PANEL_KEY = "planner-panel-order", OPEN_KEY = "planner-panel-open";
 function initPanels() {
   const box = $("panels");
   const panels = () => [...box.querySelectorAll(":scope > .panel")];
@@ -777,8 +779,17 @@ function initPanels() {
   try {
     for (const id of JSON.parse(localStorage.getItem(PANEL_KEY)) || []) { const el = box.querySelector(`:scope > [data-panel="${id}"]`); if (el) box.append(el); }
   } catch (e) { /* no or bad stored order: keep the default */ }
+  let open = {};
+  try { open = JSON.parse(localStorage.getItem(OPEN_KEY)) || {}; } catch (e) { /* defaults from the markup */ }
   let dragging = null;
   for (const panel of panels()) {
+    // Every panel collapses; whether it is open is kept per browser like the order (default: the markup's `open`).
+    const details = panel.querySelector(":scope > details");
+    if (typeof open[panel.dataset.panel] === "boolean") details.open = open[panel.dataset.panel];
+    details.addEventListener("toggle", () => {
+      open[panel.dataset.panel] = details.open;
+      try { localStorage.setItem(OPEN_KEY, JSON.stringify(open)); } catch (e) { /* not kept */ }
+    });
     const title = panel.querySelector("h2").textContent;
     const handle = h("button", {type: "button", class: "drag-handle", title: "Drag to move this panel (or press ↑ / ↓)", "aria-label": `Move the ${title} panel`}, "⠿");
     // Only draggable while held by the handle, so text in inputs and tables can still be selected.

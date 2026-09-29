@@ -131,12 +131,14 @@ The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a plat
 | = limit for projects | Planner | The result, with the rule that sets it: *N+1* or the environment's *%* |
 | Planned | Planner | Sum of the quotas you plan for all projects on this cluster |
 | Use of limit | Planner | Planned as a share of the limit (the higher of CPU and memory; hover for both); *no room* when the limit is 0 |
+| Requests now | Rancher | What every pod on the cluster requests today, projects and platform together. For comparison with *Planned* only; not part of the limit |
 
 **Platform reserve.** For the cluster the planner runs on, it is **measured**: everything the report classes as
 *System* (Rancher's System project and the system namespaces). Leave the fields empty to use it. For every other
 cluster the planner can't see its pods, so the reserve is **entered**: take the *System* requests from that
-cluster's resource dashboard (see below), or click **Use requests now** to enter the cluster's total requests
-today, a safe upper bound. A cluster with planned quota and no reserve is flagged *not set*.
+cluster's resource dashboard (see below). The platform reserve is only what platform components request; don't
+enter the cluster's total requests (the *Requests now* column), which include the projects' workloads. A cluster
+with planned quota and no reserve is flagged *not set*.
 
 **The same view on each cluster's dashboard.** The resource dashboard of every cluster shows its N+1 picture for
 one node failure: a dashed line in *Cluster capacity by requests* marks the capacity left if the largest node fails,
@@ -195,7 +197,7 @@ rule, amber ones mean the plan is incomplete. You can still save a plan with iss
 | *prod-01 (prod): planned CPU quota 11.2 is above its limit for projects of 11 (allocatable minus its 1 largest node(s) and the platform reserve)* | red | All projects together plan more quota than the cluster can keep running after a node failure | Lower quotas there, move a project to another cluster, or add nodes |
 | *prod-01 (prod): planned CPU quota 13 is above its limit for projects of 12 (80 % of allocatable minus the platform reserve)* | red | Planned quota leaves less room for rollouts than the environment requires | Same as above |
 | *local (prod): 1 schedulable node(s) can't tolerate 1 node failure(s), so no project quota fits* | red | A prod cluster with a single node can't survive a node failure at all | Add a node, or plan this cluster as a non-prod environment |
-| *prod-01: platform reserve not set, so the limit ignores what platform components request* | amber | Nothing measured or entered for platform components, so the limit is too high | Enter the *System* requests from the cluster's dashboard, or click *Use requests now* |
+| *prod-01: platform reserve not set, so the limit ignores what platform components request* | amber | Nothing measured or entered for platform components, so the limit is too high | Enter the *System* requests from the cluster's dashboard |
 | *prod-01: Rancher reports no node sizes, so the node-failure rule can't be checked* | amber | Rancher gave no per-node data for the cluster; only the percentage rule is checked | Check the cluster's agent in Rancher |
 | *payments: no platform set for prod-01, so its quota there has no price* | amber | The cluster has no platform, so cost and budget can't be checked | Pick a platform for the cluster in the Clusters table |
 | *prod-01: no environment set, so its limit for projects (node failures, headroom) can't be checked* | amber | The cluster has quota planned but no environment | Pick an environment for the cluster |

@@ -194,13 +194,13 @@ details summary { cursor: pointer; }
       <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
         <li><b>Allocatable</b> of the schedulable nodes,</li>
         <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
-        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
+        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard,</li>
         <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
       </ol>
       The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th><th title="what all pods on the cluster request today (projects and platform), from Rancher; for comparison only">Requests now</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
     </details>
@@ -515,8 +515,6 @@ function renderClusters() {
       title: measured != null ? `measured: ${fmt(measured, 3)} — leave empty to use it` : "not measured for this cluster",
       oninput: (e) => { cfg[key] = e.target.value === "" ? null : num(e.target.value); markDirty(); }});
     const cpuIn = reserveIn("platform_cpu", c.platform_measured_cpu, "CPU"), memIn = reserveIn("platform_mem_gib", c.platform_measured_mem_gib, "GiB");
-    const useRequests = c.requested_cpu != null && h("button", {type: "button", class: "small", title: "the cluster's total requests now: a safe upper bound for the platform reserve",
-      onclick: () => { cfg.platform_cpu = c.requested_cpu; cfg.platform_mem_gib = c.requested_mem_gib; cpuIn.value = c.requested_cpu; memIn.value = c.requested_mem_gib; markDirty(); }}, "Use requests now");
     const nodes = c.node_sizes ? `${c.node_sizes.length}` : fmt(c.nodes, 0);
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
@@ -525,9 +523,10 @@ function renderClusters() {
       h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
       h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
       h("td", {"data-k": "failover"}),
-      h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}), useRequests)),
-      h("td", {"data-k": "limit"}), h("td", {"data-k": "planned"}), h("td", {class: "l", "data-k": "use"}));
-  }) : [h("tr", {}, h("td", {colspan: 10, class: "empty"}, "No clusters in Rancher"))]));
+      h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}))),
+      h("td", {"data-k": "limit"}), h("td", {"data-k": "planned"}), h("td", {class: "l", "data-k": "use"}),
+      h("td", {title: "all pods on the cluster, projects and platform (Rancher); not used in the limit"}, pair(c.requested_cpu, c.requested_mem_gib)));
+  }) : [h("tr", {}, h("td", {colspan: 11, class: "empty"}, "No clusters in Rancher"))]));
 }
 
 function renderProjects() {

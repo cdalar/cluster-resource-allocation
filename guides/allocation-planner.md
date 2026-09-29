@@ -127,22 +127,18 @@ The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a plat
 | Nodes | Rancher | Schedulable nodes; hover for each node's size |
 | Allocatable | Rancher | CPU / GiB the scheduler can hand out on schedulable nodes, after system reservations |
 | − largest node(s) | Planner | Capacity of the N largest nodes, lost when they fail (0 / 0 when the environment tolerates no failures) |
-| − platform reserve or current requests | You or measured | CPU / GiB requested by platform components, or the cluster's current requests after *Current requests*; see below |
+| − platform reserve | You or measured | CPU / GiB requested by platform components, see below |
 | = limit for projects | Planner | The result, with the rule that sets it: *N+1* or the environment's *%* |
 | Planned | Planner | Sum of the quotas you plan for all projects on this cluster |
 | Use of limit | Planner | Planned as a share of the limit (the higher of CPU and memory; hover for both); *no room* when the limit is 0 |
-| Current requests | Rancher | What every pod on the cluster requests today, projects and platform together |
+| Requests now | Rancher | What every pod on the cluster requests today, projects and platform together. For comparison with *Planned* only; not part of the limit |
 
 **Platform reserve.** For the cluster the planner runs on, it is **measured**: everything the report classes as
 *System* (Rancher's System project and the system namespaces). Leave the fields empty to use it. For every other
 cluster the planner can't see its pods, so the reserve is **entered**: take the *System* requests from that
-cluster's resource dashboard (see below). A cluster with planned quota and no reserve is flagged *not set*.
-
-**Current requests instead.** When you don't know a cluster's platform reserve, click **Current requests**: the
-limit then deducts everything the cluster requests now (all pods, projects included, live from Rancher) instead
-of a platform reserve, and the row says **cluster requests** rather than a reserve. That is a different, more
-cautious question (*how much is left on top of what runs today?*), so planned quota for workloads that already run
-is counted twice. **Platform reserve** switches back.
+cluster's resource dashboard (see below). The platform reserve is only what platform components request; don't
+enter the cluster's total requests (the *Requests now* column), which include the projects' workloads. A cluster
+with planned quota and no reserve is flagged *not set*.
 
 **The same view on each cluster's dashboard.** The resource dashboard of every cluster shows its N+1 picture for
 one node failure: a dashed line in *Cluster capacity by requests* marks the capacity left if the largest node fails,

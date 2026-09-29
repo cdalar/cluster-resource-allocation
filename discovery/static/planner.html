@@ -93,7 +93,6 @@ details summary { cursor: pointer; }
 .drag-handle:hover, .drag-handle:focus-visible { color: var(--text-primary); background: var(--hover); }
 .panel.dragging { opacity: .5; outline: 2px dashed var(--series-1); }
 #whatif-box > .whatif-form { margin-top: 12px; }
-#clusters-box th { white-space: normal; vertical-align: bottom; }
 .whatif-form { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .whatif-form fieldset { border: 1px solid var(--grid); border-radius: 8px; padding: 6px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .whatif-form legend { color: var(--text-secondary); font-size: 12px; padding: 0 4px; }
@@ -202,7 +201,7 @@ details summary { cursor: pointer; }
       The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l" title="what platform components request; or, after Current requests, everything the cluster requests now">− platform reserve<br><span class="muted">or current requests</span></th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th><th title="what all pods on the cluster request today (projects and platform), from Rancher">Current requests</th></tr></thead>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th><th title="what all pods on the cluster request today (projects and platform), from Rancher; for comparison only">Requests now</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
     </details>
@@ -334,22 +333,19 @@ function clusterLimits(c, cfg, env) {
   const failures = env ? Math.round(env.node_failures || 0) : 0;
   const sizes = c.node_sizes;
   const entered = cfg.platform_cpu != null || cfg.platform_mem_gib != null;
-  const source = cfg.reserve_from === "requests" && c.requested_cpu != null ? "requests"
-    : entered ? "entered" : c.platform_measured_cpu != null ? "measured" : "none";
+  const source = entered ? "entered" : c.platform_measured_cpu != null ? "measured" : "none";
   const out = {node_failures: failures, nodes_known: sizes != null, node_count: (sizes || []).length, reserve_source: source, max_pct: env ? env.max_quota_pct : null};
   for (const [dim, allocKey, sizeKey, cfgKey, measuredKey] of [["cpu", "alloc_cpu", "cpu", "platform_cpu", "platform_measured_cpu"], ["mem", "alloc_mem_gib", "mem_gib", "platform_mem_gib", "platform_measured_mem_gib"]]) {
     const alloc = c[allocKey];
-    // "requests": the cluster's current requests (all pods, projects included) instead of a platform reserve
-    const reserve = (source === "requests" ? c[dim === "cpu" ? "requested_cpu" : "requested_mem_gib"] : entered ? cfg[cfgKey] : c[measuredKey]) || 0;
+    const reserve = (entered ? cfg[cfgKey] : c[measuredKey]) || 0;
     let lost = failures ? (sizes || []).map((n) => n[sizeKey]).sort((a, b) => b - a).slice(0, failures).reduce((a, b) => a + b, 0) : 0;
     if (sizes != null && failures >= sizes.length) lost = alloc || 0;
     Object.assign(out, {[`alloc_${dim}`]: alloc, [`failover_${dim}`]: lost, [`reserve_${dim}`]: reserve});
     if (alloc == null || !env) { Object.assign(out, {[`limit_${dim}`]: null, [`binding_${dim}`]: null, [`binding_${dim}_text`]: ""}); continue; }
     const byFailures = Math.max(0, alloc - lost - reserve), byPct = Math.max(0, env.max_quota_pct / 100 * (alloc - reserve));
     const binding = failures && byFailures <= byPct ? "failures" : "pct";
-    const deducted = source === "requests" ? "the current cluster requests" : "the platform reserve";
     Object.assign(out, {[`limit_${dim}`]: Math.min(byFailures, byPct), [`binding_${dim}`]: binding,
-      [`binding_${dim}_text`]: binding === "failures" ? `allocatable minus its ${failures} largest node(s) and ${deducted}` : `${env.max_quota_pct} % of allocatable minus ${deducted}`});
+      [`binding_${dim}_text`]: binding === "failures" ? `allocatable minus its ${failures} largest node(s) and the platform reserve` : `${env.max_quota_pct} % of allocatable minus the platform reserve`});
   }
   return out;
 }
@@ -524,16 +520,8 @@ function renderClusters() {
     const reserveIn = (key, measured, label) => h("input", {type: "number", min: "0", step: "any", style: "width:64px",
       value: cfg[key] ?? "", placeholder: measured != null ? fmt(measured, 2) : "?", "aria-label": `${c.name} platform reserve ${label}`,
       title: measured != null ? `measured: ${fmt(measured, 3)} — leave empty to use it` : "not measured for this cluster",
-      oninput: (e) => { cfg[key] = e.target.value === "" ? null : num(e.target.value); cfg.reserve_from = ""; markDirty(); }});
+      oninput: (e) => { cfg[key] = e.target.value === "" ? null : num(e.target.value); markDirty(); }});
     const cpuIn = reserveIn("platform_cpu", c.platform_measured_cpu, "CPU"), memIn = reserveIn("platform_mem_gib", c.platform_measured_mem_gib, "GiB");
-    // Deduct everything the cluster requests now instead of a platform reserve; follows Rancher's live value.
-    // Typing a platform reserve switches back.
-    const useRequests = c.requested_cpu != null && h("button", {type: "button", class: "small",
-      title: "deduct the cluster's current requests (all pods, projects included) instead of a platform reserve",
-      onclick: () => { cfg.reserve_from = "requests"; cfg.platform_cpu = cfg.platform_mem_gib = null; markDirty(); renderClusters(); recompute(); }}, "Current requests");
-    const usePlatform = h("button", {type: "button", class: "small", title: "deduct a platform reserve (measured or entered) instead",
-      onclick: () => { cfg.reserve_from = ""; markDirty(); renderClusters(); recompute(); }}, "Platform reserve");
-    const byRequests = cfg.reserve_from === "requests" && c.requested_cpu != null;
     const nodes = c.node_sizes ? `${c.node_sizes.length}` : fmt(c.nodes, 0);
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
@@ -542,11 +530,9 @@ function renderClusters() {
       h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
       h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
       h("td", {"data-k": "failover"}),
-      h("td", {class: "l"}, h("span", {class: "conv"}, ...(byRequests
-        ? [h("span", {"data-k": "source"}), usePlatform]
-        : [cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}), useRequests]))),
+      h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}))),
       h("td", {"data-k": "limit"}), h("td", {"data-k": "planned"}), h("td", {class: "l", "data-k": "use"}),
-      h("td", {title: "all pods on the cluster, projects and platform (Rancher)"}, pair(c.requested_cpu, c.requested_mem_gib)));
+      h("td", {title: "all pods on the cluster, projects and platform (Rancher); not used in the limit"}, pair(c.requested_cpu, c.requested_mem_gib)));
   }) : [h("tr", {}, h("td", {colspan: 11, class: "empty"}, "No clusters in Rancher"))]));
 }
 
@@ -617,8 +603,7 @@ function recompute() {
       : !row.nodes_known ? h("span", {class: "muted"}, "sizes unknown")
       : h("span", {title: `the ${row.node_failures} largest schedulable node(s)`}, pair(row.failover_cpu, row.failover_mem)));
     tr.querySelector('[data-k="source"]').replaceChildren(
-      row.reserve_source === "requests" ? h("span", {title: "everything the cluster requests now, projects included; type a platform reserve to switch back"}, h("b", {}, pair(row.reserve_cpu, row.reserve_mem)), " cluster requests")
-      : row.reserve_source === "measured" ? " measured" : row.reserve_source === "entered" ? " entered" : h("span", {style: "color:var(--status-critical)"}, " not set"));
+      row.reserve_source === "measured" ? " measured" : row.reserve_source === "entered" ? " entered" : h("span", {style: "color:var(--status-critical)"}, " not set"));
     const binding = (b) => b === "failures" ? `N+${row.node_failures}` : b === "pct" ? `${row.max_pct} %` : "";
     tr.querySelector('[data-k="limit"]').replaceChildren(row.limit_cpu == null ? h("span", {class: "muted", title: "set an environment"}, "no env") :
       h("span", {}, h("b", {}, pair(row.limit_cpu, row.limit_mem)), h("span", {class: "muted"}, ` (${binding(row.binding_cpu)}${row.binding_mem !== row.binding_cpu ? " / " + binding(row.binding_mem) : ""})`)));
@@ -785,7 +770,7 @@ function renderWhatIf(ev) {
   const room = (lim) => { const r = {cpu: lim.limit_cpu - need.cpu, mem: lim.limit_mem - need.mem};
     return h("span", {style: r.cpu < -1e-9 || r.mem < -1e-9 ? "color:var(--status-critical)" : ""}, pair(r.cpu, r.mem)); };
   const nodeCount = base.nodes_known ? base.node_count : (c.nodes ?? "?");
-  const labels = ["Nodes", "Allocatable", `− largest node(s) (N+${env.node_failures})`, base.reserve_source === "requests" ? "− current cluster requests" : "− platform reserve", "= limit for projects",
+  const labels = ["Nodes", "Allocatable", `− largest node(s) (N+${env.node_failures})`, "− platform reserve", "= limit for projects",
     `Already in use (${{max: "higher of plan and requests", plan: "planned quota", requests: "requests now"}[basis]})`, `+ this application (${replicas} × ${fmt(pod.cpu, 2)} / ${fmt(pod.mem)})`, "= room left"];
   const today = col(base, nodeCount, [pair(used.cpu, used.mem), pair(app.cpu, app.mem), room(base)]);
   const cols = [today];
@@ -804,7 +789,6 @@ function renderWhatIf(ev) {
   if (k && lic) notes.push(h("span", {class: "money"}, `Licence per new node: ${money(licPerNode)} a year (${lic.unit === "vcpu" ? `${fmt(node.cpu, 2)} vCPU × ${money(lic.per_year)}; counted on the node's allocatable CPU, check what your contract counts` : "per node"}). Hardware or VM cost of the node is not included.`));
   if (k && env.node_failures && node.cpu > Math.max(0, ...(c.node_sizes || []).map((n) => n.cpu)))
     notes.push("The new nodes are larger than today's largest, so N+1 now holds back a new node's capacity.");
-  if (base.reserve_source === "requests") notes.push(`The limit already deducts ${c.name}'s current requests, projects included, so "already in use" from requests now is 0; planned quota for the same workloads would be counted twice.`);
   if (base.reserve_source === "none") notes.push(h("span", {style: "color:var(--status-critical)"}, `No platform reserve for ${c.name}: the result ignores what platform components request. Enter it in the Clusters table.`));
   if (env.node_failures && !base.nodes_known) notes.push("Rancher reports no node sizes for this cluster, so N+1 isn't applied.");
   if (basis !== "plan" && !reqKnown) notes.push("Rancher reports no requests for this cluster, so requests now count as 0.");

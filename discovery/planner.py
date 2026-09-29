@@ -276,7 +276,11 @@ def validate_state(raw, mode="budget"):
         for key in ("platform_cpu", "platform_mem_gib"):
             v = c.get(key)
             reserve[key] = None if v in (None, "") else _num(v, f"cluster {cid}.{key}", 0, 1000000)
-        clusters[cid] = {"env": env, **reserve}
+        # "requests": deduct the cluster's current requests (all pods, from Rancher) instead of a platform reserve
+        reserve_from = c.get("reserve_from") or ""
+        if reserve_from not in ("", "requests"):
+            raise PlanError(f"cluster {cid}: reserve_from must be empty or 'requests'")
+        clusters[cid] = {"env": env, **reserve, "reserve_from": reserve_from}
         if money:
             clusters[cid]["platform"] = platform
     projects = {}
@@ -480,7 +484,9 @@ def cluster_limits(cluster, cluster_cfg, env):
     """How much quota a cluster can hand out to projects, per CPU and memory (see the module docstring)."""
     failures = int(env["node_failures"]) if env else 0
     sizes = cluster.get("node_sizes")
-    reserve_source = "entered" if cluster_cfg.get("platform_cpu") is not None or \
+    reserve_source = "requests" if cluster_cfg.get("reserve_from") == "requests" and \
+        cluster.get("requested_cpu") is not None else \
+        "entered" if cluster_cfg.get("platform_cpu") is not None or \
         cluster_cfg.get("platform_mem_gib") is not None else \
         "measured" if cluster.get("platform_measured_cpu") is not None else "none"
     out = {"node_failures": failures, "nodes_known": sizes is not None, "node_count": len(sizes or []),
@@ -489,7 +495,9 @@ def cluster_limits(cluster, cluster_cfg, env):
             ("cpu", "alloc_cpu", "cpu", "platform_cpu", "platform_measured_cpu"),
             ("mem", "alloc_mem_gib", "mem_gib", "platform_mem_gib", "platform_measured_mem_gib")):
         alloc = cluster.get(alloc_key)
-        if reserve_source == "entered":
+        if reserve_source == "requests":  # everything requested now, projects included: no platform reserve
+            reserve = cluster.get("requested_cpu" if dim == "cpu" else "requested_mem_gib") or 0.0
+        elif reserve_source == "entered":
             reserve = cluster_cfg.get(cfg_key) or 0.0
         else:
             reserve = cluster.get(measured_key) or 0.0
@@ -507,9 +515,10 @@ def cluster_limits(cluster, cluster_cfg, env):
         binding = "failures" if failures and by_failures <= by_pct else "pct"
         out[f"limit_{dim}"] = round(min(by_failures, by_pct), 3)
         out[f"binding_{dim}"] = binding
+        deducted = "the current cluster requests" if reserve_source == "requests" else "the platform reserve"
         out[f"binding_{dim}_text"] = (
-            f"allocatable minus its {failures} largest node(s) and the platform reserve" if binding == "failures"
-            else f"{env['max_quota_pct']:g} % of allocatable minus the platform reserve")
+            f"allocatable minus its {failures} largest node(s) and {deducted}" if binding == "failures"
+            else f"{env['max_quota_pct']:g} % of allocatable minus {deducted}")
     return out
 
 

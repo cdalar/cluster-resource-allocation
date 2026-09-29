@@ -370,6 +370,18 @@ class Evaluate(unittest.TestCase):
         self.assertEqual(ev["clusters"]["c-m-1"]["reserve_source"], "none")
         self.assertTrue(any("platform reserve not set" in i["text"] for i in ev["issues"]))
 
+    def test_current_cluster_requests_instead_of_a_platform_reserve(self):
+        # prod-01 requests 2 CPU / 4 GiB now: CPU min(10 - 4 - 2, 80 % x 8) = 4, memory min(40 - 16 - 4, 80 % x 36) = 20
+        raw = fixed_rates(planner.empty_state())
+        raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem", "platform_cpu": 9, "reserve_from": "requests"}}
+        row = planner.evaluate(planner.validate_state(raw), inventory())["clusters"]["c-m-1"]
+        self.assertEqual((row["reserve_source"], row["reserve_cpu"], row["limit_cpu"], row["limit_mem"]),
+                         ("requests", 2, 4, 20))
+        self.assertIn("current cluster requests", row["binding_cpu_text"])
+        raw["clusters"]["c-m-1"]["reserve_from"] = "platform"
+        with self.assertRaises(planner.PlanError):
+            planner.validate_state(raw)
+
     def test_platform_reserve_measured_on_the_scanned_cluster(self):
         report = {"clusters": [{"cluster": "local"}],
                   "projects": [{"project_id": "local:p-sys", "category": "system", "cpu_requests": 0.4,

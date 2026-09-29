@@ -14,3 +14,9 @@ Open the dashboard (it is not exposed outside the cluster):
 Usage history is read from {{ .Values.prometheus.service }} via the API server proxy.
 If the dashboard shows "prometheus unavailable", check that Rancher Monitoring is installed or set prometheus.service / prometheus.url.
 {{- end }}
+{{- if dig "deployDownstream" "enabled" false .Values.rancher }}
+
+Downstream clusters get this chart through the Fleet HelmOp {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }}/{{ include "crr.fullname" . }}
+(Rancher: Continuous Delivery -> App Bundles). Check it with:
+  kubectl -n {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }} get helmops,bundles
+{{- end }}

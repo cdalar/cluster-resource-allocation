@@ -1,7 +1,9 @@
 # 8. Deploying the Report to Downstream Clusters with Fleet
 
 Plan for installing and upgrading the `cluster-resource-report` chart on downstream clusters through Fleet, from
-the release on the Rancher local cluster, without a GitRepo. Status: **proposal**, nothing below is built yet.
+the release on the Rancher local cluster, without a GitRepo. Status: **chart part built** (`rancher.deployDownstream`,
+`templates/fleet-helmop.yaml`, chart README). Still open: the installation guide, and the end-to-end test on a
+downstream cluster (including adoption of the existing manual release).
 
 ## Starting point
 
@@ -67,7 +69,7 @@ rancher:
     workspace: fleet-default          # Fleet workspace of the downstream clusters (the local cluster is in fleet-local)
     # Where to install. Nothing by default: with all three empty the chart fails and asks for a target.
     # A cluster matching any of them gets the chart.
-    clusters: []                      # Fleet cluster names, e.g. [cra-downstream-2, onprem-prod-01]
+    clusters: []                      # Fleet cluster names, each a name or {name: ..., values: {...}}
                                       #   (kubectl -n fleet-default get clusters.fleet.cattle.io)
     clusterSelector: null             # label selector on Fleet clusters, e.g. {matchLabels: {resource-report: enabled}}
                                       #   ({} = every cluster in the workspace, only if written explicitly)
@@ -119,13 +121,14 @@ It renders one `HelmOp`:
 | name / namespace | `crr.fullname` / `workspace`, with `crr.labels` |
 | `spec.namespace` | `deployDownstream.namespace` |
 | `spec.helm.releaseName` | `deployDownstream.releaseName` |
-| `spec.helm.repo` / `chart` | The OCI form the test Rancher accepts, settled during the test: `repo: oci://…/cluster-resource-report` with an empty `chart`, or `chart: oci://…` |
+| `spec.helm.repo` | The chart's full OCI URL, with no `chart` field. Tested on Fleet v0.16.2: `chart: oci://…` without `repo` is rejected ("non-tarball chart with an empty repo field"), and so is `repo` + `chart` for OCI ("OCI repository with a non-empty chart field") |
 | `spec.helm.version` | `chart.version`, default `.Chart.Version` |
 | `spec.helm.values` | Defaults, then `mergeOverwrite` with `deployDownstream.values` (see below) |
-| `spec.targets` | `{clusterName: …}` per entry in `clusters`, plus `{clusterSelector: …}` and `{clusterGroup: …}` when set. Fleet treats targets as OR. |
+| `spec.targets` | `{clusterName: …}` per entry in `clusters` (with `helm.values` = common values + that entry's `values` when given), plus `{clusterSelector: …}` and `{clusterGroup: …}` when set. Fleet treats targets as OR. |
 | `spec.helmSecretName`, `spec.insecureSkipTLSVerify` | Only when set |
 
-The default downstream values are:
+The default downstream values are (the local-only settings `isLocalCluster`, `publishNames`, `deployDownstream`,
+`planner` and `capacityPlanner` are always switched off after `deployDownstream.values` is applied):
 - `rancher.namesConfigMap.enabled`: equal to `publishNames.enabled`;
 - `image.repository`, `image.pullPolicy` and `imagePullSecrets`: copied from the local values, so an air-gapped
   mirror is configured once.

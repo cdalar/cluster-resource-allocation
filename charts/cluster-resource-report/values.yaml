@@ -47,6 +47,38 @@ rancher:
     workspace: fleet-default          # Fleet workspace: fleet-default = all downstream clusters
     targetNamespace: resource-report  # namespace of the ConfigMap on downstream clusters
     clusterSelector: {}               # Fleet clusterSelector; {} = every cluster in the workspace
+  # Rancher local cluster only (needs isLocalCluster): install this chart on chosen downstream clusters with one
+  # Fleet HelmOp (an "App Bundle" in Continuous Delivery), no GitRepo. Fleet keeps the downstream releases at this
+  # release's chart version, so `helm upgrade` here upgrades them too; uninstalling this release (or disabling
+  # this) makes Fleet uninstall them. Needs Fleet >= 0.12 (Rancher 2.11+). Plan: docs/08-fleet-deployment.md.
+  # Each key names the HelmOp field it sets.
+  deployDownstream:
+    enabled: false
+    workspace: fleet-default          # metadata.namespace: Fleet workspace of the downstream clusters
+    # spec.targets -- where to install. Nothing by default: with all three empty the chart fails.
+    # A cluster matching any of them gets the chart.
+    clusters: []                      # Fleet cluster names (kubectl -n fleet-default get clusters.fleet.cattle.io),
+                                      # each a name or {name: ..., values: {...}} for per-cluster values, e.g.
+                                      #   - onprem-prod-01
+                                      #   - name: onprem-big-01
+                                      #     values: {collection: {step: 15m}}
+    clusterSelector: null             # label selector, e.g. {matchLabels: {resource-report: enabled}}
+                                      # ({} = every cluster in the workspace, only when written explicitly)
+    clusterGroup: ""                  # an existing Fleet ClusterGroup
+    namespace: resource-report        # spec.namespace: release namespace downstream (= publishNames.targetNamespace)
+    releaseName: resource-report      # spec.helm.releaseName
+    chart:
+      repo: oci://ghcr.io/cdalar/charts/cluster-resource-report   # spec.helm.repo: full OCI URL of the chart (Docker Hub: oci://docker.io/cdalar/cluster-resource-report-chart, or a mirror)
+      version: ""                     # spec.helm.version; "" = this chart's version
+    helmSecretName: ""                # spec.helmSecretName: secret in the workspace with registry credentials
+                                      # (username/password), for a private registry or mirror
+    insecureSkipTLSVerify: false      # spec.insecureSkipTLSVerify: skip TLS verification when Fleet downloads the
+                                      # chart. Not for the image: containerd on the nodes pulls that (registries.yaml)
+    # spec.helm.values: values for every downstream release, over these defaults taken from this release:
+    # image.repository, image.pullPolicy, imagePullSecrets, and rancher.namesConfigMap.enabled = publishNames.enabled.
+    # Local-only settings (rancher.isLocalCluster, publishNames, deployDownstream, planner, capacityPlanner) are
+    # always switched off downstream.
+    values: {}
   # Downstream clusters: read the names from that ConfigMap (in namesConfigMap.namespace, default: the
   # release namespace). Grants get on exactly that ConfigMap. No token needed on the cluster.
   namesConfigMap:

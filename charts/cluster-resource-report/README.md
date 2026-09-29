@@ -90,7 +90,7 @@ helm upgrade --install resource-report oci://ghcr.io/cdalar/charts/cluster-resou
 
 From a checkout, use `charts/cluster-resource-report` instead of the `oci://` location. On a Rancher-managed
 cluster you can also install it from the Rancher UI (Apps → Charts, after adding the OCI repository above), or
-roll it out to all clusters with Fleet.
+let the release on the Rancher local cluster install it on chosen downstream clusters with Fleet (below).
 
 ### Show Rancher Project names instead of IDs
 
@@ -121,6 +121,42 @@ helm upgrade --install ... --set rancher.namesConfigMap.enabled=true
 ```
 
 Names appear after the next publish (every 10 minutes by default) and Fleet sync.
+
+### Install on downstream clusters with Fleet
+
+Instead of installing on every downstream cluster by hand, the release on the Rancher local cluster can render a
+Fleet `HelmOp` (Rancher: **Continuous Delivery → App Bundles**) that installs this chart on the clusters you choose,
+at the same chart version as the local release. Needs Fleet ≥ 0.12 (Rancher 2.11+); the downstream clusters must
+be able to pull the chart and image. Design: [docs/08](../../docs/08-fleet-deployment.md).
+
+```yaml
+# values-local.yaml
+rancher:
+  isLocalCluster: true
+  publishNames:
+    enabled: true
+  deployDownstream:
+    enabled: true
+    clusters:                         # Fleet cluster names; or clusterSelector / clusterGroup
+      - onprem-prod-01
+      - name: onprem-big-01
+        values: {collection: {step: 15m}}
+    values:                           # for every downstream release
+      collection: {window: 7d}
+```
+
+- **Targets:** `clusters` (names, optionally with per-cluster `values`), `clusterSelector` (cluster labels) and
+  `clusterGroup` (a Fleet ClusterGroup) can be combined. With none set the chart fails, so nothing is installed
+  everywhere by accident; write `clusterSelector: {}` for all clusters in the workspace.
+- **Values downstream:** `image.repository`, `image.pullPolicy` and `imagePullSecrets` are copied from the local
+  release, and `rancher.namesConfigMap.enabled` follows `publishNames.enabled`. Then `deployDownstream.values` is
+  applied, and the local-only settings (`isLocalCluster`, `publishNames`, `deployDownstream`, the planners) are
+  always switched off.
+- **Lifecycle:** `helm upgrade` here upgrades the downstream releases; removing a cluster from the targets, disabling
+  this, or uninstalling the local release makes Fleet uninstall the chart there.
+- **Private registry / mirror:** set `chart.repo`, and `helmSecretName` (a secret in the workspace with
+  `username`/`password`). `insecureSkipTLSVerify` skips TLS verification for the chart download only; the image is
+  pulled by containerd on the nodes, which needs the registry in its own configuration.
 
 ## 3. Open the dashboard
 
@@ -180,6 +216,12 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
 | `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
+| `rancher.deployDownstream.enabled` | `false` | Local cluster only: a Fleet HelmOp installs this chart on chosen downstream clusters (see above) |
+| `rancher.deployDownstream.clusters` / `.clusterSelector` / `.clusterGroup` | `[]` / `null` / `""` | Targets: cluster names (each a name or `{name, values}`), a label selector, a Fleet ClusterGroup; at least one is required |
+| `rancher.deployDownstream.workspace` / `.namespace` / `.releaseName` | `fleet-default` / `resource-report` / `resource-report` | Fleet workspace; release namespace (must equal `publishNames.targetNamespace`) and name downstream |
+| `rancher.deployDownstream.chart.repo` / `.chart.version` | `oci://ghcr.io/cdalar/charts/cluster-resource-report` / this chart's version | Full OCI URL of the chart, and its version downstream |
+| `rancher.deployDownstream.helmSecretName` / `.insecureSkipTLSVerify` | `""` / `false` | Registry credentials secret in the workspace; skip TLS verification for the chart download |
+| `rancher.deployDownstream.values` | `{}` | Values for every downstream release |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
 | `capacityPlanner.enabled` | `false` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
 | `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`); plan in a ConfigMap |
@@ -205,6 +247,8 @@ ConfigMaps.
 - **Name publisher (`rancher.publishNames`, own service account):** read on `projects`/`clusters.management.cattle.io`,
   and `create` bundles plus `get`/`patch`/`update` on the `rancher-project-names` Bundle in the Fleet workspace.
 - **NavLinks** (`ui.cattle.io`) are created by Helm at install time, not by the running app.
+- **Fleet HelmOp** (`rancher.deployDownstream`) is created by Helm at install time, with the installer's rights,
+  not by the running app. No service account gets rights on it.
 
 ## Endpoints
 

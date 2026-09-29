@@ -1,0 +1,65 @@
+{{- if dig "deployDownstream" "enabled" false .Values.rancher }}
+{{- if not .Values.rancher.isLocalCluster }}
+{{- fail "rancher.deployDownstream.enabled needs rancher.isLocalCluster=true (it runs on the Rancher local cluster)" }}
+{{- end }}
+{{- if not (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
+{{- fail "rancher.deployDownstream needs Fleet HelmOps (fleet.cattle.io/v1alpha1 HelmOp): Fleet >= 0.12, Rancher 2.11+" }}
+{{- end }}
+{{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
+{{- $d := merge (deepCopy .Values.rancher.deployDownstream) (dict "workspace" "fleet-default" "clusters" list "clusterGroup" "" "namespace" "resource-report" "releaseName" "resource-report" "helmSecretName" "" "insecureSkipTLSVerify" false "values" dict) }}
+{{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://ghcr.io/cdalar/charts/cluster-resource-report" "version" "") }}
+{{- if dig "publishNames" "enabled" false .Values.rancher }}
+{{- $ns := dig "publishNames" "targetNamespace" "resource-report" .Values.rancher }}
+{{- if ne $ns $d.namespace }}
+{{- fail (printf "rancher.deployDownstream.namespace (%s) must equal rancher.publishNames.targetNamespace (%s): the downstream release reads the names ConfigMap from its own namespace" $d.namespace $ns) }}
+{{- end }}
+{{- end }}
+{{- /* downstream values: defaults from this release, then deployDownstream.values, then the local-only settings off */}}
+{{- $base := dict "image" (dict "repository" .Values.image.repository "pullPolicy" .Values.image.pullPolicy) "imagePullSecrets" (.Values.imagePullSecrets | default list) "rancher" (dict "namesConfigMap" (dict "enabled" (dig "publishNames" "enabled" false .Values.rancher))) }}
+{{- $off := dict "rancher" (dict "isLocalCluster" false "publishNames" (dict "enabled" false) "deployDownstream" (dict "enabled" false)) "planner" (dict "enabled" false) "capacityPlanner" (dict "enabled" false) }}
+{{- $common := mergeOverwrite (deepCopy $base) (deepCopy ($d.values | default dict)) (deepCopy $off) }}
+{{- /* Fleet uses the first target that matches a cluster: named clusters (with their own values) come first */}}
+{{- $targets := list }}
+{{- range $d.clusters }}
+{{- if kindIs "string" . }}
+{{- $targets = append $targets (dict "clusterName" .) }}
+{{- else if and (kindIs "map" .) .name }}
+{{- $v := mergeOverwrite (deepCopy $common) (deepCopy (.values | default dict)) (deepCopy $off) }}
+{{- $targets = append $targets (dict "clusterName" .name "helm" (dict "values" $v)) }}
+{{- else }}
+{{- fail "rancher.deployDownstream.clusters: each entry is a cluster name or {name: ..., values: {...}}" }}
+{{- end }}
+{{- end }}
+{{- if kindIs "map" $d.clusterSelector }}
+{{- $targets = append $targets (dict "clusterSelector" $d.clusterSelector) }}
+{{- end }}
+{{- if $d.clusterGroup }}
+{{- $targets = append $targets (dict "clusterGroup" $d.clusterGroup) }}
+{{- end }}
+{{- if not $targets }}
+{{- fail "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup (nothing is installed everywhere by default)" }}
+{{- end }}
+# Installs this chart on the targeted downstream clusters (an "App Bundle" under Continuous Delivery in Rancher).
+# Created by this Helm release, not by the dashboard: the dashboard's service account stays read-only.
+apiVersion: fleet.cattle.io/v1alpha1
+kind: HelmOp
+metadata:
+  name: {{ include "crr.fullname" . }}
+  namespace: {{ $d.workspace }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  namespace: {{ $d.namespace }}
+  helm:
+    releaseName: {{ $d.releaseName }}
+    repo: {{ $chart.repo | quote }}         # OCI: the chart's full URL, with no chart field (Fleet rejects both)
+    version: {{ $chart.version | default .Chart.Version | quote }}
+    values:
+      {{- toYaml $common | nindent 6 }}
+  {{- with $d.helmSecretName }}
+  helmSecretName: {{ . }}
+  {{- end }}
+  insecureSkipTLSVerify: {{ $d.insecureSkipTLSVerify }}
+  targets:
+    {{- toYaml $targets | nindent 4 }}
+{{- end }}

@@ -30,8 +30,9 @@ several namespaces each), plus some AKS clusters.
 - `discovery/` code uses the Python standard library and `kubectl` only; no third-party packages.
   It must stay read-only against clusters. Exceptions: `publish_rancher_names.py` writes one Fleet Bundle
   (`rancher-project-names`) on the Rancher local cluster, with its own service account; the planners write
-  their own plan ConfigMaps (`<fullname>-planner`, `<fullname>-capacity`) in their own namespace. Never
-  workloads, quotas or Rancher objects.
+  their own plan ConfigMaps (`<fullname>-planner`, `<fullname>-capacity`) in their own namespace. The chart (Helm, not
+  the running app) may render one Fleet `HelmOp` that installs this chart itself on chosen downstream clusters
+  (`rancher.deployDownstream`). Never other workloads, quotas or Rancher objects.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
 - Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`;
   for `kibana/`: `cd kibana && python3 -m unittest -v test_build_dashboard`.

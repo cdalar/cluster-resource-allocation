@@ -212,12 +212,15 @@ resource-report`, a ClusterGroup selecting `cra-downstream-2` by `management.cat
 | Downstream dashboard | Pod on image `0.5.2`, names from the Fleet-delivered ConfigMap, Prometheus used, NavLink and ClusterRole present |
 | Cluster removed from the group | Fleet uninstalled the release, Deployment, NavLink and ClusterRole; the names ConfigMap (own Bundle) stayed |
 | Cluster added back | Fresh install (revision 1) |
-| Timing of group changes | Applied only on the next "Cluster changed" event (agent check-in, up to ~15 min); annotating the Fleet cluster applied it in ~25 s |
+| Timing of group changes | Applied only on the next "Cluster changed" event (agent check-in, up to ~15 min); annotating the Fleet cluster applied it in ~25 s, **Force Update** on the App Bundle (`forceSyncGeneration`) in ~10 s |
 
 **Group changes are not immediate.** Fleet re-matches a ClusterGroup only when a cluster changes, which normally
-happens at the cluster agent's next check-in (up to about 15 minutes). To apply a change now, touch the Fleet
-cluster, e.g. `kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`
-(tested: the chart was installed about 25 seconds later).
+happens at the cluster agent's next check-in (up to about 15 minutes). To apply a change now, use **Force Update**
+on the App Bundle: Continuous Delivery → App Bundles → `resource-report-cluster-resource-report` → ⋮ → **Force
+Update** (it raises `spec.forceSyncGeneration`; tested: the chart was installed about 10 seconds later). With
+kubectl: `kubectl -n fleet-default patch helmop resource-report-cluster-resource-report --type merge -p
+'{"spec":{"forceSyncGeneration":<current + 1>}}'`, or touch the Fleet cluster with
+`kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`.
 
 
 ## Documentation to update

@@ -227,9 +227,12 @@ when `publishNames` is on; then `deployDownstream.values` and the cluster's own 
 Removing a cluster from the targets makes Fleet uninstall the chart there.
 
 **Group changes are not immediate.** Fleet re-matches a ClusterGroup only when a cluster changes, which normally
-happens at the cluster agent's next check-in (up to about 15 minutes). To apply a change now, touch the Fleet
-cluster, e.g. `kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`
-(tested: the chart was installed about 25 seconds later).
+happens at the cluster agent's next check-in (up to about 15 minutes). To apply a change now, use **Force Update**
+on the App Bundle: Continuous Delivery → App Bundles → `resource-report-cluster-resource-report` → ⋮ → **Force
+Update** (it raises `spec.forceSyncGeneration`; tested: the chart was installed about 10 seconds later). With
+kubectl: `kubectl -n fleet-default patch helmop resource-report-cluster-resource-report --type merge -p
+'{"spec":{"forceSyncGeneration":<current + 1>}}'`, or touch the Fleet cluster with
+`kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`.
 
 **Private registry or mirror:** set `deployDownstream.chart.repo` to the chart's full OCI URL and, with a login,
 `deployDownstream.helmSecretName` (a secret with `username` / `password` in `fleet-default`).
@@ -486,7 +489,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Chart fails: "publishNames.enabled needs rancher.isLocalCluster=true" | Name publisher enabled on a downstream cluster | Only enable it on the local cluster |
 | Chart fails: "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup" | Fleet deployment enabled without a target | Name the clusters, or set a selector or group; `clusterSelector: {}` = every cluster in the workspace |
 | Chart fails: "rancher.deployDownstream needs Fleet HelmOps" | Fleet older than 0.12, or not the Rancher local cluster | Upgrade Rancher (2.11+), or install downstream by hand (option B) |
-| Cluster added to or removed from the ClusterGroup, nothing happens | Fleet re-matches groups only when a cluster changes (agent check-in, up to ~15 min) | Wait, or annotate the Fleet cluster (see Step 3, option A) |
+| Cluster added to or removed from the ClusterGroup, nothing happens | Fleet re-matches groups only when a cluster changes (agent check-in, up to ~15 min) | Wait, or **Force Update** the App Bundle in Continuous Delivery (see Step 3, option A) |
 | App Bundle not *Accepted* / Bundle not ready | Chart not reachable from the Fleet controller, wrong `chart.repo`, or TLS / login to a mirror | `kubectl -n fleet-default describe helmop resource-report-cluster-resource-report`; check `chart.repo` (full OCI URL of the chart), `helmSecretName`, `insecureSkipTLSVerify` |
 | Planner page missing (`/planner` 404) | `planner.enabled` not set | Set it, with `rancher.isLocalCluster: true` |
 | Planner shows "can't read ConfigMap …" or "not saved: … forbidden" | Plan ConfigMap deleted by hand, or RBAC changed | `helm upgrade` again: it recreates the ConfigMap and the Role |

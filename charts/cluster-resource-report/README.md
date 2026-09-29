@@ -153,8 +153,8 @@ rancher:
   applied, and the local-only settings (`isLocalCluster`, `publishNames`, `deployDownstream`, the planners) are
   always switched off.
 - **Existing releases:** a downstream release installed by hand (same name and namespace) is taken over in place.
-- **ClusterGroup changes** apply at the cluster agent's next check-in (up to ~15 min); annotate the Fleet cluster
-  to apply them at once (see the installation guide).
+- **ClusterGroup changes** apply at the cluster agent's next check-in (up to ~15 min); **Force Update** on the
+  App Bundle (Continuous Delivery → App Bundles → ⋮) applies them at once.
 - **Lifecycle:** `helm upgrade` here upgrades the downstream releases; removing a cluster from the targets, disabling
   this, or uninstalling the local release makes Fleet uninstall the chart there.
 - **Private registry / mirror:** set `chart.repo`, and `helmSecretName` (a secret in the workspace with

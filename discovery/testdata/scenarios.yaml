@@ -1,14 +1,12 @@
 # Test scenarios for the resource dashboard and the planners: one namespace per situation they distinguish.
-# Apply with apply-scenarios.sh, which fills in the Rancher cluster and project IDs (see README.md).
-# Assumes a cluster with at least 2 schedulable nodes of about 4 CPU / 16 GiB (e.g. two onctl/boxctl VMs).
+# Workloads only: apply-scenarios.sh creates the namespaces (with their Rancher Project, label or nothing), fills in
+# ${BIG_CPU} from the node sizes and sizes the N+1 filler after the rest is running. See README.md for the table.
+# Images: registry.k8s.io/pause (requests that are never used), busybox and python (real CPU / memory use).
+
+# =====================================================================================================================
+# Efficiency
+# =====================================================================================================================
 # Low efficiency: requests that are never used (pause containers) -- the typical over-requesting service
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-api
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -22,14 +20,7 @@ spec:
       containers:
         - name: api
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: 1, memory: 1Gi}}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-batch
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+          resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -43,14 +34,7 @@ spec:
       containers:
         - name: batch
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: 2, memory: 2Gi}}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: crm-web
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${CRM_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${CRM_PROJECT}}
+          resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {cpu: 1, memory: 1Gi}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -64,14 +48,7 @@ spec:
       containers:
         - name: web
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: crm-search
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${CRM_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${CRM_PROJECT}}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 250m, memory: 256Mi}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -85,14 +62,7 @@ spec:
       containers:
         - name: search
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 1, memory: 4Gi}, limits: {cpu: 2, memory: 4Gi}}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-worker
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+          resources: {requests: {cpu: 300m, memory: 1Gi}, limits: {cpu: 1, memory: 1Gi}}
 ---
 # Good efficiency: burns its 200m request (capped by a CPU limit: ADR-0003), holds ~300 Mi of its 400 Mi
 apiVersion: apps/v1
@@ -114,13 +84,6 @@ spec:
           command: ["python", "-c", "x = bytearray(300 * 1024 * 1024); import time; time.sleep(10**9)"]
           resources: {requests: {cpu: 10m, memory: 400Mi}, limits: {memory: 450Mi}}
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: crm-reports
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${CRM_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${CRM_PROJECT}}
----
 # Uses more than it requests: requests 100m, burns 500m (capped by its CPU limit so it doesn't take a whole core)
 apiVersion: apps/v1
 kind: Deployment
@@ -136,13 +99,10 @@ spec:
           image: busybox:1.37
           command: ["sh", "-c", "while true; do :; done"]
           resources: {requests: {cpu: 100m, memory: 32Mi}, limits: {cpu: 500m, memory: 64Mi}}
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: crm-legacy
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${CRM_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${CRM_PROJECT}}
+
+# =====================================================================================================================
+# Resource standards (docs/02) and QoS
+# =====================================================================================================================
 ---
 # No requests or limits at all: BestEffort (standard S5), counted in "No CPU req" / "No mem"
 apiVersion: apps/v1
@@ -173,15 +133,42 @@ spec:
           image: registry.k8s.io/pause:3.10
           resources: {requests: {cpu: 50m}}
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-sidecar
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+# Guaranteed QoS: requests = limits (the prod standard S3: memory limit = request)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ledger, namespace: payments-guaranteed}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: ledger}}
+  template:
+    metadata: {labels: {app: ledger}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 100m, memory: 128Mi}}
 ---
-# Effective pod requests: a large init container (500m) and a native sidecar (restartPolicy Always, 100m) next to
-# the app (200m) -> the pod reserves max(500m, 200m + 100m) = 500m
+# Limits far above requests: memory limit 16x and CPU limit 20x the request (limits overcommit)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: spiky, namespace: payments-overcommit}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: spiky}}
+  template:
+    metadata: {labels: {app: spiky}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 1, memory: 1Gi}}
+
+# =====================================================================================================================
+# Effective pod requests (as the scheduler and ResourceQuota count them)
+# =====================================================================================================================
+---
+# A large init container (300m) and a native sidecar (restartPolicy Always, 50m) next to the app (100m)
+# -> the pod reserves max(300m, 100m + 50m) = 300m
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: api, namespace: payments-sidecar}
@@ -195,22 +182,45 @@ spec:
         - name: migrate
           image: busybox:1.37
           command: ["sh", "-c", "sleep 2"]
-          resources: {requests: {cpu: 500m, memory: 64Mi}, limits: {memory: 64Mi}}
+          resources: {requests: {cpu: 300m, memory: 64Mi}, limits: {memory: 64Mi}}
         - name: proxy
           image: registry.k8s.io/pause:3.10
           restartPolicy: Always
-          resources: {requests: {cpu: 100m, memory: 32Mi}, limits: {memory: 32Mi}}
+          resources: {requests: {cpu: 50m, memory: 32Mi}, limits: {memory: 32Mi}}
       containers:
         - name: app
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 200m, memory: 128Mi}, limits: {memory: 128Mi}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 128Mi}}
 ---
-apiVersion: v1
-kind: Namespace
+# Pod overhead: a RuntimeClass adds 250m / 128Mi per pod on top of the containers' 100m / 64Mi.
+# Handler "runc" is the default runtime of k3s, RKE2 and AKS; set OVERHEAD=0 to skip this scenario elsewhere.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
 metadata:
-  name: payments-hpa
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+  name: scenario-overhead
+  labels: {resource-report/scenario: "true"}
+handler: runc
+overhead:
+  podFixed: {cpu: 250m, memory: 128Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sandboxed, namespace: payments-overhead}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sandboxed}}
+  template:
+    metadata: {labels: {app: sandboxed}}
+    spec:
+      runtimeClassName: scenario-overhead
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 64Mi}}
+
+# =====================================================================================================================
+# Requests over time: peaks above "now"
+# =====================================================================================================================
 ---
 # HPA: CPU load drives it from 1 towards 3 replicas (requests peak > requests now)
 apiVersion: apps/v1
@@ -239,14 +249,111 @@ spec:
     - type: Resource
       resource: {name: cpu, target: {type: Utilization, averageUtilization: 50}}
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: crm-quota
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${CRM_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${CRM_PROJECT}}
+# CronJob: every 10 minutes 2 pods of 100m for 3 minutes -> short request peaks (Prometheus "CPU req peak")
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: settle, namespace: payments-cron}
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      parallelism: 2
+      completions: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: settle
+              image: busybox:1.37
+              command: ["sh", "-c", "sleep 180"]
+              resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 128Mi}}
+
+# =====================================================================================================================
+# Pod phases and controllers
+# =====================================================================================================================
 ---
-# An existing ResourceQuota and LimitRange (quota and LimitRange counts; defaults applied to pods without values)
+# Pending: asks for more CPU than the largest node has (the script sets BIG_CPU) -> never scheduled
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: big, namespace: payments-bigjob}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: big}}
+  template:
+    metadata: {labels: {app: big}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: "${BIG_CPU}", memory: 1Gi}, limits: {memory: 1Gi}}
+---
+# A finished Job: completed pods are not counted
+apiVersion: batch/v1
+kind: Job
+metadata: {name: nightly-export, namespace: payments-batch}
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: export
+          image: busybox:1.37
+          command: ["sh", "-c", "echo done"]
+          resources: {requests: {cpu: 200m, memory: 64Mi}, limits: {memory: 64Mi}}
+---
+# A failed Job: the failed pod is not counted either
+apiVersion: batch/v1
+kind: Job
+metadata: {name: import, namespace: payments-failed}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: import
+          image: busybox:1.37
+          command: ["sh", "-c", "echo failing; exit 1"]
+          resources: {requests: {cpu: 200m, memory: 64Mi}, limits: {memory: 64Mi}}
+---
+# DaemonSet: one pod per node, so its requests grow with the number of nodes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: agent, namespace: payments-agent}
+spec:
+  selector: {matchLabels: {app: agent}}
+  template:
+    metadata: {labels: {app: agent}}
+    spec:
+      containers:
+        - name: agent
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 64Mi}}
+---
+# StatefulSet: counted like any other pod
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: db, namespace: payments-stateful}
+spec:
+  serviceName: db
+  replicas: 2
+  selector: {matchLabels: {app: db}}
+  template:
+    metadata: {labels: {app: db}}
+    spec:
+      containers:
+        - name: db
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 256Mi}}
+
+# =====================================================================================================================
+# Namespace quotas (ResourceQuota / LimitRange)
+# =====================================================================================================================
+---
+# Quota with headroom and a LimitRange: pods without values get the defaults (quota and LimitRange counts)
 apiVersion: v1
 kind: ResourceQuota
 metadata: {name: quota, namespace: crm-quota}
@@ -275,68 +382,158 @@ spec:
         - name: app
           image: registry.k8s.io/pause:3.10
 ---
+# Quota used up: 3 replicas of 200m against 500m -> 2 pods run, the third is refused
+# (ReplicaSet event FailedCreate "exceeded quota"): the team needs more quota than it has
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-bigjob
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+kind: ResourceQuota
+metadata: {name: quota, namespace: crm-quota-full}
+spec:
+  hard: {requests.cpu: 500m, requests.memory: 1Gi, limits.memory: 2Gi}
 ---
-# Pending: asks for 6 CPU, more than any node has -> never scheduled ("Pending requests")
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: big, namespace: payments-bigjob}
+metadata: {name: app, namespace: crm-quota-full}
 spec:
-  replicas: 1
-  selector: {matchLabels: {app: big}}
+  replicas: 3
+  selector: {matchLabels: {app: app}}
   template:
-    metadata: {labels: {app: big}}
+    metadata: {labels: {app: app}}
     spec:
       containers:
         - name: app
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: "6", memory: 1Gi}, limits: {memory: 1Gi}}
+          resources: {requests: {cpu: 200m, memory: 256Mi}, limits: {memory: 512Mi}}
 ---
-# A finished Job in payments-batch: completed pods are not counted
-apiVersion: batch/v1
-kind: Job
-metadata: {name: nightly-export, namespace: payments-batch}
-spec:
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: export
-          image: busybox:1.37
-          command: ["sh", "-c", "echo done"]
-          resources: {requests: {cpu: 200m, memory: 64Mi}, limits: {memory: 64Mi}}
----
+# Quota without a LimitRange: a pod without requests is refused ("must specify requests.cpu"), one with requests runs
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: payments-agent
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${PAYMENTS_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${PAYMENTS_PROJECT}}
+kind: ResourceQuota
+metadata: {name: quota, namespace: crm-quota-strict}
+spec:
+  hard: {requests.cpu: 500m, requests.memory: 512Mi}
 ---
-# DaemonSet: one pod per node, so its requests land on both nodes
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: compliant, namespace: crm-quota-strict}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: compliant}}
+  template:
+    metadata: {labels: {app: compliant}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 128Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: norequests, namespace: crm-quota-strict}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: norequests}}
+  template:
+    metadata: {labels: {app: norequests}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+
+# =====================================================================================================================
+# Rancher Project quota (project "search"): search-app fits its namespace quota, search-batch is refused a pod.
+# With a Rancher quota on the project (the script sets one when it creates the project), Rancher creates the
+# namespace ResourceQuota and LimitRange itself; otherwise the script adds equivalent ones.
+# =====================================================================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app, namespace: search-app}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: app}}
+  template:
+    metadata: {labels: {app: app}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 512Mi}}
+---
+# No resources: gets the project's container defaults (LimitRange)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: defaults, namespace: search-app}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: defaults}}
+  template:
+    metadata: {labels: {app: defaults}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: indexer, namespace: search-batch}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: indexer}}
+  template:
+    metadata: {labels: {app: indexer}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {memory: 1Gi}}
+
+# =====================================================================================================================
+# Classification: platform (System), unassigned, Default
+# =====================================================================================================================
+---
+# Project "platform-tools": the name contains "platform", so all its namespaces count as System (platform reserve)
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: dns, namespace: platform-dns}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: dns}}
+  template:
+    metadata: {labels: {app: dns}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 128Mi}}
+---
 apiVersion: apps/v1
 kind: DaemonSet
-metadata: {name: agent, namespace: payments-agent}
+metadata: {name: shipper, namespace: platform-logging}
 spec:
-  selector: {matchLabels: {app: agent}}
+  selector: {matchLabels: {app: shipper}}
   template:
-    metadata: {labels: {app: agent}}
+    metadata: {labels: {app: shipper}}
     spec:
       containers:
-        - name: agent
+        - name: app
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 64Mi}}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 256Mi}}
 ---
-# Not in any Rancher Project ("Unassigned namespaces")
-apiVersion: v1
-kind: Namespace
-metadata: {name: legacy-app}
+# In no project, but the name contains "ingress": System by the namespace regex
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: controller, namespace: demo-ingress}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: controller}}
+  template:
+    metadata: {labels: {app: controller}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 256Mi}}
 ---
+# In no project ("Unassigned namespaces")
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: app, namespace: legacy-app}
@@ -349,16 +546,9 @@ spec:
       containers:
         - name: app
           image: registry.k8s.io/pause:3.10
-          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {memory: 256Mi}}
+          resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 256Mi}}
 ---
 # In Rancher's Default project
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: sandbox
-  annotations: {field.cattle.io/projectId: "${CLUSTER_ID}:${DEFAULT_PROJECT}"}
-  labels: {field.cattle.io/projectId: ${DEFAULT_PROJECT}}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: try, namespace: sandbox}
@@ -372,3 +562,22 @@ spec:
         - name: app
           image: registry.k8s.io/pause:3.10
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {memory: 128Mi}}
+
+# =====================================================================================================================
+# N+1: pause pods the script scales so that the projects' requests end just above what survives the largest node
+# failing ("Room for projects (N+1)" turns red). 0 replicas here; see apply-scenarios.sh (N1_BREACH=0 to skip).
+# =====================================================================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: reserve, namespace: payments-reserve}
+spec:
+  replicas: 0
+  selector: {matchLabels: {app: reserve}}
+  template:
+    metadata: {labels: {app: reserve}}
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: 250m, memory: 64Mi}, limits: {memory: 64Mi}}

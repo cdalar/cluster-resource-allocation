@@ -182,8 +182,10 @@ python3 -m unittest -v test_discover test_server test_planner
 ```
 
 [`testdata/`](testdata/README.md) has a scenario file for a test cluster: one namespace per situation the dashboard
-and planners distinguish (low / good / over-used efficiency, BestEffort, missing requests, sidecars, HPA, quota,
-pending, unassigned, N+1 breach), applied with `testdata/apply-scenarios.sh`.
+and planners distinguish (efficiency, resource standards and QoS, sidecars and pod overhead, HPA and CronJob
+peaks, pending / completed / failed pods, namespace quotas used up or refusing pods, a Rancher Project quota,
+platform and unassigned namespaces, N+1 breach), applied with `testdata/apply-scenarios.sh` to a Rancher-managed
+cluster (Projects looked up or created) or a cluster outside Rancher (namespace labels).
 
 The script was verified end-to-end on a k3s cluster with fake Rancher Project objects, a kube-prometheus-stack
 installed under Rancher Monitoring's service name, and fixture workloads (sidecars, init containers,

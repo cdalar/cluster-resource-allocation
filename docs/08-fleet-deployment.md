@@ -2,8 +2,8 @@
 
 Plan for installing and upgrading the `cluster-resource-report` chart on downstream clusters through Fleet, from
 the release on the Rancher local cluster, without a GitRepo. Status: **chart part built** (`rancher.deployDownstream`,
-`templates/fleet-helmop.yaml`, chart README, installation guide Step 3 option A). Still open: the end-to-end
-test on a downstream cluster (including adoption of the existing manual release), and a release with it.
+`templates/fleet-helmop.yaml`, chart README, installation guide Step 3 option A) and **tested** on the test Rancher
+(Fleet v0.16.2, cluster `cra-downstream-2` through a ClusterGroup; see *Test results*). Still open: a release with it.
 
 ## Starting point
 
@@ -196,11 +196,29 @@ That is harmless, since it is only a ConfigMap of names, but it can use the same
 ## Migrating the existing manual installs
 
 The HelmOp uses the same release name and namespace as the manual installs (`resource-report` /
-`resource-report`).
-- First check on a test cluster whether Fleet adopts an existing Helm release in place.
-- If it does not, the migration is to `helm uninstall` downstream first and then add the cluster to the targets.
-  Nothing is lost (see above).
-- The guide will describe whichever the test shows.
+`resource-report`), and Fleet takes an existing release over in place (tested): adding the cluster to the targets
+is the whole migration.
+
+## Test results
+
+Test Rancher v2.15.2, Fleet v0.16.2; local release from `main` with `deployDownstream.clusterGroup:
+resource-report`, a ClusterGroup selecting `cra-downstream-2` by `management.cattle.io/cluster-display-name`.
+
+| Check | Result |
+|---|---|
+| OCI chart form | Only `repo: oci://…/cluster-resource-report` with no `chart` is accepted |
+| `spec.namespace` | Rejected every cluster-scoped object (NavLink, ClusterRole): the chart uses `spec.defaultNamespace` |
+| Existing hand-installed release (0.4.1, revision 6) | Taken over in place: revision 7, chart 0.5.2, HelmOp values, local-only settings off |
+| Downstream dashboard | Pod on image `0.5.2`, names from the Fleet-delivered ConfigMap, Prometheus used, NavLink and ClusterRole present |
+| Cluster removed from the group | Fleet uninstalled the release, Deployment, NavLink and ClusterRole; the names ConfigMap (own Bundle) stayed |
+| Cluster added back | Fresh install (revision 1) |
+| Timing of group changes | Applied only on the next "Cluster changed" event (agent check-in, up to ~15 min); annotating the Fleet cluster applied it in ~25 s |
+
+**Group changes are not immediate.** Fleet re-matches a ClusterGroup only when a cluster changes, which normally
+happens at the cluster agent's next check-in (up to about 15 minutes). To apply a change now, touch the Fleet
+cluster, e.g. `kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`
+(tested: the chart was installed about 25 seconds later).
+
 
 ## Documentation to update
 

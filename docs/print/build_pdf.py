@@ -399,10 +399,8 @@ def fig_e1():
         b += (f'<path d="M{x} 14h104l14 22-14 22h-104l14-22z" fill="{c if i < 4 else "#fff"}" '
               f'stroke="{c}" stroke-width="1.4" opacity="{1 - i * 0.12 if i < 4 else 1}"/>')
         b += t(x + 60, 40, s, 11.5, "#fff" if i < 4 else c, "middle", 700)
-    b += t(10, 82, "Drain works unattended: PDBs allow one disruption, the N+1 reserve absorbs the moved pods.",
-           10.5, INK, weight=600)
-    b += t(10, 100, "Don't start when the cluster's N+1 tile is red.", 10.5, RED, weight=600)
-    return svg(108, b)
+    b += t(10, 78, "Don't start when the cluster's N+1 tile is red.", 10.5, RED, weight=600)
+    return svg(84, b)
 
 
 def fig_e3():
@@ -459,7 +457,7 @@ CSS = """
   @bottom-right { content: counter(page) " / " counter(pages); font: 8pt system-ui, sans-serif; color: #64748b; } }
 @page cover { @bottom-left { content: none; } @bottom-right { content: none; } }
 * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-html { font: 9.6pt/1.42 -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0f172a; }
+html { font: 9.2pt/1.36 -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #0f172a; }
 body { margin: 0; background: #fff; }
 code { font: 8.6pt ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: #f1f5f9; padding: 0 3px; border-radius: 3px; }
 b { font-weight: 650; }
@@ -490,27 +488,31 @@ table.glance td.name { width: 44mm; font-weight: 600; }
 table.glance td.box { width: 7mm; }
 table.glance .tick { display: inline-block; width: 4mm; height: 4mm; border: 1.2px solid #94a3b8; border-radius: 1mm; }
 section.cat { break-before: page; }
-.banner { display: flex; gap: 4mm; align-items: center; border-radius: 3mm; padding: 4mm 5mm; margin-bottom: 4mm; color: #fff; }
+.keep { break-inside: avoid; margin-bottom: 2mm; }
+section.cat.flow { break-before: auto; margin-top: 5mm; }
+.banner { display: flex; gap: 4mm; align-items: center; border-radius: 3mm; padding: 3mm 5mm; margin-bottom: 3mm; color: #fff; }
 .banner .big { width: 15mm; height: 15mm; border-radius: 50%; background: rgba(255,255,255,.18); display: flex; align-items: center; justify-content: center; }
 .banner h2 { margin: 0; font-size: 17pt; letter-spacing: -.01em; }
 .banner .tag { font-size: 10pt; opacity: .92; }
-.intro { display: flex; gap: 4mm; margin-bottom: 4mm; align-items: stretch; }
+.intro { display: flex; gap: 4mm; margin-bottom: 3mm; align-items: stretch; }
 .intro p { margin: 0; flex: 1.4; color: #334155; font-style: italic; }
 .chip { flex: 1; border-radius: 2mm; padding: 2mm 3mm; font-size: 8.4pt; border: 1px solid; }
 .chip small { display: block; text-transform: uppercase; letter-spacing: .08em; font-size: 6.8pt; font-weight: 700; }
-.topic { margin: 0 0 5mm; }
+.topic { margin: 0 0 3.5mm; }
 .topic-head { display: flex; align-items: center; gap: 3mm; break-after: avoid; }
 .topic-head .dot { width: 9mm; height: 9mm; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; }
 .topic-head h3 { margin: 0; font-size: 12.5pt; }
 .topic-head .id { font-weight: 800; margin-right: 1.5mm; }
-.rule { margin: 2mm 0 2.5mm; padding: 2mm 3mm; border-left: 1.2mm solid; border-radius: 0 2mm 2mm 0; font-weight: 600; break-after: avoid; }
-.figure { border: 1px solid #e2e8f0; border-radius: 2.5mm; padding: 2.5mm 3mm 1.5mm; margin: 0 0 2.5mm; break-inside: avoid; }
+.rule { margin: 1.5mm 0 2mm; padding: 2mm 3mm; border-left: 1.2mm solid; border-radius: 0 2mm 2mm 0; font-weight: 600; break-after: avoid; }
+.figure { border: 1px solid #e2e8f0; border-radius: 2.5mm; padding: 1.5mm 3mm 0.5mm; margin: 0 0 2mm; break-inside: avoid; text-align: center; }
+.figure svg { width: 88%; }
+.figure.D1 svg { width: 70%; }  /* tall: smaller, so E can start on D's page */
 .topic ul { margin: 0; padding-left: 4.5mm; }
-.topic li { margin: 0 0 1.1mm; break-inside: avoid; }
+.topic li { margin: 0 0 0.6mm; break-inside: avoid; }
 .topic li::marker { font-size: 8pt; }
 .lead { margin: 0 0 2mm; color: #334155; }
-.alerts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5mm; }
-.alert { display: flex; gap: 2mm; align-items: flex-start; border: 1px solid; border-radius: 2mm; padding: 2.5mm; font-size: 8.8pt; break-inside: avoid; }
+.alerts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.8mm; }
+.alert { display: flex; gap: 2mm; align-items: flex-start; border: 1px solid; border-radius: 2mm; padding: 1.5mm 2mm; font-size: 8.8pt; break-inside: avoid; }
 """
 
 
@@ -562,7 +564,10 @@ def render(cats):
     for k in "ABCDE":
         c = CATEGORIES[k]
         cat = cats[k]
-        out.append(f'<section class="cat"><div class="banner" style="background:{c["color"]}">'
+        # D is half a page: E follows it on the same page instead of leaving it half empty.
+        flow = " flow" if k == "E" else ""
+        # The banner stays on the same page as the first topic's heading, rule and figure (class "keep").
+        out.append(f'<section class="cat{flow}"><div class="keep"><div class="banner" style="background:{c["color"]}">'
                    f'<div class="big">{icon(c["icon"], 32, "#fff")}</div><div>'
                    f'<h2>{k}. {html.escape(c["name"])}</h2><div class="tag">{html.escape(c["tag"])} · '
                    f'{html.escape(c["question"])}</div></div></div>'
@@ -571,14 +576,16 @@ def render(cats):
                    f'<small style="color:{c["color"]}">Platform team</small>{html.escape(c["platform"])}</div>'
                    f'<div class="chip" style="border-color:#cbd5e1"><small style="color:#475569">Teams</small>'
                    f'{html.escape(c["teams"])}</div></div>')
-        for tp in cat["topics"]:
+        for n, tp in enumerate(cat["topics"]):
             ic, rule = TOPICS[tp["id"]]
-            out.append(f'<div class="topic"><div class="topic-head"><div class="dot" style="background:{c["color"]}">'
+            out.append(f'{"<div class=topic>" if n else ""}<div class="topic-head"><div class="dot" style="background:{c["color"]}">'
                        f'{icon(ic, 19, "#fff")}</div><h3><span class="id" style="color:{c["color"]}">{tp["id"]}</span>'
                        f'{inline(tp["title"])}</h3></div>'
                        f'<div class="rule" style="border-color:{c["color"]};background:{c["tint"]}">{html.escape(rule)}</div>')
             if tp["id"] in FIGURES:
-                out.append(f'<div class="figure">{FIGURES[tp["id"]]()}</div>')
+                out.append(f'<div class="figure {tp["id"]}">{FIGURES[tp["id"]]()}</div>')
+            if n == 0:
+                out.append("</div>")  # closes "keep"
             if tp["lead"].strip():
                 out.append(f'<p class="lead">{inline(tp["lead"].strip())}</p>')
             if tp["id"] == "E2":
@@ -589,7 +596,7 @@ def render(cats):
                 out.append(f'<div class="alerts">{cards}</div>')
             else:
                 out.append("<ul>" + "".join(f"<li>{inline(bl)}</li>" for bl in tp["bullets"]) + "</ul>")
-            out.append("</div>")
+            out.append("</div>" if n else "")
         out.append("</section>")
     out.append("</body></html>")
     return "".join(out)

@@ -113,6 +113,7 @@ details summary { cursor: pointer; }
     <div>
       <h1 id="title">Allocation planner</h1>
       <div class="sub" id="meta">Loading…</div>
+      <div class="sub muted" id="version"></div>
     </div>
     <div class="actions">
       <span class="status" id="status" role="status"></span>
@@ -264,6 +265,11 @@ async function load() {
   setStatus("");
 }
 
+// "chart 0.5.2 · image 0.5.2" from the server (CHART_VERSION / IMAGE_TAG set by the Helm chart)
+function versionText(v) {
+  if (!v || (!v.chart && !v.image)) return "";
+  return [v.chart && `chart ${v.chart}`, v.image && v.image !== v.chart && `image ${v.image}`].filter(Boolean).join(" · ");
+}
 function applyMode() {
   CAP = data.mode === "capacity";
   document.body.classList.toggle("capacity", CAP);
@@ -286,6 +292,7 @@ function apply(body) {
   $("save").disabled = true;
   const v = plan.version || 0;
   $("meta").textContent = v ? `Plan version ${v}, saved ${new Date(plan.updated_at).toLocaleString()}` : "No plan saved yet";
+  $("version").textContent = versionText(body.versions);
   render();
 }
 

@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -54,6 +55,13 @@ class Server(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(data["report"]["clusters"][0]["cluster"], "c1")
         self.assertFalse(data["status"]["collect_enabled"])
+
+    def test_versions_from_the_chart(self):
+        with mock.patch.dict(os.environ, {"CHART_VERSION": "0.5.2", "IMAGE_TAG": "sha-abc1234"}):
+            data = json.loads(self.get("/api/report")[2])
+        self.assertEqual(data["status"]["versions"], {"chart": "0.5.2", "image": "sha-abc1234"})
+        with mock.patch.dict(os.environ, {"CHART_VERSION": "", "IMAGE_TAG": ""}):
+            self.assertEqual(server.versions(), {"chart": None, "image": None})  # run without the chart
 
     def test_csv_download(self):
         code, headers, body = self.get("/download/projects.csv")

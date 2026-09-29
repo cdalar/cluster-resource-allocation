@@ -60,7 +60,8 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 
 To release, set `version` and `appVersion` in `Chart.yaml` to the same number, push that commit, then tag it:
 `git tag v0.5.1 && git push origin v0.5.1`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
-default image tag is its `appVersion`.
+default image tag is its `appVersion`. The dashboard and planners show the chart version and image tag under their title
+(`CHART_VERSION` / `IMAGE_TAG`, set by the chart).
 
 The repository and the GHCR package are public, so clusters with internet access pull the image without a
 pull secret.

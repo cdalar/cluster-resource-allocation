@@ -136,6 +136,7 @@ tr.selected { background: var(--hover); }
     <div>
       <h1>Cluster resource report</h1>
       <div class="sub" id="meta">Loading…</div>
+      <div class="sub muted" id="version"></div>
     </div>
     <div class="actions">
       <select id="cluster" aria-label="Cluster" hidden></select>
@@ -310,6 +311,11 @@ function filteredNamespaces() {
 }
 
 // ---------- rendering ----------
+// "chart 0.5.2 · image 0.5.2" from the server (CHART_VERSION / IMAGE_TAG set by the Helm chart)
+function versionText(v) {
+  if (!v || (!v.chart && !v.image)) return "";
+  return [v.chart && `chart ${v.chart}`, v.image && v.image !== v.chart && `image ${v.image}`].filter(Boolean).join(" · ");
+}
 function renderMeta() {
   const r = state.data, st = state.status;
   const parts = [];
@@ -320,6 +326,7 @@ function renderMeta() {
   if (st && st.state === "collecting") parts.push("collecting now…");
   else if (st && st.next_run) parts.push(`next ${new Date(st.next_run).toLocaleTimeString()}`);
   $("#meta").textContent = parts.join(" · ") || "No report yet";
+  $("#version").textContent = versionText(st && st.versions);
   $("#refresh").disabled = !st || !st.collect_enabled || st.state === "collecting";
   $("#planner-link").hidden = !(st && st.planner);
   $("#capacity-link").hidden = !(st && st.capacity_planner);

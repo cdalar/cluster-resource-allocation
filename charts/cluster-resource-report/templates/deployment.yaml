@@ -93,8 +93,13 @@ spec:
             - --rancher-local-context={{ . }}
             {{- end }}
             {{- end }}
-          {{- if and .Values.prometheus.enabled .Values.prometheus.url .Values.prometheus.tokenSecret.name }}
           env:
+            # shown on the dashboard and planners
+            - name: CHART_VERSION
+              value: {{ .Chart.Version | quote }}
+            - name: IMAGE_TAG
+              value: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
+          {{- if and .Values.prometheus.enabled .Values.prometheus.url .Values.prometheus.tokenSecret.name }}
             - name: PROM_TOKEN
               valueFrom:
                 secretKeyRef:

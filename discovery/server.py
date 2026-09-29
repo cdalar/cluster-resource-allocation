@@ -36,6 +36,11 @@ CSV_NAMES = ("clusters", "projects", "namespaces")
 PAGE_CSP = "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:"
 
 
+def versions():
+    """Helm chart version and image tag of this deployment (set by the chart; None when run without it)."""
+    return {"chart": os.environ.get("CHART_VERSION") or None, "image": os.environ.get("IMAGE_TAG") or None}
+
+
 def parse_duration(s):
     m = re.fullmatch(r"(\d+)([smhd])", s)
     if not m:
@@ -78,6 +83,7 @@ class Collector:
                 "collect_enabled": not self.args.no_collect,
                 "planner": bool(getattr(self.args, "planner", False)),
                 "capacity_planner": bool(getattr(self.args, "capacity_planner", False)),
+                "versions": versions(),
             }
 
     def trigger(self):
@@ -156,7 +162,7 @@ class PlannerBackend:
     def view(self, plan=None):
         plan = plan or self.store.load()
         inventory = self.inventory()
-        out = {"mode": self.mode, "plan": plan, "inventory": inventory,
+        out = {"mode": self.mode, "plan": plan, "inventory": inventory, "versions": versions(),
                "evaluation": planner.evaluate(plan, inventory, self.mode)}
         if self.mode == "budget":
             out["reference"] = planner.RATE_REFERENCE

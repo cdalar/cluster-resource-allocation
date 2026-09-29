@@ -105,6 +105,19 @@ class Validate(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(planner.PlanError):
                 planner.validate_state(raw)
 
+    def test_license(self):
+        plan = planner.validate_state(planner.empty_state())
+        self.assertEqual(plan["settings"]["license"], {"unit": "node", "per_year": 1800.0})
+        raw = planner.empty_state()
+        del raw["settings"]["license"]  # saved before the what-if calculator: gets the default
+        self.assertEqual(planner.validate_state(raw)["settings"]["license"]["unit"], "node")
+        raw["settings"]["license"] = {"unit": "vcpu", "per_year": 90}
+        self.assertEqual(planner.validate_state(raw)["settings"]["license"], {"unit": "vcpu", "per_year": 90.0})
+        for bad in ({"unit": "socket", "per_year": 1}, {"unit": "node", "per_year": -1}, {"unit": "node"}):
+            raw["settings"]["license"] = bad
+            with self.subTest(bad=bad), self.assertRaises(planner.PlanError):
+                planner.validate_state(raw)
+
     def test_budget_may_be_empty(self):
         plan = plan_with(payments={"monthly_budget": None, "allocations": {}})
         self.assertIsNone(plan["projects"]["payments"]["monthly_budget"])

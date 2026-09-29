@@ -160,6 +160,11 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
   carries a version number: a save based on an older version is refused with 409, so two people can't overwrite
   each other; with the ConfigMap, the API server's resourceVersion check also catches two saves at the same
   moment. A `planner.json` left in `--data-dir` by an older version is read until the first save moves it over.
+- **What-if calculator** (on the page, not saved): a new application's CPU / memory on a cluster, checked on top
+  of the planned quota or the projects' requests now against the limit for projects; if it doesn't fit, the
+  fewest nodes of a given size to add (each adds allocatable, may become the largest node for N+1, and adds its
+  platform DaemonSets to the reserve), and their Rancher licence cost (`settings.license`: per node or per vCPU
+  and year, saved with the plan).
 - **Export:** `/api/planner/export.yaml`, one document per project in the allocation-file format of docs/04, with
   `limits.memory` = requests × the environment's factor.
 

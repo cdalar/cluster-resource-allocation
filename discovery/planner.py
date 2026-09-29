@@ -58,7 +58,11 @@ DEFAULT_SETTINGS = {
         "test": {"max_quota_pct": 100.0, "mem_limit_factor": 2.0, "node_failures": 0},
         "dev": {"max_quota_pct": 150.0, "mem_limit_factor": 2.0, "node_failures": 0},
     },
+    # Rancher Prime / SUSE subscription for a node the what-if calculator adds: per node (or per vCPU) and year.
+    # 1,800 = the 150 per node and month of the on-prem estimate below; replace with the contract's price.
+    "license": {"unit": "node", "per_year": 1800.0},
 }
+LICENSE_UNITS = ("node", "vcpu")
 
 
 # Where the default unit rates come from, shown on the planner page (docs/03-allocation-model.md "Reference rates").
@@ -298,8 +302,12 @@ def validate_state(raw, mode="budget"):
         projects[pname] = project
     out_settings = {"envs": envs}
     if money:
+        lic = settings.get("license") or DEFAULT_SETTINGS["license"]  # plans saved before it existed get the default
+        if lic.get("unit") not in LICENSE_UNITS:
+            raise PlanError(f"license.unit: expected one of {', '.join(LICENSE_UNITS)}")
         out_settings.update(currency=_text(settings.get("currency") or "EUR", "currency", 8) or "EUR",
-                            platforms=platforms)
+                            platforms=platforms,
+                            license={"unit": lic["unit"], "per_year": _num(lic.get("per_year"), "license.per_year")})
     return {"settings": out_settings, "clusters": clusters, "projects": projects}
 
 

@@ -48,6 +48,7 @@ The page reads top to bottom: settings first, then clusters, then projects. Ever
 | Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over their limit |
 | Rates and rules | Collapsed by default; unit rates per platform, and node failures, headroom and memory limit per environment |
 | Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
+| What-if | Calculator for one new application: does it fit on a cluster, or how many nodes (and licences) must be added? See [What-if calculator](#what-if-calculator-a-new-application) |
 | Projects | One block per project with its budget and a quota row per cluster |
 
 The status text next to the buttons says *Unsaved changes*, *Saving…* or *Saved*, and shows errors in red.
@@ -274,6 +275,46 @@ For round numbers the example uses rates of 25 per vCPU and 6.25 per GiB (not th
 9. **Save plan**, then **Export YAML**, and commit the payments document as `allocations/projects/payments.yaml`.
    The export writes `limits.memory` 19.2Gi for prod-01 (factor 1) and 8Gi for test-01 (factor 2).
 
+## What-if calculator: a new application
+
+The **What-if** card between *Clusters* and *Projects* answers: *a new application needs 4 vCPU / 16 GiB, does it
+fit on prod-01, and if not, how many nodes must we add and what does the Rancher licence for them cost?* It saves
+nothing and changes nothing; it uses the same rules as the cluster limits above.
+
+| Input | Meaning |
+| --- | --- |
+| Cluster | Where the application should run. The cluster needs an environment (it decides N+1 and the headroom rule) |
+| CPU, Memory GiB | The application's requests, all replicas together |
+| Replicas | How many pods the application runs; each replica (CPU / replicas, GiB / replicas) must fit on one node |
+| Already in use | What the application comes on top of: the **planned quota** of this plan on that cluster, the projects' **requests now** (the cluster's requests minus the platform reserve), or the **higher of both** (default) |
+| Node CPU / GiB | Allocatable of one node to add; starts as the cluster's largest node. Change it to price a different node size |
+| Platform per node | What platform DaemonSets (CNI, cattle-node-agent, node-exporter, log shipper …) request on every node: each new node adds it to the platform reserve. Default 0.25 CPU / 0.5 GiB, an estimate: check the DaemonSet pods on a node of that cluster |
+| Rancher licence | Price per year, per node or per vCPU (allocation planner only). Saved with the plan (**Save plan**); default 1,800 per node and year, the 150 a month of the on-prem estimate. Replace it with your SUSE Rancher Prime price |
+
+The calculator takes the cluster's **limit for projects** (allocatable − N largest nodes − platform reserve, at
+most the environment's max %) and adds nodes one at a time until *already in use + application* fits, for CPU and
+memory. Every added node counts in all three terms: more allocatable, a new largest node if it is bigger than
+today's (N+1 then holds back one of the new nodes), and its platform DaemonSets in the reserve.
+
+The result:
+
+- **Fits … without new nodes**, with the room left, or **Add k nodes** of the chosen size with the Rancher licence
+  cost for them (k × price per node, or k × node vCPU × price per vCPU), per year and per month.
+- A table *Today* / *With k new nodes*: nodes, allocatable, − largest node(s), − platform reserve, = limit for
+  projects (and which rule sets it), already in use, + this application, = room left.
+- **What N+1 costs**: in prod, how many nodes it would take without tolerating a node failure.
+- **Can't be scheduled** when one replica is larger than any node has left after its DaemonSets: more replicas or
+  larger nodes, whatever the quota says.
+
+Example (prod-01: 3 nodes 4+4+2 CPU / 16+16+8 GiB, platform reserve 1 CPU / 4 GiB, 3 CPU / 12 GiB in use): its limit
+is 10 − 4 − 1 = 5 CPU and 40 − 16 − 4 = 20 GiB. An application of 12 CPU / 48 GiB in 4 replicas on 8 CPU / 32 GiB nodes
+needs 15 CPU / 60 GiB: with 1 new node the limit is 18 − 8 − 1.25 = 8.75 CPU, with 2 it is 26 − 8 − 1.5 = 16.5 CPU
+and 104 − 32 − 5 = 67 GiB, so **add 2 nodes**, licence 2 × 1,800 = 3,600 a year.
+
+Not included: the node's hardware or VM price (on AKS the node pool's VM cost, which the platform rates cover),
+pod anti-affinity or topology spread, and storage. To keep the application in the plan, add its quota to a
+project below.
+
 ## Capacity planner (without money)
 
 The **capacity planner** is the same tool without rates, budgets or costs: each project simply has *this much CPU
@@ -288,6 +329,7 @@ dashboard. It keeps its own plan, separate from the allocation planner's.
 | Clusters | Environment, platform, limit for projects | Environment, limit for projects (no platform) |
 | Project check | Planned cost ≤ budget | Planned CPU and memory across all clusters ≤ envelope |
 | Cluster checks | Node failures, platform reserve, headroom | The same |
+| What-if calculator | Nodes to add and their Rancher licence cost | Nodes to add (no licence cost) |
 | Export | Allocation files with budget and cost center | Allocation files without them |
 
 A project's envelope is optional: without one, the planner shows "(no envelope)" and only checks the clusters. The

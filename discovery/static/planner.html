@@ -88,6 +88,15 @@ details summary { cursor: pointer; }
 .reference td:not(:first-child) { white-space: nowrap; }
 .grid2-ref { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 20px; }
 .empty { color: var(--text-muted); padding: 16px 0; text-align: center; }
+.whatif-form { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.whatif-form fieldset { border: 1px solid var(--grid); border-radius: 8px; padding: 6px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
+.whatif-form legend { color: var(--text-secondary); font-size: 12px; padding: 0 4px; }
+.whatif-form label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--text-secondary); }
+.whatif-form input[type=number] { width: 72px; }
+.whatif-form select { max-width: 100%; }
+.verdict { font-size: 15px; display: flex; gap: 8px; align-items: baseline; margin-bottom: 10px; }
+#whatif table { width: auto; min-width: min(640px, 100%); }
+#whatif ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
 .status { font-size: 13px; color: var(--text-secondary); }
 .status.error { color: var(--status-critical); }
 </style>
@@ -156,6 +165,34 @@ details summary { cursor: pointer; }
       <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
       <tbody id="clusters"></tbody>
     </table></div>
+  </div>
+
+  <div class="card" id="whatif-card">
+    <div class="card-head"><h2>What-if: a new application</h2><span class="sub">Does it fit on a cluster, with N+1 and the platform reserve, or how many nodes must be added? Not saved; changes nothing.</span></div>
+    <div class="whatif-form">
+      <fieldset><legend>Application</legend>
+        <label>Cluster <select id="wi-cluster" aria-label="cluster for the new application"></select></label>
+        <label>CPU <input type="number" id="wi-cpu" min="0" step="0.5" value="4"></label>
+        <label>Memory GiB <input type="number" id="wi-mem" min="0" step="1" value="16"></label>
+        <label title="the CPU and memory above are for all replicas together; each replica must fit on one node">Replicas <input type="number" id="wi-replicas" min="1" step="1" value="1" style="width:60px"></label>
+      </fieldset>
+      <fieldset><legend>Already in use on the cluster</legend>
+        <label><select id="wi-basis" aria-label="what the application is added to">
+          <option value="max">the higher of planned quota and requests now</option>
+          <option value="plan">planned quota (this plan)</option>
+          <option value="requests">project requests now</option>
+        </select></label>
+      </fieldset>
+      <fieldset><legend>If nodes must be added</legend>
+        <label title="allocatable of one new node; starts as the cluster's largest node">Node CPU <input type="number" id="wi-node-cpu" min="0" step="1"></label>
+        <label>Node GiB <input type="number" id="wi-node-mem" min="0" step="1"></label>
+        <label title="what platform DaemonSets (CNI, cattle-node-agent, node-exporter, log shipper …) request on every node; an estimate, check a node of this cluster">Platform per node CPU <input type="number" id="wi-ov-cpu" min="0" step="0.05" value="0.25"></label>
+        <label>GiB <input type="number" id="wi-ov-mem" min="0" step="0.25" value="0.5"></label>
+        <label class="money">Rancher licence <input type="number" id="wi-lic-price" min="0" step="any"> <span class="muted" id="wi-lic-cur"></span> per year per
+          <select id="wi-lic-unit" aria-label="licence unit"><option value="node">node</option><option value="vcpu">vCPU</option></select></label>
+      </fieldset>
+    </div>
+    <div id="whatif"></div>
   </div>
 
   <div class="card">
@@ -294,6 +331,28 @@ function clusterLimits(c, cfg, env) {
   return out;
 }
 
+// What-if: the cluster's limit for projects with `added` extra nodes of one size, each bringing its own platform
+// DaemonSets (overhead) into the platform reserve. Same rules as clusterLimits, so N+1 follows the new largest node.
+function limitsWithNodes(c, cfg, env, base, node, overhead, added) {
+  if (!added) return clusterLimits(c, cfg, env);
+  const extra = Array.from({length: added}, (_, i) => ({name: `new-${i + 1}`, cpu: node.cpu, mem_gib: node.mem}));
+  return clusterLimits(
+    {...c, alloc_cpu: (c.alloc_cpu || 0) + added * node.cpu, alloc_mem_gib: (c.alloc_mem_gib || 0) + added * node.mem,
+     node_sizes: c.node_sizes ? [...c.node_sizes, ...extra] : null},
+    {platform_cpu: base.reserve_cpu + added * overhead.cpu, platform_mem_gib: base.reserve_mem + added * overhead.mem}, env);
+}
+const fitsIn = (lim, need) => need.cpu <= lim.limit_cpu + 1e-9 && need.mem <= lim.limit_mem + 1e-9;
+// Fewest nodes to add so that `need` fits the limit for projects; null if even maxAdd nodes are not enough.
+function nodesNeeded(c, cfg, env, need, node, overhead, maxAdd = 200) {
+  const base = clusterLimits(c, cfg, env);
+  for (let k = 0; k <= maxAdd; k++) {
+    const lim = limitsWithNodes(c, cfg, env, base, node, overhead, k);
+    if (fitsIn(lim, need)) return {added: k, limits: lim};
+    if (!node.cpu && !node.mem) return null;
+  }
+  return null;
+}
+
 function evaluate() {
   const clusters = Object.fromEntries(data.inventory.clusters.map((c) => [c.id, c]));
   const issues = [], projects = {}, totals = {};
@@ -346,6 +405,7 @@ function render() {
   renderReference();
   renderClusters();
   renderProjects();
+  setupWhatIf();
   recompute();
 }
 
@@ -563,6 +623,7 @@ function recompute() {
       cls ? h("span", {class: `dot ${cls}`}) : "",
       "Planned ", h("b", {}, money(pr.cost)), budget != null ? ` of ${money(budget)}` : h("span", {class: "muted"}, " (no budget)"));
   }
+  renderWhatIf(ev);
   // issues + tiles
   const box = $("issues");
   box.hidden = false;
@@ -591,6 +652,109 @@ function recompute() {
     tile("Projects over budget", overBudget, overBudget ? "see issues above" : "all within budget"),
     tile("Clusters over their limit", overHead, `of ${data.inventory.clusters.length} clusters`));
 }
+// ---- what-if calculator ----
+let wiNodeFor = null;   // cluster whose largest node prefilled the node size
+function setupWhatIf() {
+  const sel = $("wi-cluster"), prev = sel.value;
+  sel.replaceChildren(...data.inventory.clusters.map((c) => h("option", {value: c.id}, c.name + ((plan.clusters[c.id] || {}).env ? ` (${plan.clusters[c.id].env})` : ""))));
+  const withEnv = data.inventory.clusters.find((c) => (plan.clusters[c.id] || {}).env);
+  sel.value = data.inventory.clusters.some((c) => c.id === prev) ? prev : (withEnv || data.inventory.clusters[0] || {}).id || "";
+  const lic = plan.settings.license;
+  if (lic) {
+    $("wi-lic-price").value = lic.per_year;
+    $("wi-lic-unit").value = lic.unit;
+    $("wi-lic-cur").textContent = plan.settings.currency || "";
+  }
+}
+function prefillNode(c) {
+  if (!c || wiNodeFor === c.id) return;
+  wiNodeFor = c.id;
+  const largest = (c.node_sizes || []).reduce((a, n) => (!a || n.cpu > a.cpu || (n.cpu === a.cpu && n.mem_gib > a.mem_gib)) ? n : a, null);
+  const avg = c.nodes ? {cpu: (c.alloc_cpu || 0) / c.nodes, mem_gib: (c.alloc_mem_gib || 0) / c.nodes} : null;
+  const n = largest || avg;
+  $("wi-node-cpu").value = n ? round(n.cpu, 2) : "";
+  $("wi-node-mem").value = n ? round(n.mem_gib, 1) : "";
+}
+for (const id of ["wi-cluster", "wi-cpu", "wi-mem", "wi-replicas", "wi-basis", "wi-node-cpu", "wi-node-mem", "wi-ov-cpu", "wi-ov-mem"])
+  $(id).addEventListener("input", () => renderWhatIf(evaluate()));
+$("wi-lic-price").oninput = (e) => { plan.settings.license.per_year = num(e.target.value); markDirty(); };
+$("wi-lic-unit").onchange = (e) => { plan.settings.license.unit = e.target.value; markDirty(); };
+
+function renderWhatIf(ev) {
+  const out = $("whatif");
+  const c = data.inventory.clusters.find((x) => x.id === $("wi-cluster").value);
+  if (!c) { out.replaceChildren(h("div", {class: "empty"}, "No clusters in Rancher")); return; }
+  prefillNode(c);
+  const {env, envName} = clusterRules(c.id);
+  if (!env) { out.replaceChildren(h("div", {class: "verdict"}, h("span", {class: "dot warning"}), `Set an environment for ${c.name} in the Clusters table first: it decides N+1 and the headroom.`)); return; }
+  const cfg = plan.clusters[c.id] || {};
+  const app = {cpu: num($("wi-cpu").value), mem: num($("wi-mem").value)};
+  const replicas = Math.max(1, Math.round(num($("wi-replicas").value) || 1));
+  const node = {cpu: num($("wi-node-cpu").value), mem: num($("wi-node-mem").value)};
+  const overhead = {cpu: num($("wi-ov-cpu").value), mem: num($("wi-ov-mem").value)};
+  const base = clusterLimits(c, cfg, env);
+
+  // What is already on the cluster: the plan's quota, or the projects' requests now (all requests minus the platform reserve).
+  const planned = {cpu: ev.clusters[c.id]?.cpu || 0, mem: ev.clusters[c.id]?.mem || 0};
+  const reqKnown = c.requested_cpu != null;
+  const requests = {cpu: Math.max(0, (c.requested_cpu || 0) - base.reserve_cpu), mem: Math.max(0, (c.requested_mem_gib || 0) - base.reserve_mem)};
+  const basis = $("wi-basis").value;
+  const used = basis === "plan" ? planned : basis === "requests" ? requests
+    : {cpu: Math.max(planned.cpu, requests.cpu), mem: Math.max(planned.mem, requests.mem)};
+  const need = {cpu: used.cpu + app.cpu, mem: used.mem + app.mem};
+
+  const result = nodesNeeded(c, cfg, env, need, node, overhead);
+  const withoutN1 = env.node_failures ? nodesNeeded(c, cfg, {...env, node_failures: 0}, need, node, overhead) : null;
+  const k = result ? result.added : null;
+  const after = result ? result.limits : null;
+  const lic = plan.settings.license;
+  const licPerNode = lic ? (lic.unit === "vcpu" ? node.cpu * lic.per_year : lic.per_year) : 0;
+
+  // Quota is not enough: every replica has to fit on one node, next to that node's platform DaemonSets.
+  const perReplica = {cpu: app.cpu / replicas, mem: app.mem / replicas};
+  const biggest = (c.node_sizes || []).reduce((a, n) => ({cpu: Math.max(a.cpu, n.cpu), mem: Math.max(a.mem, n.mem_gib)}), {cpu: node.cpu, mem: node.mem});
+  const tooBig = perReplica.cpu > biggest.cpu - overhead.cpu + 1e-9 || perReplica.mem > biggest.mem - overhead.mem + 1e-9;
+
+  const replicaLine = tooBig && h("div", {class: "verdict"}, h("span", {class: "dot critical"}), h("span", {}, h("b", {}, "Can't be scheduled: "), `one replica (${fmt(perReplica.cpu, 2)} CPU / ${fmt(perReplica.mem)} GiB) is larger than any node has left after its platform DaemonSets (${fmt(biggest.cpu - overhead.cpu, 2)} CPU / ${fmt(biggest.mem - overhead.mem)} GiB). Use more replicas or larger nodes; the check below only counts quota.`));
+  let verdict;
+  if (!result) verdict = [h("span", {class: "dot critical"}), (!node.cpu && !node.mem) ? `Doesn't fit on ${c.name}; enter a node size to see how many nodes to add.` : `Doesn't fit on ${c.name} even with 200 more nodes of this size: the platform per node or the headroom rule leaves too little room.`];
+  else if (k === 0) verdict = [h("span", {class: "dot good"}), h("span", {}, "Fits on ", h("b", {}, c.name), ` (${envName}) without new nodes. Room left after it: `, h("b", {}, pair(base.limit_cpu - need.cpu, base.limit_mem - need.mem)), " CPU / GiB.")];
+  else verdict = [h("span", {class: "dot critical"}), h("span", {}, h("b", {}, `Add ${k} node${k > 1 ? "s" : ""}`), ` of ${fmt(node.cpu, 2)} CPU / ${fmt(node.mem)} GiB to ${c.name} (${envName}).`,
+    lic ? h("span", {class: "money"}, " Rancher licence: ", h("b", {}, money(k * licPerNode)), " per year (", money(k * licPerNode / 12), " per month).") : "")];
+
+  const binding = (lim, dim) => lim[`binding_${dim}`] === "failures" ? `N+${lim.node_failures}` : `${lim.max_pct} %`;
+  const failCell = (lim) => !lim.node_failures ? h("span", {class: "muted"}, "0 / 0") : !lim.nodes_known ? h("span", {class: "muted"}, "sizes unknown")
+    : h("span", {title: `the ${lim.node_failures} largest node(s)`}, pair(lim.failover_cpu, lim.failover_mem));
+  const col = (lim, nodes, extraRows) => [
+    `${nodes}`, pair(lim.alloc_cpu, lim.alloc_mem), failCell(lim), pair(lim.reserve_cpu, lim.reserve_mem),
+    h("span", {}, h("b", {}, pair(lim.limit_cpu, lim.limit_mem)), h("span", {class: "muted"}, ` (${binding(lim, "cpu")}${binding(lim, "mem") !== binding(lim, "cpu") ? " / " + binding(lim, "mem") : ""})`)),
+    ...extraRows];
+  const room = (lim) => { const r = {cpu: lim.limit_cpu - need.cpu, mem: lim.limit_mem - need.mem};
+    return h("span", {style: r.cpu < -1e-9 || r.mem < -1e-9 ? "color:var(--status-critical)" : ""}, pair(r.cpu, r.mem)); };
+  const nodeCount = base.nodes_known ? base.node_count : (c.nodes ?? "?");
+  const labels = ["Nodes", "Allocatable", `− largest node(s) (N+${env.node_failures})`, "− platform reserve", "= limit for projects",
+    `Already in use (${{max: "higher of plan and requests", plan: "planned quota", requests: "requests now"}[basis]})`, "+ this application", "= room left"];
+  const today = col(base, nodeCount, [pair(used.cpu, used.mem), pair(app.cpu, app.mem), room(base)]);
+  const cols = [today];
+  if (k) cols.push(col(after, typeof nodeCount === "number" ? `${nodeCount + k} (+${k})` : `+${k}`, [pair(used.cpu, used.mem), pair(app.cpu, app.mem), room(after)]));
+  const table = h("div", {class: "table-wrap"}, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "CPU / GiB"), h("th", {}, "Today"), k ? h("th", {}, `With ${k} new node${k > 1 ? "s" : ""}`) : null)),
+    h("tbody", {}, labels.map((l, i) => h("tr", {}, h("td", {}, l), cols.map((cl) => h("td", {}, cl[i])))))));
+
+  const notes = [];
+  if (withoutN1 && result && withoutN1.added !== k)
+    notes.push(`N+${env.node_failures} costs ${k - withoutN1.added} node(s) here: without tolerating a node failure it would ${withoutN1.added ? `need ${withoutN1.added} new node(s)` : "fit without new nodes"}.`);
+  if (k && lic) notes.push(h("span", {class: "money"}, `Licence per new node: ${money(licPerNode)} a year (${lic.unit === "vcpu" ? `${fmt(node.cpu, 2)} vCPU × ${money(lic.per_year)}; counted on the node's allocatable CPU, check what your contract counts` : "per node"}). Hardware or VM cost of the node is not included.`));
+  if (k && env.node_failures && node.cpu > Math.max(0, ...(c.node_sizes || []).map((n) => n.cpu)))
+    notes.push("The new nodes are larger than today's largest, so N+1 now holds back a new node's capacity.");
+  if (base.reserve_source === "none") notes.push(h("span", {style: "color:var(--status-critical)"}, `No platform reserve for ${c.name}: the result ignores what platform components request. Enter it in the Clusters table.`));
+  if (env.node_failures && !base.nodes_known) notes.push("Rancher reports no node sizes for this cluster, so N+1 isn't applied.");
+  if (basis !== "plan" && !reqKnown) notes.push("Rancher reports no requests for this cluster, so requests now count as 0.");
+  if (k && after && (after.binding_cpu === "pct" || after.binding_mem === "pct")) notes.push(`With the new nodes the ${env.max_quota_pct} % headroom rule, not N+1, sets the limit (room for rollouts).`);
+  notes.push("The application is checked as quota on top of what is already in use; add it to a project's quota below to keep it in the plan.");
+  out.replaceChildren(replicaLine || "", h("div", {class: "verdict"}, ...verdict), table, h("ul", {}, notes.map((n) => h("li", {}, n))));
+}
+
 function tile(label, value, note) {
   return h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), h("div", {class: "note"}, note));
 }

@@ -68,7 +68,7 @@ rancher:
     namespace: resource-report        # spec.namespace: release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report      # spec.helm.releaseName
     chart:
-      repo: oci://ghcr.io/cdalar/charts/cluster-resource-report   # spec.helm.repo: full OCI URL of the chart (Docker Hub: oci://docker.io/cdalar/cluster-resource-report-chart, or a mirror)
+      repo: oci://ghcr.io/cdalar/charts/cluster-resource-report   # spec.helm.repo: full OCI URL of the chart (Docker Hub: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart, or a mirror)
       version: ""                     # spec.helm.version; "" = this chart's version
     helmSecretName: ""                # spec.helmSecretName: secret in the workspace with registry credentials
                                       # (username/password), for a private registry or mirror

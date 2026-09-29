@@ -12,7 +12,7 @@ One Helm chart, `cluster-resource-report`, installed once per cluster with diffe
 | Cluster | Role | What runs there |
 |---|---|---|
 | **Rancher local cluster** (the Rancher server's own cluster) | `local` | Dashboard of the local cluster, allocation planner and/or capacity planner (for all clusters), name publisher (CronJob writing one Fleet Bundle) |
-| **Downstream clusters** (Rancher-managed, on-prem or AKS) | `downstream` | Dashboard of that cluster; reads Project names from a ConfigMap Fleet delivers |
+| **Downstream clusters** (Rancher-managed, on-prem or AKS) | `downstream` | Dashboard of that cluster; reads Project names from a ConfigMap Fleet delivers. Installed by hand, or by Fleet from the local cluster (Step 3, option A) |
 | **Clusters outside Rancher** (e.g. standalone AKS) | `standalone` | Dashboard of that cluster; namespaces grouped by a label instead of Rancher Projects |
 
 ```mermaid
@@ -36,7 +36,8 @@ flowchart LR
 
 Nothing is exposed outside the cluster: you open the pages through Rancher's proxy with your Rancher login.
 Everything is read-only against the clusters except the name publisher (one Fleet Bundle) and the planners
-(their own plan ConfigMaps).
+(their own plan ConfigMaps). With Step 3 option A, the local Helm release also creates one Fleet HelmOp that
+installs the chart on the downstream clusters you choose.
 
 ## Step 0. Check the prerequisites
 
@@ -173,6 +174,72 @@ kubectl -n resource-report create job --from=cronjob/<cronjob-name> publish-now
 In the Rancher UI, the Bundle is under **Continuous Delivery → Advanced → Bundles** (workspace `fleet-default`).
 
 ## Step 3. Install on each downstream cluster
+
+Two ways: **A.** let Fleet install it from the local cluster (one place to configure and upgrade), or **B.** install
+it on each cluster yourself.
+
+### Option A. With Fleet, from the local cluster
+
+Needs Fleet ≥ 0.12 (Rancher 2.11+) and a chart version with `rancher.deployDownstream` (later than 0.5.2). The local
+release renders one Fleet HelmOp (Rancher: **Continuous Delivery → App Bundles**) that installs the chart on the
+clusters you choose, at the local release's chart version. Design and background:
+[docs/08](../docs/08-fleet-deployment.md).
+
+Add to `values-local.yaml` (Step 2):
+
+```yaml
+rancher:
+  deployDownstream:
+    enabled: true
+    # Choose the clusters: names, a label selector, a Fleet ClusterGroup, or a mix.
+    # Nothing is installed without one of them.
+    clusters:
+      - onprem-prod-01
+      - onprem-test-01
+      - name: aks-prod                # per-cluster values over the common ones below
+        values:
+          prometheus: {enabled: false}
+    # clusterSelector: {matchLabels: {resource-report: enabled}}   # clusters labelled in Rancher
+    # clusterGroup: resource-report                                  # an existing Fleet ClusterGroup
+    values:                           # for every downstream release (what values-downstream.yaml holds in option B)
+      collection:
+        window: 7d
+```
+
+and run the Step 2 `helm upgrade --install` on the local cluster again. The names are the Fleet cluster names:
+
+```bash
+kubectl -n fleet-default get clusters.fleet.cattle.io         # names and labels of the downstream clusters
+kubectl -n fleet-default get helmops,bundles                  # the HelmOp and its Bundle: READY n/n
+```
+
+What goes downstream: the local image repository, pull policy and pull secrets; `rancher.namesConfigMap.enabled`
+when `publishNames` is on; then `deployDownstream.values` and the cluster's own `values`. Local-only settings
+(`isLocalCluster`, `publishNames`, the planners) are always off downstream.
+
+**Choosing clusters by label or group** lets a cluster opt in without a `helm upgrade`:
+- *Label:* Cluster Management → cluster → ⋮ → **Edit Config** → Labels, e.g. `resource-report=enabled`, with
+  `clusterSelector.matchLabels`.
+- *ClusterGroup:* Continuous Delivery (workspace `fleet-default`) → **Cluster Groups → Create**, with a rule on
+  `management.cattle.io/cluster-display-name` *in list* of names (a group has only a label selector, and Rancher
+  labels each cluster with its name), then `clusterGroup: <name>`.
+
+Removing a cluster from the targets makes Fleet uninstall the chart there.
+
+**Private registry or mirror:** set `deployDownstream.chart.repo` to the chart's full OCI URL and, with a login,
+`deployDownstream.helmSecretName` (a secret with `username` / `password` in `fleet-default`).
+`deployDownstream.insecureSkipTLSVerify: true` skips TLS verification for the chart download only; the image is
+pulled by containerd on the nodes, which needs the registry's CA (or `insecure_skip_verify`) in its own
+`registries.yaml`.
+
+**Clusters already installed by hand (option B):** the HelmOp uses the same release name and namespace. Whether
+Fleet takes over such a release in place is still to be confirmed; if it doesn't, `helm uninstall resource-report
+-n resource-report` on that cluster first. Nothing is lost: the dashboard collects again, and plans live on the
+local cluster.
+
+Check the downstream clusters as in option B below.
+
+### Option B. By hand, on each cluster
 
 Create `values-downstream.yaml`:
 
@@ -340,7 +407,8 @@ immediately). Put the value in the values file of each cluster where you want it
 ## Upgrade
 
 Run the same `helm upgrade --install` with the new version and the same values file, on the local cluster first
-and then on the downstream clusters:
+and then on the downstream clusters. With Step 3 option A, the local upgrade is all: Fleet upgrades the downstream
+releases to the same version (check with `kubectl -n fleet-default get helmops,bundles`).
 
 ```bash
 VERSION=<new-version>
@@ -387,6 +455,10 @@ kubectl -n resource-report get configmap resource-report-cluster-resource-report
 kubectl -n resource-report get configmap resource-report-cluster-resource-report-capacity -o yaml > capacity-backup.yaml
 ```
 
+With Step 3 option A, **uninstalling on the local cluster also uninstalls the chart on every downstream cluster**
+(the HelmOp is deleted and Fleet removes its releases); so does turning `rancher.deployDownstream.enabled` off.
+If the downstream dashboards should stay, install them by hand afterwards (option B).
+
 Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bundle it wrote; delete it with
 `kubectl -n fleet-default delete bundle rancher-project-names` (Fleet then removes the ConfigMap downstream).
 
@@ -408,6 +480,9 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | No **Resource report** entry in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
 | Chart fails: "ingress was removed" or "service.type was removed" | Values from an older release that exposed the dashboard | Remove `ingress.*` and `service.type` from your values; open the dashboard through Rancher |
 | Chart fails: "publishNames.enabled needs rancher.isLocalCluster=true" | Name publisher enabled on a downstream cluster | Only enable it on the local cluster |
+| Chart fails: "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup" | Fleet deployment enabled without a target | Name the clusters, or set a selector or group; `clusterSelector: {}` = every cluster in the workspace |
+| Chart fails: "rancher.deployDownstream needs Fleet HelmOps" | Fleet older than 0.12, or not the Rancher local cluster | Upgrade Rancher (2.11+), or install downstream by hand (option B) |
+| App Bundle not *Accepted* / Bundle not ready | Chart not reachable from the Fleet controller, wrong `chart.repo`, or TLS / login to a mirror | `kubectl -n fleet-default describe helmop resource-report-cluster-resource-report`; check `chart.repo` (full OCI URL of the chart), `helmSecretName`, `insecureSkipTLSVerify` |
 | Planner page missing (`/planner` 404) | `planner.enabled` not set | Set it, with `rancher.isLocalCluster: true` |
 | Planner shows "can't read ConfigMap …" or "not saved: … forbidden" | Plan ConfigMap deleted by hand, or RBAC changed | `helm upgrade` again: it recreates the ConfigMap and the Role |
 | Planner shows version 0 after upgrading from 0.3.x | Old plan file not on the volume any more (persistence was turned off before the first save) | Turn `persistence.enabled` on again for the upgrade (step "Upgrade") |

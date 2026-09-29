@@ -16,7 +16,7 @@ several namespaces each), plus some AKS clusters.
 
 | Path | Content |
 |---|---|
-| `docs/` | Design and process docs (numbered), `open-questions.md` |
+| `docs/` | Design and process docs (numbered), `open-questions.md`; `docs/images/` holds the README screenshots (synthetic demo data) |
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
 | `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `kibana-dashboard.md`), separate from the design docs |
 | `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |

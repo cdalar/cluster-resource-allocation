@@ -2,8 +2,8 @@
 
 Plan for installing and upgrading the `cluster-resource-report` chart on downstream clusters through Fleet, from
 the release on the Rancher local cluster, without a GitRepo. Status: **chart part built** (`rancher.deployDownstream`,
-`templates/fleet-helmop.yaml`, chart README). Still open: the installation guide, and the end-to-end test on a
-downstream cluster (including adoption of the existing manual release).
+`templates/fleet-helmop.yaml`, chart README, installation guide Step 3 option A). Still open: the end-to-end
+test on a downstream cluster (including adoption of the existing manual release), and a release with it.
 
 ## Starting point
 

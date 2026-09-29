@@ -164,6 +164,7 @@ details summary { cursor: pointer; }
         <label title="CPU request of one replica (pod)">CPU per replica <input type="number" id="wi-cpu" min="0" step="0.5" value="4"></label>
         <label title="memory request of one replica (pod)">Memory GiB per replica <input type="number" id="wi-mem" min="0" step="1" value="16"></label>
         <label title="the application needs CPU and memory per replica × replicas as quota; each replica must fit on one node">Replicas <input type="number" id="wi-replicas" min="1" step="1" value="1" style="width:60px"></label>
+        <label title="the application can't run as several replicas (e.g. a stateful or licensed single instance): replicas is 1, and for N+1 other nodes must be able to take it over"><input type="checkbox" id="wi-single"> Single instance</label>
       </fieldset>
       <fieldset><legend>Already in use on the cluster</legend>
         <label><select id="wi-basis" aria-label="what the application is added to">
@@ -686,7 +687,8 @@ function prefillNode(c) {
   $("wi-node-cpu").value = n ? round(n.cpu, 2) : "";
   $("wi-node-mem").value = n ? round(n.mem_gib, 1) : "";
 }
-for (const id of ["wi-cluster", "wi-cpu", "wi-mem", "wi-replicas", "wi-basis", "wi-node-cpu", "wi-node-mem", "wi-ov-cpu", "wi-ov-mem"])
+$("wi-single").addEventListener("change", (e) => { $("wi-replicas").disabled = e.target.checked; if (e.target.checked) $("wi-replicas").value = 1; });
+for (const id of ["wi-cluster", "wi-cpu", "wi-mem", "wi-replicas", "wi-single", "wi-basis", "wi-node-cpu", "wi-node-mem", "wi-ov-cpu", "wi-ov-mem"])
   $(id).addEventListener("input", () => renderWhatIf(evaluate()));
 $("wi-lic-price").oninput = (e) => { plan.settings.license.per_year = num(e.target.value); markDirty(); };
 $("wi-lic-unit").onchange = (e) => { plan.settings.license.unit = e.target.value; markDirty(); };
@@ -700,7 +702,8 @@ function renderWhatIf(ev) {
   if (!env) { out.replaceChildren(h("div", {class: "verdict"}, h("span", {class: "dot warning"}), `Set an environment for ${c.name} in the Clusters table first: it decides N+1 and the headroom.`)); return; }
   const cfg = plan.clusters[c.id] || {};
   const pod = {cpu: num($("wi-cpu").value), mem: num($("wi-mem").value)};   // one replica
-  const replicas = Math.max(1, Math.round(num($("wi-replicas").value) || 1));
+  const single = $("wi-single").checked;
+  const replicas = single ? 1 : Math.max(1, Math.round(num($("wi-replicas").value) || 1));
   const app = {cpu: pod.cpu * replicas, mem: pod.mem * replicas};
   const node = {cpu: num($("wi-node-cpu").value), mem: num($("wi-node-mem").value)};
   const overhead = {cpu: num($("wi-ov-cpu").value), mem: num($("wi-ov-mem").value)};
@@ -710,12 +713,19 @@ function renderWhatIf(ev) {
   // on the replica's size only, not on how many replicas there are.
   const podFits = (n) => pod.cpu <= n.cpu - overhead.cpu + 1e-9 && pod.mem <= n.mem - overhead.mem + 1e-9;
   const existing = (c.node_sizes || []).map((n) => ({cpu: n.cpu, mem: n.mem_gib}));
-  const fitsToday = !c.node_sizes || existing.some(podFits);   // sizes unknown: can't tell, assume it does
+  const hostsToday = c.node_sizes ? existing.filter(podFits).length : Infinity;   // sizes unknown: can't tell, assume enough
+  const fitsToday = hostsToday > 0;
   const fitsNewNode = (node.cpu || node.mem) ? podFits(node) : false;
   const tooBig = !fitsToday && !fitsNewNode;
   // Fits only on the new node size: enough new nodes for all replicas, plus N spare ones for N+1.
   const perNewNode = Math.floor(Math.min(pod.cpu ? (node.cpu - overhead.cpu) / pod.cpu : Infinity, pod.mem ? (node.mem - overhead.mem) / pod.mem : Infinity));
-  const minAdd = !fitsToday && fitsNewNode ? Math.ceil(replicas / Math.max(1, perNewNode)) : 0;
+  // Fewest new nodes the pods need to have somewhere to run, tolerating `failures` failed nodes:
+  //   several replicas that fit only on the new size: enough new nodes for all of them, plus `failures` spare ones;
+  //   a single instance: 1 + `failures` nodes that can each hold it, so it can move when its node fails.
+  const hostsMin = (failures) => !fitsNewNode ? 0
+    : single ? Math.max(0, 1 + failures - hostsToday)
+    : fitsToday ? 0 : Math.ceil(replicas / Math.max(1, perNewNode)) + failures;
+  const minAdd = hostsMin(env.node_failures);
 
   // What is already on the cluster: the plan's quota, or the projects' requests now (all requests minus the platform reserve).
   const planned = {cpu: ev.clusters[c.id]?.cpu || 0, mem: ev.clusters[c.id]?.mem || 0};
@@ -726,8 +736,8 @@ function renderWhatIf(ev) {
     : {cpu: Math.max(planned.cpu, requests.cpu), mem: Math.max(planned.mem, requests.mem)};
   const need = {cpu: used.cpu + app.cpu, mem: used.mem + app.mem};
 
-  const result = nodesNeeded(c, cfg, env, need, node, overhead, minAdd ? minAdd + env.node_failures : 0);
-  const withoutN1 = env.node_failures ? nodesNeeded(c, cfg, {...env, node_failures: 0}, need, node, overhead, minAdd) : null;
+  const result = nodesNeeded(c, cfg, env, need, node, overhead, minAdd);
+  const withoutN1 = env.node_failures ? nodesNeeded(c, cfg, {...env, node_failures: 0}, need, node, overhead, hostsMin(0)) : null;
   const k = result ? result.added : null;
   const after = result ? result.limits : null;
   const lic = plan.settings.license;
@@ -737,7 +747,7 @@ function renderWhatIf(ev) {
   const replicaLine = tooBig && h("div", {class: "verdict"}, h("span", {class: "dot critical"}), h("span", {}, h("b", {}, "Can't be scheduled: "),
     `one replica (${fmt(pod.cpu, 2)} CPU / ${fmt(pod.mem)} GiB) fits on no node after its platform DaemonSets`,
     largest ? ` — today's largest leaves ${fmt(largest.cpu - overhead.cpu, 2)} / ${fmt(largest.mem - overhead.mem)},` : "",
-    ` the new node size ${fmt(node.cpu - overhead.cpu, 2)} / ${fmt(node.mem - overhead.mem)}. Choose a larger node size or split the application into smaller replicas; the check below only counts quota.`));
+    ` the new node size ${fmt(node.cpu - overhead.cpu, 2)} / ${fmt(node.mem - overhead.mem)}. ${single ? "A single instance can't be split: choose a larger node size" : "Choose a larger node size or split the application into smaller replicas"}; the check below only counts quota.`));
   let verdict;
   if (!result) verdict = [h("span", {class: "dot critical"}), (!node.cpu && !node.mem) ? `Doesn't fit on ${c.name}; enter a node size to see how many nodes to add.` : `Doesn't fit on ${c.name} even with 200 more nodes of this size: the platform per node or the headroom rule leaves too little room.`];
   else if (k === 0) verdict = [h("span", {class: "dot good"}), h("span", {}, "Fits on ", h("b", {}, c.name), ` (${envName}) without new nodes. Room left after it: `, h("b", {}, pair(base.limit_cpu - need.cpu, base.limit_mem - need.mem)), " CPU / GiB.")];
@@ -764,7 +774,10 @@ function renderWhatIf(ev) {
     h("tbody", {}, labels.map((l, i) => h("tr", {}, h("td", {}, l), cols.map((cl) => h("td", {}, cl[i])))))));
 
   const notes = [];
-  if (minAdd) notes.push(`One replica fits on none of today's nodes, only on the new node size (${Math.max(1, perNewNode)} per node): at least ${minAdd} new node(s) for ${replicas} replica(s)${env.node_failures ? `, plus ${env.node_failures} for N+${env.node_failures}` : ""}.`);
+  if (minAdd && single) notes.push(`Single instance: ${1 + env.node_failures} node(s) must be able to hold it${env.node_failures ? ` (itself + ${env.node_failures} to take over for N+${env.node_failures})` : ""}; ${hostsToday ? `only ${hostsToday} of today's nodes can` : "none of today's nodes can"}, so at least ${minAdd} new node(s).`);
+  else if (minAdd) notes.push(`One replica fits on none of today's nodes, only on the new node size (${Math.max(1, perNewNode)} per node): at least ${minAdd - env.node_failures} new node(s) for ${replicas} replica(s)${env.node_failures ? `, plus ${env.node_failures} for N+${env.node_failures}` : ""}.`);
+  if (single && !tooBig && !fitsNewNode && hostsToday < 1 + env.node_failures)
+    notes.push(h("span", {style: "color:var(--status-critical)"}, `Single instance: only ${hostsToday} of today's node(s) can hold it, so when that node fails it has nowhere to go (N+${env.node_failures} not met). Choose a new node size that can hold it.`));
   if (withoutN1 && result && withoutN1.added !== k)
     notes.push(`N+${env.node_failures} costs ${k - withoutN1.added} node(s) here: without tolerating a node failure it would ${withoutN1.added ? `need ${withoutN1.added} new node(s)` : "fit without new nodes"}.`);
   if (k && lic) notes.push(h("span", {class: "money"}, `Licence per new node: ${money(licPerNode)} a year (${lic.unit === "vcpu" ? `${fmt(node.cpu, 2)} vCPU × ${money(lic.per_year)}; counted on the node's allocatable CPU, check what your contract counts` : "per node"}). Hardware or VM cost of the node is not included.`));

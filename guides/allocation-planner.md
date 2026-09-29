@@ -290,6 +290,7 @@ nothing and changes nothing; it uses the same rules as the cluster limits above.
 | Cluster | Where the application should run. The cluster needs an environment (it decides N+1 and the headroom rule) |
 | CPU, Memory GiB per replica | The requests of one pod of the application |
 | Replicas | How many pods the application runs; it needs replicas × the per-replica requests as quota, and each replica must fit on one node |
+| Single instance | Tick for an application that can't run as several replicas (stateful, licensed per instance, leader-less …): replicas is fixed at 1, and N+1 is checked for the pod itself (below) |
 | Already in use | What the application comes on top of: the **planned quota** of this plan on that cluster, the projects' **requests now** (the cluster's requests minus the platform reserve), or the **higher of both** (default) |
 | Node CPU / GiB | Allocatable of one node to add; starts as the cluster's largest node. Change it to price a different node size |
 | Platform per node | What platform DaemonSets (CNI, cattle-node-agent, node-exporter, log shipper …) request on every node: each new node adds it to the platform reserve. Default 0.25 CPU / 0.5 GiB, an estimate: check the DaemonSet pods on a node of that cluster |
@@ -309,9 +310,12 @@ The result:
 - **What N+1 costs**: in prod, how many nodes it would take without tolerating a node failure.
 - **Can't be scheduled** when one replica is larger than what any node, today's or the new size, has left after
   its DaemonSets. This depends on the replica's size only, not on the number of replicas: choose a larger node size
-  or split the application into smaller replicas.
+  or split the application into smaller replicas (a single instance: only a larger node size helps).
 - When a replica fits on none of today's nodes but on the new node size, the calculator adds at least enough new
   nodes for all replicas (as many per node as fit), plus N spare nodes for N+1.
+- A **single instance** needs 1 + N nodes that can each hold it (prod: 2), so it can move when its node fails. If
+  fewer of today's nodes can, the calculator adds new nodes until there are enough; if the new node size can't
+  hold it either, it warns that N+1 is not met.
 
 Example (prod-01: 3 nodes 4+4+2 CPU / 16+16+8 GiB, platform reserve 1 CPU / 4 GiB, 3 CPU / 12 GiB in use): its limit
 is 10 − 4 − 1 = 5 CPU and 40 − 16 − 4 = 20 GiB. An application of 4 replicas of 3 CPU / 12 GiB on 8 CPU / 32 GiB nodes

@@ -146,6 +146,36 @@ There are three ways to choose clusters, and they can be combined:
 | By label (recommended for many clusters) | In the Rancher UI, go to Cluster → Edit Config → Labels and add, e.g., `resource-report=enabled`. Then set `clusterSelector.matchLabels`. | A new cluster opts in by getting the label, with no Helm change. Rancher copies cluster labels to the Fleet cluster. |
 | By cluster group | `clusterGroup: <name>` of an existing Fleet ClusterGroup | Teams that already group clusters in Fleet |
 
+A Fleet ClusterGroup has only a label selector (`spec.selector`), not a list of names. Rancher labels every Fleet
+cluster with its name, though: `management.cattle.io/cluster-display-name` holds the display name and
+`management.cattle.io/cluster-name` the stable ID (`c-m-…`). So a group can still select clusters by name:
+
+```yaml
+apiVersion: fleet.cattle.io/v1alpha1
+kind: ClusterGroup
+metadata:
+  name: resource-report
+  namespace: fleet-default          # same workspace as the HelmOp
+spec:
+  selector:
+    matchExpressions:
+      - key: management.cattle.io/cluster-display-name   # or management.cattle.io/cluster-name for IDs
+        operator: In                                      # NotIn = all except these
+        values: [cra-downstream-2, onprem-prod-01]
+```
+
+Then set `deployDownstream.clusterGroup: resource-report`. Changing the list is an edit of the group, with no
+`helm upgrade`. Use `kubectl -n fleet-default get clustergroups` to see how many clusters match.
+
+Creating the group in the Rancher UI:
+1. Open ☰ → **Continuous Delivery**, and select the workspace **fleet-default** at the top.
+2. Go to **Cluster Groups** → **Create** and name it `resource-report`.
+3. Under **Cluster Selectors**, add a rule: key `management.cattle.io/cluster-display-name`, operator *in list*,
+   and the cluster names as values. The form shows how many existing clusters match.
+4. If the form won't take that key, use **Create from YAML** (or **Import YAML** in the top bar) with the
+   manifest above. Or label the clusters yourself (Cluster Management → cluster → ⋮ → Edit Config → Labels,
+   e.g. `resource-report=enabled`) and select on that label.
+
 Removing a cluster from the targets (a name, a label, or group membership) makes Fleet uninstall the chart there.
 
 The names Bundle (`publishNames.clusterSelector`, default `{}`) still goes to every cluster in the workspace.

@@ -38,7 +38,7 @@ its own; it relies on Rancher's.
 
 ## The page at a glance
 
-The page reads top to bottom: settings first, then clusters, then projects. Every number updates as you type.
+The page reads top to bottom: settings first, then the what-if calculator, clusters and projects. Every number updates as you type.
 
 | Part | What it shows or does |
 | --- | --- |
@@ -47,8 +47,8 @@ The page reads top to bottom: settings first, then clusters, then projects. Ever
 | Issues | Everything in the plan that breaks a rule, or "No issues" when every budget and every cluster limit fits |
 | Tiles | Projects planned, planned cost per month (with the sum of all budgets), projects over budget, clusters over their limit |
 | Rates and rules | Collapsed by default; unit rates per platform, and node failures, headroom and memory limit per environment |
-| Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
 | What-if | Calculator for one new application: does it fit on a cluster, or how many nodes (and licences) must be added? See [What-if calculator](#what-if-calculator-a-new-application) |
+| Clusters | Every cluster in Rancher, its environment, platform, capacity and planned quota |
 | Projects | One block per project with its budget and a quota row per cluster |
 
 The status text next to the buttons says *Unsaved changes*, *Saving…* or *Saved*, and shows errors in red.
@@ -277,7 +277,7 @@ For round numbers the example uses rates of 25 per vCPU and 6.25 per GiB (not th
 
 ## What-if calculator: a new application
 
-The **What-if** card between *Clusters* and *Projects* answers: *a new application needs 4 vCPU / 16 GiB, does it
+The **What-if** card between *Rates and rules* and *Clusters* answers: *a new application needs 4 vCPU / 16 GiB, does it
 fit on prod-01, and if not, how many nodes must we add and what does the Rancher licence for them cost?* It saves
 nothing and changes nothing; it uses the same rules as the cluster limits above.
 

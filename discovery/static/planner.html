@@ -149,24 +149,6 @@ details summary { cursor: pointer; }
     </details>
   </div>
 
-  <div class="card">
-    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity and node sizes from Rancher; planned = Σ of the quotas below. Values are CPU / GiB.</span></div>
-    <div class="banner" style="margin-bottom:12px">
-      <b>How much each cluster can give to projects</b> (CPU and memory separately):
-      <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
-        <li><b>Allocatable</b> of the schedulable nodes,</li>
-        <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
-        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
-        <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
-      </ol>
-      The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
-    </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
-      <tbody id="clusters"></tbody>
-    </table></div>
-  </div>
-
   <div class="card" id="whatif-card">
     <div class="card-head"><h2>What-if: a new application</h2><span class="sub">Does it fit on a cluster, with N+1 and the platform reserve, or how many nodes must be added? Not saved; changes nothing.</span></div>
     <div class="whatif-form">
@@ -193,6 +175,24 @@ details summary { cursor: pointer; }
       </fieldset>
     </div>
     <div id="whatif"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Clusters</h2><span class="sub">Capacity and node sizes from Rancher; planned = Σ of the quotas below. Values are CPU / GiB.</span></div>
+    <div class="banner" style="margin-bottom:12px">
+      <b>How much each cluster can give to projects</b> (CPU and memory separately):
+      <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
+        <li><b>Allocatable</b> of the schedulable nodes,</li>
+        <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
+        <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
+        <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
+      </ol>
+      The lower of the two results is the <b>limit for projects</b>; the table shows which rule sets it.
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Cluster</th><th class="l">Environment</th><th class="l money">Platform</th><th>Nodes</th><th>Allocatable</th><th>− largest node(s)</th><th class="l">− platform reserve</th><th>= limit for projects</th><th>Planned</th><th class="l">Use of limit</th></tr></thead>
+      <tbody id="clusters"></tbody>
+    </table></div>
   </div>
 
   <div class="card">

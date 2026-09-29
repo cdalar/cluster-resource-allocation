@@ -72,7 +72,7 @@ Every release is published on GHCR and copied to Docker Hub, public, with no log
 
 | | GHCR (default) | Docker Hub | Version |
 |---|---|---|---|
-| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.5.1` |
+| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.5.2` |
 | **Image** | `ghcr.io/cdalar/cluster-resource-report` | `docker.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
 Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub instead
@@ -91,7 +91,7 @@ Set the chart and version once in your shell; every command below uses them:
 ```bash
 CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
 # or: CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
-VERSION=0.5.1
+VERSION=0.5.2
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
 helm show values $CHART --version $VERSION     # all values with their defaults
@@ -104,7 +104,7 @@ There is no `helm repo add`: OCI charts are installed straight from their `oci:/
 Mirror both the chart and the image into your internal registry, then point `CHART` and the values at it:
 
 ```bash
-helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.5.1.tgz
+helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.5.2.tgz
 helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
 crane copy ghcr.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
 
@@ -224,7 +224,7 @@ Rancher repositories belong to one cluster:
    `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`. No authentication.
 2. **Apps → Charts**, find **cluster-resource-report**, **Install**.
 3. Namespace `resource-report`, name `resource-report` (the menu links and the name publisher expect these),
-   version `0.5.1`.
+   version `0.5.2`.
 4. In the YAML step, paste the content of `values-local.yaml` or `values-downstream.yaml`, then **Install**.
 
 Upgrades then show up under **Apps → Installed Apps** when a new version is published (after the repository
@@ -363,6 +363,10 @@ Upgrading to 0.5.1: the planners get a what-if calculator for a new application 
 [planner guide](allocation-planner.md#what-if-calculator-a-new-application)). Its Rancher licence price starts at
 1,800 per node and year for existing plans too; set your own under *What-if* and save the plan.
 
+Upgrading to 0.5.2: in the what-if calculator, CPU and memory are per replica (like a Deployment's `resources`),
+and a *Single instance* option checks N+1 for applications that can't run as several replicas. The dashboard and
+planners show the chart version and image tag under their title.
+
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
 converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep
 `persistence.enabled: true` for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
@@ -391,7 +395,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Symptom | Cause | Fix |
 |---|---|---|
 | `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
-| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.5.1`); see the package page (step 1) |
+| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.5.2`); see the package page (step 1) |
 | Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the mirror lacks the tag | Mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
 | Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
 | Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |

@@ -41,9 +41,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
 {{- end -}}
 
+{{/* Non-empty on the Rancher local cluster. rancher.isLocalCluster: true / false, or auto (the default): local when
+     the cluster serves Rancher's Project API and runs the Rancher server (Deployment cattle-system/rancher).
+     `lookup` sees nothing in `helm template` or a client-side dry run, so auto then means "not local". */}}
+{{- define "crr.isLocal" -}}
+{{- $v := toString .Values.rancher.isLocalCluster -}}
+{{- if eq $v "true" -}}
+true
+{{- else if eq $v "auto" -}}
+{{- if and (.Capabilities.APIVersions.Has "management.cattle.io/v3/Project") (lookup "apps/v1" "Deployment" "cattle-system" "rancher") -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{/* Non-empty when the Rancher inventory is readable: on the local cluster, or through a local kubeconfig */}}
 {{- define "crr.hasInventory" -}}
-{{- if or .Values.rancher.isLocalCluster (dig "localKubeconfigSecret" "name" "" .Values.rancher) -}}
+{{- if or (include "crr.isLocal" .) (dig "localKubeconfigSecret" "name" "" .Values.rancher) -}}
 true
 {{- end -}}
 {{- end }}

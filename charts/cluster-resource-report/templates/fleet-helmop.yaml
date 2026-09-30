@@ -1,6 +1,6 @@
 {{- /* on by default, but only on the Rancher local cluster with Fleet HelmOps (Fleet >= 0.12, Rancher 2.11+);
        skipped elsewhere (downstream, plain clusters), NOTES.txt says why */}}
-{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) .Values.rancher.isLocalCluster (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
+{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) (include "crr.isLocal" .) (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
 {{- $d := merge (deepCopy .Values.rancher.deployDownstream) (dict "workspace" "fleet-default" "clusters" list "clusterGroup" "" "namespace" "resource-report" "releaseName" "resource-report" "helmSecretName" "" "insecureSkipTLSVerify" false "values" dict) }}
 {{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://ghcr.io/cdalar/charts/cluster-resource-report" "version" "") }}

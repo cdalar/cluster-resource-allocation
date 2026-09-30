@@ -14,7 +14,7 @@ Open the dashboard (it is not exposed outside the cluster):
 Usage history is read from {{ .Values.prometheus.service }} via the API server proxy.
 If the dashboard shows "prometheus unavailable", check that Rancher Monitoring is installed or set prometheus.service / prometheus.url.
 {{- end }}
-{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) .Values.rancher.isLocalCluster }}
+{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) (include "crr.isLocal" .) }}
 {{- if not (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
 
 rancher.deployDownstream is on, but this cluster has no Fleet HelmOps (fleet.cattle.io/v1alpha1 HelmOp: Fleet >= 0.12,

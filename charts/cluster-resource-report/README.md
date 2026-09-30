@@ -177,11 +177,15 @@ The app has **no login of its own**. Recommended ways to open it, in order:
 
 Anyone who can open the dashboard sees names and sizes of all namespaces and projects in the cluster.
 
-## 4. Allocation planner (optional, Rancher local cluster)
+## 4. Allocation planner (Rancher local cluster, on by default)
 
 User guide: [guides/allocation-planner.md](../../guides/allocation-planner.md).
 
-**Without money:** `--set capacityPlanner.enabled=true` adds the capacity planner (`/capacity`, *Capacity planner*
+Both planners are on by default (`planner.enabled`, `capacityPlanner.enabled`), but only run where the Rancher
+inventory is readable: with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`. Elsewhere they are
+skipped. Set either to `false` to leave it out.
+
+**Without money:** the capacity planner (`/capacity`, *Capacity planner*
 in the Rancher menu): no rates, budgets or costs, each project gets a CPU and memory envelope instead. It can run
 alone or next to the allocation planner, with its own plan (ConfigMap `<release>-cluster-resource-report-capacity`).
 
@@ -197,7 +201,7 @@ through the Git / Terraform flow. A plan file from an older version on the volum
 until the first save, which moves it to the ConfigMap.
 
 ```bash
-helm upgrade --install ... --set rancher.isLocalCluster=true --set planner.enabled=true
+helm upgrade --install ... --set rancher.isLocalCluster=true     # planners on by default
 ```
 
 It reads all clusters (capacity, requests) and Rancher Projects (current quota) from the local cluster, so one
@@ -232,8 +236,8 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.deployDownstream.helmSecretName` / `.insecureSkipTLSVerify` | `""` / `false` | Registry credentials secret in the workspace; skip TLS verification for the chart download |
 | `rancher.deployDownstream.values` | `{}` | Values for every downstream release |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
-| `capacityPlanner.enabled` | `false` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
-| `planner.enabled` | `false` | Allocation planner at `/planner` (needs `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`); plan in a ConfigMap |
+| `capacityPlanner.enabled` | `true` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
+| `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `""` | Menu entry in the Rancher UI that opens the dashboard through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |

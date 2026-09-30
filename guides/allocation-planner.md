@@ -377,18 +377,17 @@ exist, the export is the input for setting quotas by hand.
 ## For administrators: enabling the planner
 
 The planner is part of the `cluster-resource-report` Helm chart ([chart README](../charts/cluster-resource-report/README.md))
-and is installed once, on the Rancher local cluster:
+and is installed once, on the Rancher local cluster. Both planners are on by default there:
 
 ```bash
 helm upgrade --install resource-report charts/cluster-resource-report -n resource-report --create-namespace \
-  --set rancher.isLocalCluster=true \
-  --set planner.enabled=true
+  --set rancher.isLocalCluster=true
 ```
 
 | Value | Why it's needed |
 | --- | --- |
-| `planner.enabled=true` | Turns the planner on (`/planner`) and adds the *Allocation planner* entry to the local cluster's Rancher menu |
-| `capacityPlanner.enabled=true` | The capacity planner (`/capacity`, *Capacity planner* menu entry); can be used alone or next to the allocation planner |
+| `planner.enabled` (default `true`) | The planner (`/planner`) and the *Allocation planner* entry in the local cluster's Rancher menu; `false` leaves it out |
+| `capacityPlanner.enabled` (default `true`) | The capacity planner (`/capacity`, *Capacity planner* menu entry); `false` leaves it out |
 | `rancher.isLocalCluster=true` | Lets it read clusters, nodes and Projects from Rancher (read-only); alternatively `rancher.localKubeconfigSecret` |
 
 - **Permissions:** read-only on Rancher (`get`/`list` on `projects`, `clusters` and `nodes`). The only thing the

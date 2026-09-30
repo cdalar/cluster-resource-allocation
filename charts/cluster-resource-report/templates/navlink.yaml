@@ -19,7 +19,7 @@ spec:
     scheme: http
     port: {{ .Values.service.port | quote }}
     path: /
-{{- if dig "enabled" false (.Values.planner | default dict) }}
+{{- if include "crr.planner" . }}
 ---
 apiVersion: ui.cattle.io/v1
 kind: NavLink
@@ -41,7 +41,7 @@ spec:
     port: {{ .Values.service.port | quote }}
     path: /planner
 {{- end }}
-{{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}
+{{- if include "crr.capacityPlanner" . }}
 ---
 apiVersion: ui.cattle.io/v1
 kind: NavLink

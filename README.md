@@ -61,7 +61,8 @@ helm upgrade --install resource-report $CHART --version $VERSION \
 kubectl -n resource-report port-forward svc/resource-report-cluster-resource-report 8080:80
 ```
 
-To enable the planners and the Rancher Project name publisher on the Rancher local cluster, see the
+On the Rancher local cluster (`rancher.isLocalCluster=true`) the planners, the Rancher Project name publisher and
+the Fleet install on downstream clusters are on by default; see the
 **[installation guide](guides/installation.md)**. It covers each step, verification, upgrades, air-gapped mirrors
 and troubleshooting.
 

@@ -18,5 +18,10 @@ If the dashboard shows "prometheus unavailable", check that Rancher Monitoring i
 
 Downstream clusters get this chart through the Fleet HelmOp {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }}/{{ include "crr.fullname" . }}
 (Rancher: Continuous Delivery -> App Bundles). Check it with:
-  kubectl -n {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }} get helmops,bundles
+  kubectl -n {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }} get helmops,bundles,clustergroups
+{{- $g := dig "deployDownstream" "clusterGroup" "" .Values.rancher }}
+{{- if and (kindIs "map" $g) (has "change-me" ($g.clusterNames | default list)) }}
+The ClusterGroup {{ $g.name | default "resource-report" }} still lists the placeholder change-me: set
+rancher.deployDownstream.clusterGroup.clusterNames to the Rancher cluster names that should get the chart.
+{{- end }}
 {{- end }}

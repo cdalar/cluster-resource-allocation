@@ -55,8 +55,9 @@ rancher:
   deployDownstream:
     enabled: false
     workspace: fleet-default          # metadata.namespace: Fleet workspace of the downstream clusters
-    # spec.targets -- where to install. Nothing by default: with all three empty the chart fails.
-    # A cluster matching any of them gets the chart.
+    # spec.targets -- where to install. A cluster matching any of these gets the chart. By default only the
+    # ClusterGroup below, whose placeholder cluster change-me matches nothing: nothing is installed until you
+    # list clusters. With all three empty the chart fails.
     clusters: []                      # Fleet cluster names (kubectl -n fleet-default get clusters.fleet.cattle.io),
                                       # each a name or {name: ..., values: {...}} for per-cluster values, e.g.
                                       #   - onprem-prod-01
@@ -64,7 +65,11 @@ rancher:
                                       #     values: {collection: {step: 15m}}
     clusterSelector: null             # label selector, e.g. {matchLabels: {resource-report: enabled}}
                                       # ({} = every cluster in the workspace, only when written explicitly)
-    clusterGroup: ""                  # an existing Fleet ClusterGroup
+    clusterGroup:                     # Fleet ClusterGroup; a plain name ("my-group") uses an existing group instead
+      name: resource-report
+      create: true                    # the chart creates the group in the workspace (false: it must exist)
+      clusterNames:                   # Rancher cluster names (label management.cattle.io/cluster-display-name)
+        - change-me                   # placeholder: matches no cluster
     namespace: resource-report        # spec.defaultNamespace: release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report      # spec.helm.releaseName
     chart:

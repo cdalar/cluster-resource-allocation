@@ -22,9 +22,9 @@ PROJECTS = [
 ]
 
 
-def node(cluster, name, cpu, mem, cordoned=False):
+def node(cluster, name, cpu, mem, cordoned=False, taints=None):
     return {"metadata": {"name": f"m-{name}", "namespace": cluster},
-            "spec": {"internalNodeSpec": {"unschedulable": cordoned}},
+            "spec": {"internalNodeSpec": {"unschedulable": cordoned, "taints": taints or []}},
             "status": {"nodeName": name, "internalNodeStatus": {"allocatable": {"cpu": str(cpu), "memory": f"{mem}Gi"}}}}
 
 
@@ -55,12 +55,40 @@ class Inventory(unittest.TestCase):
     def test_parse(self):
         inv = inventory()
         prod = next(c for c in inv["clusters"] if c["id"] == "c-m-1")
-        self.assertEqual((prod["name"], prod["nodes"], prod["alloc_cpu"], prod["alloc_mem_gib"]), ("prod-01", 2, 10, 40))
+        # schedulable nodes only: 4 + 4 + 2 CPU; the cordoned one is listed as excluded
+        self.assertEqual((prod["name"], prod["nodes"], prod["alloc_cpu"], prod["alloc_mem_gib"]), ("prod-01", 3, 10, 40))
+        self.assertEqual(prod["excluded_nodes"], [{"name": "n4", "reason": "cordoned"}])
         pay = next(p for p in inv["projects"] if p["name"] == "payments")
         self.assertEqual((pay["cluster_id"], pay["quota_cpu"], pay["quota_mem_gib"], pay["used_cpu"]),
                          ("c-m-1", 4, 16, 1.5))
         crm = next(p for p in inv["projects"] if p["name"] == "crm")
         self.assertIsNone(crm["quota_cpu"])
+
+    def test_dedicated_control_plane_nodes_are_not_capacity(self):
+        # RKE2 with separate roles: 3 tainted control-plane / etcd nodes (bigger than the workers) and 3 workers.
+        # Rancher's cluster allocatable counts all six; the planner counts the workers only.
+        cp = [{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"},
+              {"key": "node-role.kubernetes.io/etcd", "effect": "NoExecute"}]
+        nodes = [node("c-m-1", f"cp{i}", 8, 32, taints=cp) for i in (1, 2, 3)] + \
+                [node("c-m-1", f"w{i}", 4, 16) for i in (1, 2, 3)] + \
+                [node("c-m-1", "w4", 4, 16, taints=[{"key": "example.com/gpu", "effect": "PreferNoSchedule"}])]
+        clusters = [dict(CLUSTERS[1], status=dict(CLUSTERS[1]["status"],
+                                                   allocatable={"cpu": "40", "memory": "160Gi"}, nodeCount=7))]
+        prod = planner.parse_inventory(clusters, PROJECTS, nodes)["clusters"][0]
+        self.assertEqual((prod["nodes"], prod["alloc_cpu"], prod["alloc_mem_gib"]), (4, 16, 64))  # PreferNoSchedule counts
+        self.assertEqual([n["name"] for n in prod["node_sizes"]], ["w1", "w2", "w3", "w4"])
+        self.assertEqual(prod["excluded_nodes"][0],
+                         {"name": "cp1", "reason": "taint node-role.kubernetes.io/control-plane:NoSchedule"})
+        self.assertEqual(len(prod["excluded_nodes"]), 3)
+        raw = fixed_rates(planner.empty_state())
+        raw["clusters"] = {"c-m-1": {"env": "prod", "platform": "onprem", "platform_cpu": 1, "platform_mem_gib": 4}}
+        row = planner.evaluate(planner.validate_state(raw), {"clusters": [prod], "projects": []})["clusters"]["c-m-1"]
+        # the node that can fail is a 4-CPU worker, not an 8-CPU control-plane node: 16 - 4 - 1
+        self.assertEqual((row["alloc_cpu"], row["failover_cpu"], row["limit_cpu"]), (16, 4, 11))
+
+    def test_rancher_allocatable_when_no_nodes_are_reported(self):
+        prod = planner.parse_inventory(CLUSTERS, PROJECTS, [])["clusters"][1]
+        self.assertEqual((prod["nodes"], prod["alloc_cpu"], prod["node_sizes"], prod["excluded_nodes"]), (2, 10, None, []))
 
     def test_report_requests_only_for_the_scanned_cluster(self):
         report = {"projects": [{"project_id": "local:p-bbbbb", "cpu_requests": 0.35, "mem_requests_gib": 0.5}]}
@@ -386,6 +414,14 @@ class Evaluate(unittest.TestCase):
         raw["clusters"] = {"local": {"env": "test", "platform": "onprem"}}
         row = planner.evaluate(planner.validate_state(raw), inv)["clusters"]["local"]
         self.assertEqual((row["reserve_source"], row["limit_cpu"]), ("measured", 1.5))  # 100 % x (2 - 0.5)
+
+    def test_measured_reserve_without_requests_on_excluded_nodes(self):
+        # kube-apiserver, etcd etc. on tainted control-plane nodes don't use the capacity the reserve is taken from
+        report = {"clusters": [{"cluster": "local"}], "projects": [
+            {"project_id": "local:p-sys", "category": "system", "cpu_requests": 2.0, "mem_requests_gib": 3.0,
+             "cpu_requests_excluded_nodes": 1.5, "mem_requests_excluded_nodes_gib": 2.0}]}
+        local = next(c for c in planner.add_report_requests(inventory(), report)["clusters"] if c["id"] == "local")
+        self.assertEqual((local["platform_measured_cpu"], local["platform_measured_mem_gib"]), (0.5, 1))
 
     def test_single_node_prod_cluster(self):
         raw = planner.empty_state()

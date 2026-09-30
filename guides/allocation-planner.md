@@ -109,7 +109,8 @@ Every cluster Rancher manages is listed automatically. For each one the planner 
 projects**: how much CPU and memory quota it can hand out in total. The page states the calculation above the
 table; per resource (CPU and memory separately):
 
-1. **Allocatable** of the schedulable nodes,
+1. **Allocatable** of the schedulable nodes: nodes with a `NoSchedule` / `NoExecute` taint (dedicated control-plane
+   and etcd nodes) and cordoned nodes don't run project pods, so they are left out, and can't be the node that fails,
 2. **minus the largest node(s):** the environment's *node failures to tolerate* largest nodes (N+1),
 3. **minus the platform reserve:** what platform components (cattle-*, kube-system, monitoring, ingress,
    storage …) request, i.e. the namespaces the dashboard counts as *System* (`collection.systemNamespaceRegex`,
@@ -124,7 +125,7 @@ The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a plat
 | --- | --- | --- |
 | Environment | You | Which environment rules apply (node failures, headroom limit, memory limit factor) |
 | Platform | You | Which unit rates price quota on this cluster |
-| Nodes | Rancher | Schedulable nodes; hover for each node's size |
+| Nodes | Rancher | Schedulable nodes, plus *(+N excluded)* for tainted or cordoned ones; hover for each node's size and why a node is excluded |
 | Allocatable | Rancher | CPU / GiB the scheduler can hand out on schedulable nodes, after system reservations |
 | − largest node(s) | Planner | Capacity of the N largest nodes, lost when they fail (0 / 0 when the environment tolerates no failures) |
 | − platform reserve | You or measured | CPU / GiB requested by platform components, see below |
@@ -133,7 +134,8 @@ The limit is the lower of 1–3 and 4. For example, 4 nodes of 4 CPU with a plat
 | Use of limit | Planner | Planned as a share of the limit (the higher of CPU and memory; hover for both); *no room* when the limit is 0 |
 
 **Platform reserve.** For the cluster the planner runs on, it is **measured**: everything the report classes as
-*System* (Rancher's System project and the system namespaces). Leave the fields empty to use it. For every other
+*System* (Rancher's System project and the system namespaces), without what runs on excluded nodes (the API
+server and etcd on dedicated control-plane nodes use capacity that isn't counted). Leave the fields empty to use it. For every other
 cluster the planner can't see its pods, so the reserve is **entered**: take the *System* requests from that
 cluster's resource dashboard (see below), or click **Use requests now** to enter the cluster's total requests
 today, a safe upper bound. A cluster with planned quota and no reserve is flagged *not set*.

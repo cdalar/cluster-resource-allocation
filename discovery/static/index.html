@@ -364,7 +364,9 @@ function tile(label, value, unit, note, status) {
 function renderTiles() {
   const c = currentClusterRow();
   if (!c) { $("#tiles").replaceChildren(); return; }
-  const cpuSched = c.cpu_requests_total - c.cpu_requests_pending, memSched = c.mem_requests_gib_total - c.mem_requests_pending_gib;
+  // requests on the schedulable nodes: not pending, not on excluded nodes (tainted control plane, cordoned)
+  const cpuSched = c.cpu_requests_total - c.cpu_requests_pending - (c.cpu_requests_excluded_nodes || 0);
+  const memSched = c.mem_requests_gib_total - c.mem_requests_pending_gib - (c.mem_requests_excluded_nodes_gib || 0);
   const nsUsage = state.data.namespaces.filter((n) => n.cluster === c.cluster);
   const cpuU = nsUsage.reduce((a, n) => a + (cpuUsed(n) || 0), 0), memU = nsUsage.reduce((a, n) => a + (memUsed(n) || 0), 0);
   const missing = c.containers_no_cpu_request + c.containers_no_mem_request > 0;
@@ -391,6 +393,9 @@ function n1Numbers(c) {
   return {
     cpuProjects: c.cpu_requests_tenant + c.cpu_requests_unassigned,
     memProjects: c.mem_requests_gib_tenant + c.mem_requests_gib_unassigned,
+    // platform components on the schedulable nodes (their pods on excluded nodes use capacity not counted here)
+    cpuSystem: c.cpu_requests_system - (c.cpu_requests_excluded_system || 0),
+    memSystem: c.mem_requests_gib_system - (c.mem_requests_excluded_system_gib || 0),
   };
 }
 function n1Tile(c) {
@@ -412,9 +417,10 @@ function renderN1Note(c) {
     (projects > left + 1e-9 ? ` — ${smart(projects - left)} ${unit} would not fit after a node failure.` : " — fits.");
   box.replaceChildren(
     el("b", { text: "N+1 (dashed line): " }),
-    "the capacity left if the largest schedulable node fails. Platform components (cattle-*, kube-system, monitoring — the System category) come off first; the rest is what projects can safely have.",
-    el("br"), line("CPU", "vCPU", c.alloc_cpu_schedulable, c.largest_node_cpu, c.alloc_cpu_n1, c.cpu_requests_system, c.cpu_for_projects_n1, n.cpuProjects),
-    el("br"), line("Memory", "GiB", c.alloc_mem_gib_schedulable, c.largest_node_mem_gib, c.alloc_mem_gib_n1, c.mem_requests_gib_system, c.mem_gib_for_projects_n1, n.memProjects));
+    "the capacity left if the largest schedulable node fails. Platform components (cattle-*, kube-system, monitoring — the System category) come off first; the rest is what projects can safely have." +
+      (c.nodes > c.nodes_schedulable ? ` Not counted: ${c.nodes - c.nodes_schedulable} node(s) with a NoSchedule / NoExecute taint (e.g. dedicated control plane) or cordoned, and what runs on them.` : ""),
+    el("br"), line("CPU", "vCPU", c.alloc_cpu_schedulable, c.largest_node_cpu, c.alloc_cpu_n1, n.cpuSystem, c.cpu_for_projects_n1, n.cpuProjects),
+    el("br"), line("Memory", "GiB", c.alloc_mem_gib_schedulable, c.largest_node_mem_gib, c.alloc_mem_gib_n1, n.memSystem, c.mem_gib_for_projects_n1, n.memProjects));
 }
 
 function legend(target, items) {
@@ -446,8 +452,10 @@ function renderCapacity() {
   legend("#capLegend", [[colors[0], "Tenant"], [colors[1], "System (platform)"], [colors[2], "Unassigned"], ["var(--track)", "Free"]]);
   if (c.alloc_cpu_n1 != null) $("#capLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border-left:2px dashed var(--text-primary);border-radius:0" }), "If the largest node fails"));
   renderN1Note(c);
+  // not on the schedulable nodes: pending, or on excluded nodes (tainted control plane, cordoned)
   const pend = (cat, res) => state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category === cat)
-    .reduce((a, n) => a + (res === "cpu" ? n.cpu_requests_pending : n.mem_requests_pending_gib), 0);
+    .reduce((a, n) => a + (res === "cpu" ? n.cpu_requests_pending + (n.cpu_requests_excluded_nodes || 0)
+                                         : n.mem_requests_pending_gib + (n.mem_requests_excluded_nodes_gib || 0)), 0);
   const rows = [
     ["CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable, c.alloc_cpu_n1],
     ["Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable, c.alloc_mem_gib_n1],

@@ -235,6 +235,9 @@ NS_NUMERIC = [
     "cpu_usage_avg", "cpu_usage_p95", "cpu_usage_max",
     "mem_usage_avg_gib", "mem_usage_p95_gib", "mem_usage_max_gib",
     "cpu_requests_peak", "mem_requests_peak_gib",
+    # part of the requests that sits on nodes that don't count as capacity (tainted control-plane / etcd nodes,
+    # cordoned nodes): counted in requests and quota, but not against the schedulable nodes
+    "cpu_requests_excluded_nodes", "mem_requests_excluded_nodes_gib",
 ]
 NS_FIELDS = ["cluster", "category", "project_id", "project", "namespace"] + NS_NUMERIC
 
@@ -289,6 +292,7 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                    category=classify(name, project_name, bool(project_id), system_re, system_project_re))
         ns_rows[name] = row
 
+    excluded_nodes = {n["metadata"]["name"] for n in nodes if not node_schedulable(n)}
     cluster_name = args.cluster_name or rancher_clusters.get(rancher_cluster_id) or label
     for row in ns_rows.values():
         row["cluster"] = cluster_name
@@ -311,6 +315,9 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
         if not spec.get("nodeName"):
             row["cpu_requests_pending"] += cpu_req
             row["mem_requests_pending_gib"] += mem_req
+        elif spec["nodeName"] in excluded_nodes:
+            row["cpu_requests_excluded_nodes"] += cpu_req
+            row["mem_requests_excluded_nodes_gib"] += mem_req
         row["cpu_limits"] += pod_effective(spec, "limits", "cpu")
         row["mem_limits_gib"] += pod_effective(spec, "limits", "memory") / GIB
         for c in long_running_containers(spec):
@@ -394,6 +401,8 @@ CLUSTER_FIELDS = [
     "cpu_requests_tenant", "mem_requests_gib_tenant",
     "cpu_requests_system", "mem_requests_gib_system",
     "cpu_requests_unassigned", "mem_requests_gib_unassigned",
+    "cpu_requests_excluded_nodes", "mem_requests_excluded_nodes_gib",
+    "cpu_requests_excluded_system", "mem_requests_excluded_system_gib",
     "cpu_requests_pct_of_schedulable", "mem_requests_pct_of_schedulable",
     "largest_node_cpu", "largest_node_mem_gib", "alloc_cpu_n1", "alloc_mem_gib_n1",
     "cpu_for_projects_n1", "mem_gib_for_projects_n1",
@@ -423,10 +432,18 @@ def summarize_cluster(cluster_name, context, nodes, ns_rows, prom_days):
         c[k] = 0.0
     for cat in ("tenant", "system", "unassigned"):
         c[f"cpu_requests_{cat}"] = c[f"mem_requests_gib_{cat}"] = 0.0
+    for k in ("cpu_requests_excluded_nodes", "mem_requests_excluded_nodes_gib",
+              "cpu_requests_excluded_system", "mem_requests_excluded_system_gib"):
+        c[k] = 0.0
     for r in ns_rows:
         cat = r["category"]
         c[f"cpu_requests_{cat}"] += r["cpu_requests"]
         c[f"mem_requests_gib_{cat}"] += r["mem_requests_gib"]
+        c["cpu_requests_excluded_nodes"] += r.get("cpu_requests_excluded_nodes", 0.0)
+        c["mem_requests_excluded_nodes_gib"] += r.get("mem_requests_excluded_nodes_gib", 0.0)
+        if cat == "system":
+            c["cpu_requests_excluded_system"] += r.get("cpu_requests_excluded_nodes", 0.0)
+            c["mem_requests_excluded_system_gib"] += r.get("mem_requests_excluded_nodes_gib", 0.0)
         c["cpu_requests_total"] += r["cpu_requests"]
         c["mem_requests_gib_total"] += r["mem_requests_gib"]
         for k in ("cpu_requests_pending", "mem_requests_pending_gib", "cpu_usage_now", "mem_usage_now_gib",
@@ -435,19 +452,22 @@ def summarize_cluster(cluster_name, context, nodes, ns_rows, prom_days):
             c[k] += r[k]
         if cat in ("tenant", "unassigned"):
             c[f"namespaces_{cat}"] += 1
-    # scheduled requests only: pending pods count against quota but occupy no node capacity
-    c["cpu_requests_pct_of_schedulable"] = pct(c["cpu_requests_total"] - c["cpu_requests_pending"],
-                                               c["alloc_cpu_schedulable"])
-    c["mem_requests_pct_of_schedulable"] = pct(c["mem_requests_gib_total"] - c["mem_requests_pending_gib"],
-                                               c["alloc_mem_gib_schedulable"])
+    # requests on the schedulable nodes only: pending pods count against quota but occupy no node capacity, and pods
+    # on excluded nodes (tainted control plane, cordoned) occupy capacity that isn't counted as allocatable
+    c["cpu_requests_pct_of_schedulable"] = pct(
+        c["cpu_requests_total"] - c["cpu_requests_pending"] - c["cpu_requests_excluded_nodes"], c["alloc_cpu_schedulable"])
+    c["mem_requests_pct_of_schedulable"] = pct(
+        c["mem_requests_gib_total"] - c["mem_requests_pending_gib"] - c["mem_requests_excluded_nodes_gib"],
+        c["alloc_mem_gib_schedulable"])
     # N+1: what is left if the largest schedulable node fails, and of that what platform components (the `system`
-    # requests) leave for projects. With one schedulable node, nothing survives a node failure.
+    # requests on schedulable nodes) leave for projects. With one schedulable node, nothing survives a node failure.
     c["largest_node_cpu"] = max((alloc([n], "cpu") for n in sched), default=0.0)
     c["largest_node_mem_gib"] = max((alloc([n], "memory") / GIB for n in sched), default=0.0)
     c["alloc_cpu_n1"] = c["alloc_cpu_schedulable"] - c["largest_node_cpu"]
     c["alloc_mem_gib_n1"] = c["alloc_mem_gib_schedulable"] - c["largest_node_mem_gib"]
-    c["cpu_for_projects_n1"] = max(0.0, c["alloc_cpu_n1"] - c["cpu_requests_system"])
-    c["mem_gib_for_projects_n1"] = max(0.0, c["alloc_mem_gib_n1"] - c["mem_requests_gib_system"])
+    c["cpu_for_projects_n1"] = max(0.0, c["alloc_cpu_n1"] - (c["cpu_requests_system"] - c["cpu_requests_excluded_system"]))
+    c["mem_gib_for_projects_n1"] = max(0.0, c["alloc_mem_gib_n1"] - (c["mem_requests_gib_system"] -
+                                                                     c["mem_requests_excluded_system_gib"]))
     return c
 
 

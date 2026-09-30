@@ -143,7 +143,7 @@ Quota is only a *guarantee* if the sum of all project quotas fits into the clust
 
 | Environment | Max Σ project `requests` quota vs. allocatable | Why |
 |---|---|---|
-| Prod | **≤ 80–85 %** | N+1 node failure tolerance, rolling updates (surge pods), platform components |
+| Prod | **≤ 80 %** | N+1 node failure tolerance, rolling updates (surge pods), platform components |
 | Acc/Test | ≤ 100 % | Some tolerance for Pending pods during peaks |
 | Dev | 100–150 % (overcommit) | Most dev workloads are idle; cheaper, capacity not guaranteed |
 

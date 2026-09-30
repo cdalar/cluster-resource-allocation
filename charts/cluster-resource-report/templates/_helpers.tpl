@@ -41,9 +41,30 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
 {{- end -}}
 
-{{/* Non-empty when the allocation planner or the capacity planner is enabled */}}
+{{/* Non-empty when the Rancher inventory is readable: on the local cluster, or through a local kubeconfig */}}
+{{- define "crr.hasInventory" -}}
+{{- if or .Values.rancher.isLocalCluster (dig "localKubeconfigSecret" "name" "" .Values.rancher) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/* Non-empty when the allocation planner runs: enabled (the default) and the Rancher inventory is readable */}}
+{{- define "crr.planner" -}}
+{{- if and (dig "enabled" true (.Values.planner | default dict)) (include "crr.hasInventory" .) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/* Non-empty when the capacity planner runs: same conditions */}}
+{{- define "crr.capacityPlanner" -}}
+{{- if and (dig "enabled" true (.Values.capacityPlanner | default dict)) (include "crr.hasInventory" .) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/* Non-empty when the allocation planner or the capacity planner runs */}}
 {{- define "crr.planners" -}}
-{{- if or (dig "enabled" false (.Values.planner | default dict)) (dig "enabled" false (.Values.capacityPlanner | default dict)) -}}
+{{- if or (include "crr.planner" .) (include "crr.capacityPlanner" .) -}}
 true
 {{- end -}}
 {{- end }}

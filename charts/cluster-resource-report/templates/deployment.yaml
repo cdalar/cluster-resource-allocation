@@ -4,11 +4,6 @@
 {{- if and .Values.service.type (ne .Values.service.type "ClusterIP") }}
 {{- fail "service.type was removed in 0.4.1: the Service is always ClusterIP (open the dashboard through the Rancher service proxy)" }}
 {{- end }}
-{{- if or (dig "enabled" false (.Values.planner | default dict)) (dig "enabled" false (.Values.capacityPlanner | default dict)) }}
-{{- if not (or .Values.rancher.isLocalCluster .Values.rancher.localKubeconfigSecret.name) }}
-{{- fail "planner.enabled / capacityPlanner.enabled need the Rancher inventory: set rancher.isLocalCluster (or rancher.localKubeconfigSecret)" }}
-{{- end }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,10 +71,10 @@ spec:
             {{- if dig "namesConfigMap" "enabled" false .Values.rancher }}
             - --rancher-names-configmap={{ include "crr.namesNamespace" . }}/rancher-project-names
             {{- end }}
-            {{- if dig "enabled" false (.Values.planner | default dict) }}
+            {{- if include "crr.planner" . }}
             - --planner
             {{- end }}
-            {{- if dig "enabled" false (.Values.capacityPlanner | default dict) }}
+            {{- if include "crr.capacityPlanner" . }}
             - --capacity-planner
             {{- end }}
             {{- if include "crr.planners" . }}

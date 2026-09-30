@@ -113,17 +113,17 @@ service:
 
 # Allocation planner (/planner): budgets and quotas per project and cluster, planned only -- nothing is applied
 # to any cluster; the export is the allocation files for the Git/Terraform flow (docs/04). For the platform team,
-# on the Rancher local cluster: needs rancher.isLocalCluster (or rancher.localKubeconfigSecret) for the Rancher
-# inventory. The plan is kept in the ConfigMap <fullname>-planner (created empty by the chart, kept on uninstall);
+# on the Rancher local cluster: on by default, but only runs with rancher.isLocalCluster (or
+# rancher.localKubeconfigSecret) for the Rancher inventory; skipped on other clusters. The plan is kept in the ConfigMap <fullname>-planner (created empty by the chart, kept on uninstall);
 # the planner may only get/update its own plan ConfigMaps. No volume or storage class needed.
 planner:
-  enabled: false
+  enabled: true
 
 # Capacity planner (/capacity): the same without money -- no rates, budgets or costs; each project gets a CPU and
 # memory envelope (its total across all clusters) instead. Own plan (ConfigMap <fullname>-capacity); same
-# requirements as planner.enabled.
+# requirements and default as planner.enabled.
 capacityPlanner:
-  enabled: false
+  enabled: true
 
 # Keep the latest report across pod restarts on a PVC (needs a storage class). Without it, a new pod starts with
 # an empty dashboard until the first collection finishes. Not needed by the planners.

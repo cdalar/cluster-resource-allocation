@@ -80,7 +80,7 @@ spec:
             {{- if include "crr.planners" . }}
             - --plan-configmaps={{ .Release.Namespace }}/{{ include "crr.fullname" . }}
             {{- end }}
-            {{- if .Values.rancher.isLocalCluster }}
+            {{- if include "crr.isLocal" . }}
             - --rancher-local-self
             {{- else if .Values.rancher.localKubeconfigSecret.name }}
             - --rancher-local-kubeconfig=/etc/rancher-local/kubeconfig

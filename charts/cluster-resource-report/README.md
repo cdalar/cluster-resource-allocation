@@ -105,17 +105,24 @@ helm upgrade --install ... --set rancher.localKubeconfigSecret.name=rancher-loca
 Use a token with read-only access to `projects.management.cattle.io` and `clusters.management.cattle.io`.
 Without it, the dashboard still works and shows project IDs.
 
-On the Rancher local cluster itself no secret is needed: `--set rancher.isLocalCluster=true` reads the names
-from that cluster and adds read access to those two resources to the chart's ClusterRole.
+On the Rancher local cluster itself no secret is needed: the chart detects it (`rancher.isLocalCluster: auto`,
+see below), reads the names from that cluster and adds read access to those two resources to the chart's
+ClusterRole.
+
+**Local cluster detection:** `rancher.isLocalCluster` is `auto` by default. At install or upgrade the chart counts
+the cluster as the Rancher local cluster when it serves Rancher's Project API (`management.cattle.io/v3`) and runs
+the Rancher server (Deployment `cattle-system/rancher`, found with Helm `lookup`); downstream clusters only run
+Rancher's agents. `lookup` returns nothing in `helm template`, `--dry-run=client` and tools that render with
+`helm template` (Argo CD): there `auto` means "not local", so set `true` (or `false`) explicitly.
 
 **Without any token on downstream clusters (Fleet, no GitRepo):** on the local cluster this is on by default
-(`rancher.publishNames.enabled`, only rendered with `isLocalCluster`). A CronJob (own service account, may only create/update the one Bundle)
+(`rancher.publishNames.enabled`, only rendered on the local cluster). A CronJob (own service account, may only create/update the one Bundle)
 publishes a Fleet Bundle containing the ConfigMap `rancher-project-names`, which Fleet copies to the downstream
 clusters. There, install with `rancher.namesConfigMap.enabled=true`:
 
 ```bash
-# Rancher local cluster
-helm upgrade --install ... --set rancher.isLocalCluster=true
+# Rancher local cluster (detected; publishNames on by default)
+helm upgrade --install ...
 # each downstream cluster
 helm upgrade --install ... --set rancher.namesConfigMap.enabled=true
 ```
@@ -132,7 +139,7 @@ be able to pull the chart and image. Design: [docs/08](../../docs/08-fleet-deplo
 ```yaml
 # values-local.yaml
 rancher:
-  isLocalCluster: true               # publishNames and deployDownstream are on by default here
+  # isLocalCluster: auto (default) detects the local cluster; publishNames and deployDownstream are on there
   deployDownstream: on the local cluster
     clusterGroup:                     # default target: a ClusterGroup the chart creates
       clusterNames:                   # Rancher cluster names; the default change-me matches none
@@ -201,7 +208,7 @@ through the Git / Terraform flow. A plan file from an older version on the volum
 until the first save, which moves it to the ConfigMap.
 
 ```bash
-helm upgrade --install ... --set rancher.isLocalCluster=true     # planners on by default
+helm upgrade --install ...     # on the local cluster (detected): planners on by default
 ```
 
 It reads all clusters (capacity, requests) and Rancher Projects (current quota) from the local cluster, so one
@@ -225,7 +232,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `prometheus.enabled` | `true` | `false` = no usage history (metrics-server snapshot only) |
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |
-| `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
+| `rancher.isLocalCluster` | `auto` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) and turn on the local-only parts. `auto` detects it at install (Project API + `cattle-system/rancher` Deployment); set `true`/`false` with `helm template` or Argo CD |
 | `rancher.publishNames.enabled` | `true` | CronJob that publishes the names to downstream clusters as a Fleet Bundle. Rendered only with `rancher.isLocalCluster`, skipped elsewhere |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
 | `rancher.deployDownstream.enabled` | `true` | A Fleet HelmOp installs this chart on chosen downstream clusters (see above). Rendered only with `rancher.isLocalCluster` and Fleet HelmOps, skipped elsewhere; installs nothing while `clusterNames` is `[change-me]` |

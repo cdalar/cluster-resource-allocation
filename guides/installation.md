@@ -134,7 +134,8 @@ Create `values-local.yaml`:
 
 ```yaml
 rancher:
-  isLocalCluster: true        # read Rancher clusters, nodes and Project names from this cluster
+  isLocalCluster: auto        # the default: detects the Rancher local cluster (Rancher server in cattle-system)
+                              # and reads clusters, nodes and Project names from it; true with helm template / Argo CD
   publishNames:
     enabled: true             # the default: publish Project names to all downstream clusters (Fleet Bundle)
 planner:
@@ -183,7 +184,7 @@ it on each cluster yourself.
 Needs Fleet ≥ 0.12 (Rancher 2.11+) and a chart version with `rancher.deployDownstream` (later than 0.5.2). The local
 release renders one Fleet HelmOp (Rancher: **Continuous Delivery → App Bundles**) that installs the chart on the
 clusters you choose, at the local release's chart version. It is on by default on the local cluster
-(`isLocalCluster`), but installs nothing until you list clusters. Design and background:
+(detected by `isLocalCluster: auto`), but installs nothing until you list clusters. Design and background:
 [docs/08](../docs/08-fleet-deployment.md).
 
 Add to `values-local.yaml` (Step 2):
@@ -498,7 +499,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Chart fails: "rancher.deployDownstream needs Fleet HelmOps" | Fleet older than 0.12, or not the Rancher local cluster | Upgrade Rancher (2.11+), or install downstream by hand (option B) |
 | Cluster added to or removed from the ClusterGroup, nothing happens | Fleet re-matches groups only when a cluster changes (agent check-in, up to ~15 min) | Wait, or **Force Update** the App Bundle in Continuous Delivery (see Step 3, option A) |
 | App Bundle not *Accepted* / Bundle not ready | Chart not reachable from the Fleet controller, wrong `chart.repo`, or TLS / login to a mirror | `kubectl -n fleet-default describe helmop resource-report-cluster-resource-report`; check `chart.repo` (full OCI URL of the chart), `helmSecretName`, `insecureSkipTLSVerify` |
-| Planner page missing (`/planner` 404) | `rancher.isLocalCluster` not set, or `planner.enabled: false` | Set `rancher.isLocalCluster: true` (the planners only run with the Rancher inventory) |
+| Planner page missing (`/planner` 404) on the local cluster | Local cluster not detected (installed with `helm template` / Argo CD, or `isLocalCluster: false`), or `planner.enabled: false` | Set `rancher.isLocalCluster: true` (the planners only run with the Rancher inventory) |
 | Planner shows "can't read ConfigMap …" or "not saved: … forbidden" | Plan ConfigMap deleted by hand, or RBAC changed | `helm upgrade` again: it recreates the ConfigMap and the Role |
 | Planner shows version 0 after upgrading from 0.3.x | Old plan file not on the volume any more (persistence was turned off before the first save) | Turn `persistence.enabled` on again for the upgrade (step "Upgrade") |
 | Pod OOMKilled on a large cluster | Many thousands of pods | Raise `resources.limits.memory` |

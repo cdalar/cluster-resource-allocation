@@ -62,7 +62,7 @@ flowchart LR
 ## Chart values
 
 A new block under `rancher` in `charts/cluster-resource-report/values.yaml`. It applies to the local cluster
-only and needs `isLocalCluster`.
+only and needs `isLocalCluster` (default `auto`: detected at install).
 
 ```yaml
 rancher:
@@ -93,7 +93,7 @@ Example for the local cluster, extending `values-local.yaml`:
 
 ```yaml
 rancher:
-  isLocalCluster: true                # publishNames and deployDownstream are on by default here
+  # isLocalCluster: auto (default) detects the local cluster; publishNames and deployDownstream are on there
   deployDownstream:
     clusterGroup:
       clusterNames: [onprem-prod-01, onprem-test-01]
@@ -109,8 +109,8 @@ rancher:
 It follows the style of `templates/publish-names.yaml`: gated with `dig`, and the defaults merged in the template
 so that `--reuse-values` upgrades from older releases keep working.
 
-`enabled` is `true` by default. The template renders nothing, without an error, when `isLocalCluster` is not
-set (downstream and plain clusters) or `fleet.cattle.io/v1alpha1/HelmOp` is not in `.Capabilities.APIVersions`
+`enabled` is `true` by default. The template renders nothing, without an error, when the cluster is not the
+local one (`isLocalCluster` false or not detected: downstream and plain clusters) or `fleet.cattle.io/v1alpha1/HelmOp` is not in `.Capabilities.APIVersions`
 (Fleet < 0.12 / Rancher < 2.11; `NOTES.txt` says so). It fails with a clear message when:
 - `clusters`, `clusterSelector` and `clusterGroup` are all empty;
 - the chart creates the group and `clusterGroup.clusterNames` is empty;

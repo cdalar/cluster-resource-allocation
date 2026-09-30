@@ -36,9 +36,12 @@ prometheus:
     key: token
 
 rancher:
-  # Set to true when installing on the Rancher local (management) cluster itself: project/cluster names
-  # are read from this cluster (grants read on projects/clusters.management.cattle.io), no secret needed.
-  isLocalCluster: false
+  # Installed on the Rancher local (management) cluster itself: project/cluster names are read from this cluster
+  # (grants read on projects/clusters.management.cattle.io), no secret needed, and the local-only parts below
+  # (publishNames, deployDownstream, planners) turn on. auto (default): detected at install -- local when the
+  # cluster has Rancher's Project API and the Rancher server Deployment cattle-system/rancher. Detection needs a
+  # real install/upgrade (Helm `lookup`); with `helm template`, a client dry run or Argo CD, set true or false.
+  isLocalCluster: auto
   # Rancher local cluster only: a CronJob publishes the names to downstream clusters as a ConfigMap inside a
   # Fleet Bundle (no GitRepo). It may create/update only that one Bundle. On by default, but only rendered with
   # isLocalCluster; skipped on other clusters.

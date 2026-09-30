@@ -182,15 +182,15 @@ it on each cluster yourself.
 
 Needs Fleet ≥ 0.12 (Rancher 2.11+) and a chart version with `rancher.deployDownstream` (later than 0.5.2). The local
 release renders one Fleet HelmOp (Rancher: **Continuous Delivery → App Bundles**) that installs the chart on the
-clusters you choose, at the local release's chart version. Design and background:
+clusters you choose, at the local release's chart version. It is on by default on the local cluster
+(`isLocalCluster`), but installs nothing until you list clusters. Design and background:
 [docs/08](../docs/08-fleet-deployment.md).
 
 Add to `values-local.yaml` (Step 2):
 
 ```yaml
 rancher:
-  deployDownstream:
-    enabled: true
+  deployDownstream:                   # enabled: true is the default
     # The chart creates the Fleet ClusterGroup "resource-report" with these Rancher cluster names.
     # The default, change-me, matches no cluster: nothing is installed until you replace it.
     clusterGroup:

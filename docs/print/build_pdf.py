@@ -2,8 +2,8 @@
 """Build a printable PDF (A4) of docs/09-operating-principles.md with icons and diagrams.
 
 The bullets are read from the Markdown file, so the PDF follows the doc; the icons, diagrams, one-line rules and
-layout live here. The PDF edition differs from the doc on purpose (see PDF_EDITS): on-prem only (no AKS), 80 % as
-the prod ceiling, and an extra section F on finance, licences and cluster size (FINANCE_MD). Standard library only; the PDF is printed by headless Chrome.
+layout live here. The Markdown doc is the source of truth: change the rules there, not here. Standard library only;
+the PDF is printed by headless Chrome.
 
     python3 docs/print/build_pdf.py                 # writes docs/print/operating-principles.pdf
     python3 docs/print/build_pdf.py --html out.html  # also keep the intermediate HTML
@@ -120,68 +120,6 @@ TOPICS = {
     "F3": ("nodes", "Prod: at least 3 worker nodes; from 5 equal nodes on, N+1 fits inside the 20 % reserve."),
 }
 
-# --- PDF edition: differences from the Markdown doc -------------------------------------------------------------
-
-PDF_EDITS = {
-    "replace": [("80–85 %", "80 %")],
-    # On-prem only: bullets about AKS are left out, one is reworded.
-    "drop": [r"\bAKS\b"],
-    "reword": {"On-prem there is no autoscaling of nodes": "**No node autoscaling**: capacity is bought ahead, "
-               "which is why allocation is conservative."},
-    "append": {"A1": ["**Minimum size**: 3 worker nodes in prod, better 5+ of equal size, so the N+1 reserve stays "
-                      "within the 20 % we keep anyway (F3)."]},
-}
-
-FINANCE_MD = """
-## F. Finance — what it costs
-
-*Platform team owns the cost model and publishes the rates; finance approves them; projects pay from their budget.*
-
-### F1. Cost model and unit rates
-
-- **Monthly cost per node**: hardware amortisation (5 years), power and cooling, rack space and network, Rancher
-  licence (F2), shared services (monitoring, logging, backup, registry) and the platform team's share.
-- **Sellable capacity** = allocatable − platform components − N+1 reserve, and at most **80 %** of allocatable in prod.
-- **Unit rates** = cluster cost ÷ sellable capacity, as **€ per vCPU-month** and **€ per GiB-month** (cost split
-  between CPU and memory by a fixed ratio), published once a year.
-- **The reserve is not free**: the N+1 node and the 20 % headroom are paid for through the rates. Nobody is billed
-  for them separately, and nobody can buy them.
-- **Projects pay for allocated quota**, not for usage (ADR-0002): budgets stay predictable, and giving back unused
-  quota is the way to save.
-- **Showback every month**: quota vs. requests vs. usage per project, on the same basis for every project.
-- **Non-prod is cheaper per unit**: dev is overcommitted, so the same hardware sells more quota there.
-- Shared and platform services are part of the rate unless finance decides to fund them separately (Q12).
-- Unspent budget is fine; unused quota is not: it blocks capacity that others pay for.
-
-### F2. Rancher licence (CPU cores)
-
-- The Rancher subscription is counted on **CPU cores only**: memory, disk and the number of nodes don't change the
-  licence cost.
-- **Every core is licensed**, sold or not: the N+1 node and the 20 % reserve cost licence like the rest.
-- **Licence cost goes into the CPU rate only**; the memory rate carries no licence.
-- **Memory-rich nodes** (more GiB per core) give cheaper memory; don't buy cores the projects won't request.
-- **Oversized CPU requests cost twice**: hardware and licence. CPU right-sizing lowers the licence need at renewal.
-- **A new node is a licence step**: all its cores count from day one; plan node purchases with the licence renewal.
-- To confirm in the contract: physical cores or threads, and whether control plane / etcd nodes count (Q16).
-
-### F3. Cluster size: minimum worker nodes and N+1
-
-- The N+1 reserve is **one whole node** (hardware and licence): the fewer the nodes, the larger its share.
-- Sellable share in prod = min((n − 1) ÷ n, 80 %) of allocatable (after platform components): 2 nodes 50 %,
-  3 nodes 67 %, 4 nodes 75 %, **5 or more 80 %**.
-- **Prod minimum: 3 worker nodes.** With 2, half the cluster is reserve, and a drain puts every workload on one node.
-  3 also lets quorum systems (3 replicas) spread over nodes.
-- **Prod target: 5 or more equal nodes**: from there the 80 % ceiling, not N+1, is the limit, so the N+1 reserve costs
-  nothing extra.
-- **Acc/test**: 3 worker nodes when N+1 is kept (recommended), otherwise 2. **Dev**: at least 2, so a drain doesn't
-  stop the environment.
-- **Equal node sizes**: the largest node sets the reserve (A1); one big node makes the whole cluster more expensive.
-- **Not too many tiny nodes** either: each node has fixed overhead (OS and kubelet reserves, DaemonSets for CNI,
-  monitoring and logging, rack space, power). Prefer 5–10 equal nodes per prod cluster.
-- **Control plane / etcd nodes** come on top (3 for HA, D1) and are not worker capacity.
-- **Buy a node** when the next approved quota would take the cluster above 80 % or turn N+1 red.
-"""
-
 # --- Markdown (the subset the doc uses) -------------------------------------------------------------------------
 
 
@@ -239,24 +177,6 @@ def parse(text):
         c["intro"] = c["intro"].strip()
         for t in c["topics"]:
             t["bullets"] = [" ".join(b) for b in t["bullets"]]
-    return cats
-
-
-def edit(cats):
-    """Apply PDF_EDITS to the parsed doc."""
-    for c in cats.values():
-        for tp in c["topics"]:
-            bullets = []
-            for b in tp["bullets"]:
-                for start, new in PDF_EDITS["reword"].items():
-                    if b.startswith(start):
-                        b = new
-                if any(re.search(rx, b) for rx in PDF_EDITS["drop"]):
-                    continue
-                for old, new in PDF_EDITS["replace"]:
-                    b = b.replace(old, new)
-                bullets.append(b)
-            tp["bullets"] = bullets + PDF_EDITS["append"].get(tp["id"], [])
     return cats
 
 
@@ -768,7 +688,7 @@ def main():
     args = ap.parse_args()
 
     with open(SOURCE, encoding="utf-8") as f:
-        cats = edit(parse(f.read() + "\n" + FINANCE_MD))
+        cats = parse(f.read())
     missing = [tp["id"] for c in cats.values() for tp in c["topics"] if tp["id"] not in TOPICS]
     if set(cats) != set(CATEGORIES) or missing:
         sys.exit(f"Doc structure changed: categories {sorted(cats)}, topics without a rule/icon {missing}")

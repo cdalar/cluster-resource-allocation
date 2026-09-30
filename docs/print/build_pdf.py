@@ -100,6 +100,10 @@ CATEGORIES = {
               platform="Owns the cost model, publishes unit rates", teams="Pay for allocated quota from budget"),
 }
 ORDER = "ABCDEF"
+SUBTITLE = ("The rules behind the allocation model — N+1, fairness between tenants, conservative allocation, requests "
+            "and limits, replicas, HA, day 2 operations and what it all costs — grouped by what the platform team owns, "
+            "enforces, requires, runs and charges. On-prem clusters.")
+GLANCE_LEDE = "One rule per topic. The box is for reviews: tick what a cluster or project meets today."
 
 TOPICS = {
     "A1": ("server", "Σ project quota still fits after the largest node — or failure domain — is gone."),
@@ -590,18 +594,13 @@ section.cat-E .intro { margin-bottom: 2mm; }
 """
 
 
-def render(cats):
-    today = datetime.date.today().strftime("%d %B %Y").lstrip("0")
-    out = [f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Operating Principles</title>"
-           f"<style>{CSS}</style></head><body>"]
-
-    # Cover
+def cover_visual(cats):
+    """Colour band, category overview and one card per category."""
     band = "".join(f'<span style="background:{CATEGORIES[k]["color"]}"></span>' for k in ORDER)
     cards = ""
     for k in ORDER:
         c = CATEGORIES[k]
-        topics = " · ".join(f"{tid} {cats[k]['topics'][i]['title'].split(' (')[0]}"
-                            for i, tid in enumerate(t_["id"] for t_ in cats[k]["topics"]))
+        topics = " · ".join(f"{tp['id']} {tp['title'].split(' (')[0]}" for tp in cats[k]["topics"])
         cards += (f'<div class="card" style="border-color:{c["color"]};background:{c["tint"]}">'
                   f'<span style="color:{c["color"]}">{icon(c["icon"], 22)}</span>'
                   f'<h3 style="color:{c["color"]}">{k}. {html.escape(c["name"])}</h3>'
@@ -609,16 +608,11 @@ def render(cats):
                   f'<div class="role"><b>Platform:</b> {html.escape(c["platform"])}</div>'
                   f'<div class="role"><b>Teams:</b> {html.escape(c["teams"])}</div>'
                   f'<div class="role" style="margin-top:2mm;color:{c["color"]}">{html.escape(topics)}</div></div>')
-    out.append(f'<div class="cover"><div class="kicker">Cluster resource allocation · Platform team</div>'
-               f'<h1>Operating<br>Principles</h1>'
-               f'<div class="sub">The rules behind the allocation model — N+1, fairness between tenants, conservative '
-               f'allocation, requests and limits, replicas, HA, day 2 operations and what it all costs — grouped by what '
-               f'the platform team owns, enforces, requires, runs and charges. On-prem clusters.</div>'
-               f'<div class="band">{band}</div>{fig_overview()}<div class="cards">{cards}</div>'
-               f'<div class="meta"><span>Source: docs/09-operating-principles.md</span><span>Printed {today}</span>'
-               f'</div></div>')
+    return f'<div class="band">{band}</div>{fig_overview()}<div class="cards">{cards}</div>'
 
-    # At a glance
+
+def glance_table(cats):
+    """One row per topic: icon, id, title, one-line rule, tick box."""
     rows = ""
     for k in ORDER:
         c = CATEGORIES[k]
@@ -630,42 +624,73 @@ def render(cats):
                      f'<td class="id" style="color:{c["color"]}">{tp["id"]}</td>'
                      f'<td class="name">{inline(tp["title"])}</td><td>{html.escape(rule)}</td>'
                      f'<td class="box"><span class="tick"></span></td></tr>')
-    out.append(f'<section class="cat"><h2 class="page-title">At a glance</h2>'
-               f'<p class="lede">One rule per topic. The box is for reviews: tick what a cluster or project meets '
-               f'today.</p><table class="glance">{rows}</table></section>')
+    return f'<table class="glance">{rows}</table>'
 
-    # Categories
+
+def banner(k, cat):
+    """Category banner, intro and the platform team / teams chips."""
+    c = CATEGORIES[k]
+    return (f'<div class="banner" style="background:{c["color"]}">'
+            f'<div class="big">{icon(c["icon"], 32, "#fff")}</div><div>'
+            f'<h2>{k}. {html.escape(c["name"])}</h2><div class="tag">{html.escape(c["tag"])} · '
+            f'{html.escape(c["question"])}</div></div></div>'
+            f'<div class="intro"><p>{inline(cat["intro"])}</p>'
+            f'<div class="chip" style="border-color:{c["color"]};background:{c["tint"]}">'
+            f'<small style="color:{c["color"]}">Platform team</small>{html.escape(c["platform"])}</div>'
+            f'<div class="chip" style="border-color:#cbd5e1"><small style="color:#475569">Teams</small>'
+            f'{html.escape(c["teams"])}</div></div>')
+
+
+def topic_head(k, tp):
+    c = CATEGORIES[k]
+    return (f'<div class="topic-head"><div class="dot" style="background:{c["color"]}">'
+            f'{icon(TOPICS[tp["id"]][0], 19, "#fff")}</div><h3><span class="id" style="color:{c["color"]}">{tp["id"]}</span>'
+            f'{inline(tp["title"])}</h3></div>')
+
+
+def rule_and_figure(k, tp):
+    """The topic's one-line rule, and its diagram if it has one."""
+    c = CATEGORIES[k]
+    out = f'<div class="rule" style="border-color:{c["color"]};background:{c["tint"]}">{html.escape(TOPICS[tp["id"]][1])}</div>'
+    if tp["id"] in FIGURES:
+        out += f'<div class="figure {tp["id"]}">{FIGURES[tp["id"]]()}</div>'
+    return out
+
+
+def alert_cards(k, tp):
+    """E2's bullets as cards with icons."""
+    c = CATEGORIES[k]
+    cards = "".join(
+        f'<div class="alert" style="border-color:{c["color"]}"><span style="color:{c["color"]}">'
+        f'{icon(ALERT_ICONS[i % len(ALERT_ICONS)], 20)}</span><span>{inline(bl)}</span></div>'
+        for i, bl in enumerate(tp["bullets"]))
+    return f'<div class="alerts">{cards}</div>'
+
+
+def render(cats):
+    today = datetime.date.today().strftime("%d %B %Y").lstrip("0")
+    out = [f"<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Operating Principles</title>"
+           f"<style>{CSS}</style></head><body>"]
+
+    out.append(f'<div class="cover"><div class="kicker">Cluster resource allocation · Platform team</div>'
+               f'<h1>Operating<br>Principles</h1><div class="sub">{html.escape(SUBTITLE)}</div>{cover_visual(cats)}'
+               f'<div class="meta"><span>Source: docs/09-operating-principles.md</span><span>Printed {today}</span>'
+               f'</div></div>')
+    out.append(f'<section class="cat"><h2 class="page-title">At a glance</h2><p class="lede">{html.escape(GLANCE_LEDE)}'
+               f'</p>{glance_table(cats)}</section>')
+
     for k in ORDER:
-        c = CATEGORIES[k]
         cat = cats[k]
         # The banner stays on the same page as the first topic's heading, rule and figure (class "keep").
-        out.append(f'<section class="cat cat-{k}"><div class="keep"><div class="banner" style="background:{c["color"]}">'
-                   f'<div class="big">{icon(c["icon"], 32, "#fff")}</div><div>'
-                   f'<h2>{k}. {html.escape(c["name"])}</h2><div class="tag">{html.escape(c["tag"])} · '
-                   f'{html.escape(c["question"])}</div></div></div>'
-                   f'<div class="intro"><p>{inline(cat["intro"])}</p>'
-                   f'<div class="chip" style="border-color:{c["color"]};background:{c["tint"]}">'
-                   f'<small style="color:{c["color"]}">Platform team</small>{html.escape(c["platform"])}</div>'
-                   f'<div class="chip" style="border-color:#cbd5e1"><small style="color:#475569">Teams</small>'
-                   f'{html.escape(c["teams"])}</div></div>')
+        out.append(f'<section class="cat cat-{k}"><div class="keep">{banner(k, cat)}')
         for n, tp in enumerate(cat["topics"]):
-            ic, rule = TOPICS[tp["id"]]
-            out.append(f'{"<div class=topic>" if n else ""}<div class="topic-head"><div class="dot" style="background:{c["color"]}">'
-                       f'{icon(ic, 19, "#fff")}</div><h3><span class="id" style="color:{c["color"]}">{tp["id"]}</span>'
-                       f'{inline(tp["title"])}</h3></div>'
-                       f'<div class="rule" style="border-color:{c["color"]};background:{c["tint"]}">{html.escape(rule)}</div>')
-            if tp["id"] in FIGURES:
-                out.append(f'<div class="figure {tp["id"]}">{FIGURES[tp["id"]]()}</div>')
+            out.append(f'{"<div class=topic>" if n else ""}{topic_head(k, tp)}{rule_and_figure(k, tp)}')
             if n == 0:
                 out.append("</div>")  # closes "keep"
             if tp["lead"].strip():
                 out.append(f'<p class="lead">{inline(tp["lead"].strip())}</p>')
             if tp["id"] == "E2":
-                cards = "".join(
-                    f'<div class="alert" style="border-color:{c["color"]}"><span style="color:{c["color"]}">'
-                    f'{icon(ALERT_ICONS[i % len(ALERT_ICONS)], 20)}</span><span>{inline(bl)}</span></div>'
-                    for i, bl in enumerate(tp["bullets"]))
-                out.append(f'<div class="alerts">{cards}</div>')
+                out.append(alert_cards(k, tp))
             else:
                 out.append("<ul>" + "".join(f"<li>{inline(bl)}</li>" for bl in tp["bullets"]) + "</ul>")
             out.append("</div>" if n else "")

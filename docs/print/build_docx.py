@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Build a Word file of a doc (default docs/09-operating-principles.md) for import into Confluence.
+
+One .docx holds the text, tables and diagrams: every Mermaid block is rendered to a PNG and embedded, so Confluence's
+Word import (Data Center: page ⋯ → Import Word document) creates the page and its image attachment in one step.
+Links to other repo files point to GitHub, links within the doc stay as anchors. Needs `mmdc` (npm
+@mermaid-js/mermaid-cli) and `pandoc` on the PATH; otherwise standard library only.
+
+    python3 docs/print/build_docx.py                       # writes docs/print/operating-principles.docx
+    python3 docs/print/build_docx.py docs/05-process.md -o process.docx
+"""
+
+import argparse
+import os
+import posixpath
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+SOURCE = os.path.join(REPO, "docs", "09-operating-principles.md")
+OUTPUT = os.path.join(HERE, "operating-principles.docx")
+GITHUB = "https://github.com/cdalar/cluster-resource-allocation/blob/main/"
+
+MERMAID = re.compile(r"^```mermaid\n(.*?)^```\n", re.S | re.M)
+LINK = re.compile(r"\]\(([^)#\s]+)(#[^)\s]*)?\)")
+
+
+def need(tool, hint):
+    if not shutil.which(tool):
+        sys.exit(f"{tool} not found: {hint}")
+
+
+def render_mermaid(text, tmp):
+    """Replace each Mermaid block with an image of it, rendered by mmdc."""
+    count = 0
+
+    def one(m):
+        nonlocal count
+        count += 1
+        src, png = os.path.join(tmp, f"diagram-{count}.mmd"), os.path.join(tmp, f"diagram-{count}.png")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(m.group(1))
+        subprocess.run(["mmdc", "-q", "-i", src, "-o", png, "-s", "2", "-b", "white"], check=True)
+        return f"![]({png})\n"
+
+    return MERMAID.sub(one, text)
+
+
+def absolute_links(text, source):
+    """Point relative links to other repo files at GitHub; the files aren't in Confluence."""
+    base = posixpath.relpath(os.path.dirname(os.path.abspath(source)), REPO).replace(os.sep, "/")
+
+    def one(m):
+        target, anchor = m.group(1), m.group(2) or ""
+        if re.match(r"^[a-z]+:", target):
+            return m.group(0)
+        path = posixpath.normpath(posixpath.join(base, target))
+        return f"]({GITHUB}{path}{anchor})"
+
+    return LINK.sub(one, text)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("source", nargs="?", default=SOURCE, help="Markdown file (default: %(default)s)")
+    ap.add_argument("-o", "--out", default=None, help=f"Word file to write (default: {OUTPUT} for the default "
+                                                     "source, else <source>.docx)")
+    args = ap.parse_args()
+    out = args.out or (OUTPUT if args.source == SOURCE else os.path.splitext(args.source)[0] + ".docx")
+
+    need("mmdc", "npm install -g @mermaid-js/mermaid-cli")
+    need("pandoc", "brew install pandoc")
+    with open(args.source, encoding="utf-8") as f:
+        text = f.read()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        text = render_mermaid(absolute_links(text, args.source), tmp)
+        md = os.path.join(tmp, "doc.md")
+        with open(md, "w", encoding="utf-8") as f:
+            f.write(text)
+        # gfm: same heading anchors as GitHub, so the in-doc links keep working.
+        subprocess.run(["pandoc", "-f", "gfm", "-t", "docx", md, "-o", os.path.abspath(out)], check=True)
+    print(out)
+
+
+if __name__ == "__main__":
+    main()

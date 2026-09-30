@@ -489,7 +489,12 @@ table.glance td.box { width: 7mm; }
 table.glance .tick { display: inline-block; width: 4mm; height: 4mm; border: 1.2px solid #94a3b8; border-radius: 1mm; }
 section.cat { break-before: page; }
 .keep { break-inside: avoid; margin-bottom: 2mm; }
-section.cat.flow { break-before: auto; margin-top: 5mm; }
+/* E is printed as one page: slightly denser than the other sections. */
+section.cat-E { font-size: 8.8pt; line-height: 1.3; }
+section.cat-E .figure svg { width: 72%; }
+section.cat-E .topic { margin-bottom: 2.5mm; }
+section.cat-E .topic li { margin-bottom: 0.3mm; }
+section.cat-E .intro { margin-bottom: 2mm; }
 .banner { display: flex; gap: 4mm; align-items: center; border-radius: 3mm; padding: 3mm 5mm; margin-bottom: 3mm; color: #fff; }
 .banner .big { width: 15mm; height: 15mm; border-radius: 50%; background: rgba(255,255,255,.18); display: flex; align-items: center; justify-content: center; }
 .banner h2 { margin: 0; font-size: 17pt; letter-spacing: -.01em; }
@@ -506,7 +511,7 @@ section.cat.flow { break-before: auto; margin-top: 5mm; }
 .rule { margin: 1.5mm 0 2mm; padding: 2mm 3mm; border-left: 1.2mm solid; border-radius: 0 2mm 2mm 0; font-weight: 600; break-after: avoid; }
 .figure { border: 1px solid #e2e8f0; border-radius: 2.5mm; padding: 1.5mm 3mm 0.5mm; margin: 0 0 2mm; break-inside: avoid; text-align: center; }
 .figure svg { width: 88%; }
-.figure.D1 svg { width: 70%; }  /* tall: smaller, so E can start on D's page */
+.figure.D1 svg { width: 76%; }  /* tall */
 .topic ul { margin: 0; padding-left: 4.5mm; }
 .topic li { margin: 0 0 0.6mm; break-inside: avoid; }
 .topic li::marker { font-size: 8pt; }
@@ -564,10 +569,8 @@ def render(cats):
     for k in "ABCDE":
         c = CATEGORIES[k]
         cat = cats[k]
-        # D is half a page: E follows it on the same page instead of leaving it half empty.
-        flow = " flow" if k == "E" else ""
         # The banner stays on the same page as the first topic's heading, rule and figure (class "keep").
-        out.append(f'<section class="cat{flow}"><div class="keep"><div class="banner" style="background:{c["color"]}">'
+        out.append(f'<section class="cat cat-{k}"><div class="keep"><div class="banner" style="background:{c["color"]}">'
                    f'<div class="big">{icon(c["icon"], 32, "#fff")}</div><div>'
                    f'<h2>{k}. {html.escape(c["name"])}</h2><div class="tag">{html.escape(c["tag"])} · '
                    f'{html.escape(c["question"])}</div></div></div>'

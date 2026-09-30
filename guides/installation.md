@@ -191,38 +191,46 @@ Add to `values-local.yaml` (Step 2):
 rancher:
   deployDownstream:
     enabled: true
-    # Choose the clusters: names, a label selector, a Fleet ClusterGroup, or a mix.
-    # Nothing is installed without one of them.
+    # The chart creates the Fleet ClusterGroup "resource-report" with these Rancher cluster names.
+    # The default, change-me, matches no cluster: nothing is installed until you replace it.
+    clusterGroup:
+      clusterNames:
+        - onprem-prod-01
+        - onprem-test-01
+    # More targets, optional:
     clusters:
-      - onprem-prod-01
-      - onprem-test-01
-      - name: aks-prod                # per-cluster values over the common ones below
+      - name: aks-prod                # Fleet cluster name, with per-cluster values over the common ones below
         values:
           prometheus: {enabled: false}
     # clusterSelector: {matchLabels: {resource-report: enabled}}   # clusters labelled in Rancher
-    # clusterGroup: resource-report                                  # an existing Fleet ClusterGroup
     values:                           # for every downstream release (what values-downstream.yaml holds in option B)
       collection:
         window: 7d
 ```
 
-and run the Step 2 `helm upgrade --install` on the local cluster again. The names are the Fleet cluster names:
+and run the Step 2 `helm upgrade --install` on the local cluster again. `clusterNames` are the names shown in
+Rancher (label `management.cattle.io/cluster-display-name`); `clusters` takes the Fleet cluster names:
 
 ```bash
-kubectl -n fleet-default get clusters.fleet.cattle.io         # names and labels of the downstream clusters
-kubectl -n fleet-default get helmops,bundles                  # the HelmOp and its Bundle: READY n/n
+kubectl -n fleet-default get clusters.fleet.cattle.io --show-labels   # names and labels of the downstream clusters
+kubectl -n fleet-default get clustergroups                            # the group and how many clusters it matches
+kubectl -n fleet-default get helmops,bundles                          # the HelmOp and its Bundle: READY n/n
 ```
+
+If a ClusterGroup `resource-report` was already created by hand, Helm refuses to take it over: delete it first,
+or set `clusterGroup.create: false` to keep using it as it is.
 
 What goes downstream: the local image repository, pull policy and pull secrets; `rancher.namesConfigMap.enabled`
 when `publishNames` is on; then `deployDownstream.values` and the cluster's own `values`. Local-only settings
 (`isLocalCluster`, `publishNames`, the planners) are always off downstream.
 
-**Choosing clusters by label or group** lets a cluster opt in without a `helm upgrade`:
+**Adding a cluster** to the group is an edit of `clusterGroup.clusterNames` and a `helm upgrade` on the local
+cluster. To let a cluster opt in without a `helm upgrade`:
 - *Label:* Cluster Management → cluster → ⋮ → **Edit Config** → Labels, e.g. `resource-report=enabled`, with
   `clusterSelector.matchLabels`.
-- *ClusterGroup:* Continuous Delivery (workspace `fleet-default`) → **Cluster Groups → Create**, with a rule on
-  `management.cattle.io/cluster-display-name` *in list* of names (a group has only a label selector, and Rancher
-  labels each cluster with its name), then `clusterGroup: <name>`.
+- *Group kept in the Rancher UI:* set `clusterGroup.create: false` and edit the group under Continuous Delivery
+  (workspace `fleet-default`) → **Cluster Groups** (a rule on `management.cattle.io/cluster-display-name` *in
+  list*).
 
 Removing a cluster from the targets makes Fleet uninstall the chart there.
 

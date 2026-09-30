@@ -33,11 +33,41 @@
 {{- if kindIs "map" $d.clusterSelector }}
 {{- $targets = append $targets (dict "clusterSelector" $d.clusterSelector) }}
 {{- end }}
-{{- if $d.clusterGroup }}
-{{- $targets = append $targets (dict "clusterGroup" $d.clusterGroup) }}
+{{- /* clusterGroup: a map (the chart creates the group) or, as before, the name of an existing group */}}
+{{- $group := dict "name" "" "create" false "clusterNames" list }}
+{{- if kindIs "map" $d.clusterGroup }}
+{{- $g := $d.clusterGroup }}
+{{- $group = dict "name" ($g.name | default "resource-report") "create" (ne (toString $g.create) "false") "clusterNames" ($g.clusterNames | default list) }}
+{{- else if $d.clusterGroup }}
+{{- $group = dict "name" $d.clusterGroup "create" false "clusterNames" list }}
+{{- end }}
+{{- if and $group.create (not $group.clusterNames) }}
+{{- fail "rancher.deployDownstream.clusterGroup.clusterNames: list at least one Rancher cluster name, or set create: false for an existing group" }}
+{{- end }}
+{{- if $group.name }}
+{{- $targets = append $targets (dict "clusterGroup" $group.name) }}
 {{- end }}
 {{- if not $targets }}
 {{- fail "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup (nothing is installed everywhere by default)" }}
+{{- end }}
+{{- if $group.create }}
+# Fleet ClusterGroup of the clusters that get the chart, by their Rancher cluster name (Rancher labels each Fleet
+# cluster with it). Editing clusterNames here and running `helm upgrade` adds or removes clusters.
+apiVersion: fleet.cattle.io/v1alpha1
+kind: ClusterGroup
+metadata:
+  name: {{ $group.name }}
+  namespace: {{ $d.workspace }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchExpressions:
+      - key: management.cattle.io/cluster-display-name
+        operator: In
+        values:
+          {{- toYaml $group.clusterNames | nindent 10 }}
+---
 {{- end }}
 # Installs this chart on the targeted downstream clusters (an "App Bundle" under Continuous Delivery in Rancher).
 # Created by this Helm release, not by the dashboard: the dashboard's service account stays read-only.

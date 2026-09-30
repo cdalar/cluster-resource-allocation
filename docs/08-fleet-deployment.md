@@ -3,7 +3,9 @@
 Plan for installing and upgrading the `cluster-resource-report` chart on downstream clusters through Fleet, from
 the release on the Rancher local cluster, without a GitRepo. Status: **chart part built** (`rancher.deployDownstream`,
 `templates/fleet-helmop.yaml`, chart README, installation guide Step 3 option A) and **tested** on the test Rancher
-(Fleet v0.16.2, cluster `cra-downstream-2` through a ClusterGroup; see *Test results*). Still open: a release with it.
+(Fleet v0.16.2, cluster `cra-downstream-2` through a ClusterGroup; see *Test results*). By default the chart
+creates that ClusterGroup itself (`resource-report`, placeholder cluster `change-me`, so nothing is installed until
+names are set); that default is not yet tested on Rancher. Still open: a release with it.
 
 ## Starting point
 
@@ -67,13 +69,16 @@ rancher:
   deployDownstream:
     enabled: false
     workspace: fleet-default          # Fleet workspace of the downstream clusters (the local cluster is in fleet-local)
-    # Where to install. Nothing by default: with all three empty the chart fails and asks for a target.
-    # A cluster matching any of them gets the chart.
+    # Where to install; a cluster matching any target gets the chart. By default only the ClusterGroup, whose
+    # placeholder change-me matches nothing. With no target at all the chart fails and asks for one.
     clusters: []                      # Fleet cluster names, each a name or {name: ..., values: {...}}
                                       #   (kubectl -n fleet-default get clusters.fleet.cattle.io)
     clusterSelector: null             # label selector on Fleet clusters, e.g. {matchLabels: {resource-report: enabled}}
                                       #   ({} = every cluster in the workspace, only if written explicitly)
-    clusterGroup: ""                  # an existing Fleet ClusterGroup
+    clusterGroup:                     # a plain name ("my-group") uses an existing group instead
+      name: resource-report
+      create: true                    # the chart creates the group (false: it must exist)
+      clusterNames: [change-me]       # Rancher display names; the placeholder matches no cluster
     namespace: resource-report        # release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report
     chart:
@@ -93,9 +98,8 @@ rancher:
     enabled: true
   deployDownstream:
     enabled: true
-    clusterSelector:
-      matchLabels:
-        resource-report: enabled
+    clusterGroup:
+      clusterNames: [onprem-prod-01, onprem-test-01]
     values:
       prometheus:
         enabled: true
@@ -112,7 +116,11 @@ The template fails with a clear message when:
 - `isLocalCluster` is not set;
 - `fleet.cattle.io/v1alpha1/HelmOp` is not in `.Capabilities.APIVersions` ("needs Fleet ≥ 0.12 / Rancher 2.11+");
 - `clusters`, `clusterSelector` and `clusterGroup` are all empty;
+- the chart creates the group and `clusterGroup.clusterNames` is empty;
 - `publishNames` is enabled and its `targetNamespace` differs from `deployDownstream.namespace`.
+
+With `clusterGroup.create` (the default) it renders a Fleet `ClusterGroup` `clusterGroup.name` in the workspace,
+selecting `management.cattle.io/cluster-display-name` *In* `clusterGroup.clusterNames` (see *Choosing clusters*).
 
 It renders one `HelmOp`:
 
@@ -147,7 +155,8 @@ There are three ways to choose clusters, and they can be combined:
 |---|---|---|
 | By name | `clusters: [cra-downstream-2, onprem-prod-01]` | A few clusters. Explicit, but adding one means a `helm upgrade` on the local cluster |
 | By label (recommended for many clusters) | In the Rancher UI, go to Cluster → Edit Config → Labels and add, e.g., `resource-report=enabled`. Then set `clusterSelector.matchLabels`. | A new cluster opts in by getting the label, with no Helm change. Rancher copies cluster labels to the Fleet cluster. |
-| By cluster group | `clusterGroup: <name>` of an existing Fleet ClusterGroup | Teams that already group clusters in Fleet |
+| By cluster group (default) | `clusterGroup.clusterNames: [cra-downstream-2, onprem-prod-01]`: the chart creates the group `resource-report`. The default `change-me` matches no cluster. | One list of Rancher names; adding a cluster is an edit of the list and a `helm upgrade` |
+| By an existing group | `clusterGroup.create: false` (or `clusterGroup: <name>`) | Teams that keep the group in the Rancher UI, changed without Helm |
 
 A Fleet ClusterGroup has only a label selector (`spec.selector`), not a list of names. Rancher labels every Fleet
 cluster with its name, though: `management.cattle.io/cluster-display-name` holds the display name and
@@ -167,10 +176,12 @@ spec:
         values: [cra-downstream-2, onprem-prod-01]
 ```
 
-Then set `deployDownstream.clusterGroup: resource-report`. Changing the list is an edit of the group, with no
-`helm upgrade`. Use `kubectl -n fleet-default get clustergroups` to see how many clusters match.
+The chart renders this group from `clusterGroup.clusterNames`. Use `kubectl -n fleet-default get clustergroups`
+to see how many clusters match. A group of the same name created by hand before blocks the install (Helm does not
+adopt objects it did not create): delete it, or keep it with `clusterGroup.create: false`.
 
-Creating the group in the Rancher UI:
+To keep the group out of Helm (`clusterGroup.create: false`), so that changing the list needs no `helm upgrade`,
+create it in the Rancher UI:
 1. Open ☰ → **Continuous Delivery**, and select the workspace **fleet-default** at the top.
 2. Go to **Cluster Groups** → **Create** and name it `resource-report`.
 3. Under **Cluster Selectors**, add a rule: key `management.cattle.io/cluster-display-name`, operator *in list*,

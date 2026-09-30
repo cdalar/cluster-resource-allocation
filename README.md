@@ -106,7 +106,7 @@ flowchart LR
 | [6. Rollout](docs/06-rollout.md) | Phased rollout and risks |
 | [7. Actions](docs/07-actions.md) | Plan for actions from the planner and dashboard (pull request, apply to Rancher, right-sizing, …) |
 | [8. Fleet deployment](docs/08-fleet-deployment.md) | Plan: install and upgrade the chart on chosen downstream clusters with a Fleet HelmOp from the local release |
-| [9. Operating principles](docs/09-operating-principles.md) ([printable PDF](docs/print/operating-principles.pdf), built by `docs/print/build_pdf.py`) | Bullet-point rules, grouped from the platform team's view: capacity (N+1, conservative allocation, autoscaling), tenancy (fairness, priority, isolation), workload standards (requests vs. limits, replicas, HA), platform reliability, day 2 operations |
+| [9. Operating principles](docs/09-operating-principles.md) ([printable PDF](docs/print/operating-principles.pdf), built by `docs/print/build_pdf.py`; on-prem only, with an extra finance section: cost model, Rancher licence per CPU core, minimum worker nodes) | Bullet-point rules, grouped from the platform team's view: capacity (N+1, conservative allocation, autoscaling), tenancy (fairness, priority, isolation), workload standards (requests vs. limits, replicas, HA), platform reliability, day 2 operations |
 | [Open questions](docs/open-questions.md) | Items to resolve during discovery |
 | [ADRs](docs/adr/) | Architecture decision records |
 

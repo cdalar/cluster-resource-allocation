@@ -2,7 +2,8 @@
 """Build a printable PDF (A4) of docs/09-operating-principles.md with icons and diagrams.
 
 The bullets are read from the Markdown file, so the PDF follows the doc; the icons, diagrams, one-line rules and
-layout live here. Standard library only; the PDF is printed by headless Chrome.
+layout live here. The PDF edition differs from the doc on purpose (see PDF_EDITS): on-prem only (no AKS), 80 % as
+the prod ceiling, and an extra section F on finance, licences and cluster size (FINANCE_MD). Standard library only; the PDF is printed by headless Chrome.
 
     python3 docs/print/build_pdf.py                 # writes docs/print/operating-principles.pdf
     python3 docs/print/build_pdf.py --html out.html  # also keep the intermediate HTML
@@ -60,6 +61,12 @@ ICONS = {
     "skull": '<path d="M5 11a7 7 0 0 1 14 0v4l-2 1v3H7v-3l-2-1z"/><circle cx="9.5" cy="11.5" r="1.3"/>'
              '<circle cx="14.5" cy="11.5" r="1.3"/><path d="M11 19v-2M13 19v-2"/>',
     "snail": '<path d="M3 18h13a5 5 0 1 0-5-5v5"/><path d="M11 13a2 2 0 1 1 2 2"/><path d="M16 13l3-4M18 14l3-2"/>',
+    "coins": '<ellipse cx="9" cy="6.5" rx="6" ry="2.8"/><path d="M3 6.5v4c0 1.5 2.7 2.8 6 2.8s6-1.3 6-2.8v-4"/>'
+             '<path d="M3 10.5v4c0 1.5 2.7 2.8 6 2.8"/><circle cx="16.5" cy="16" r="4.5"/><path d="M16.5 14v4"/>',
+    "chip": '<rect x="6" y="6" width="12" height="12" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5"/>'
+            '<path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>',
+    "nodes": '<rect x="2" y="4" width="6" height="16" rx="1.5"/><rect x="9" y="4" width="6" height="16" rx="1.5"/>'
+             '<rect x="16" y="4" width="6" height="16" rx="1.5" stroke-dasharray="2 2"/><path d="M5 8h0M12 8h0"/>',
     "check": '<path d="M5 12l5 5 9-10"/>',
     "cross": '<path d="M6 6l12 12M18 6L6 18"/>',
 }
@@ -88,11 +95,15 @@ CATEGORIES = {
     "E": dict(name="Day 2 operations", tag="keeping it true over time", icon="cycle", color="#be185d",
               tint="#fdf2f8", question="Do the guarantees stay true after go-live?",
               platform="Runs maintenance, monitoring, reviews", teams="Right-size, fix drift, join reviews"),
+    "F": dict(name="Finance", tag="what it costs", icon="coins", color="#15803d", tint="#f0fdf4",
+              question="What does capacity cost, and who pays for what?",
+              platform="Owns the cost model, publishes unit rates", teams="Pay for allocated quota from budget"),
 }
+ORDER = "ABCDEF"
 
 TOPICS = {
     "A1": ("server", "Σ project quota still fits after the largest node — or failure domain — is gone."),
-    "A2": ("gauge", "Sell at most 80–85 % in prod. The rest is reserve, not stock."),
+    "A2": ("gauge", "Sell at most 80 % in prod. The rest is reserve, not stock."),
     "A3": ("trend", "Quota covers the maximum (maxReplicas × requests), not the average."),
     "B1": ("scale", "Every project gets what it pays for — quota is the only fairness Kubernetes has."),
     "B2": ("priority", "Platform first, then prod. Priority never bypasses quota."),
@@ -104,7 +115,72 @@ TOPICS = {
     "E1": ("calendar", "Drains succeed unattended; upgrades go one node at a time."),
     "E2": ("bell", "Alert before tenants notice: N+1, quota at 90 %, Pending pods, OOMKills."),
     "E3": ("cycle", "Monthly capacity check, quarterly project review, every quota change via Git."),
+    "F1": ("coins", "Projects pay for allocated quota at published rates; the reserve is priced in, not billed."),
+    "F2": ("chip", "Rancher is licensed per CPU core: every core counts, sold or not; memory is licence-free."),
+    "F3": ("nodes", "Prod: at least 3 worker nodes; from 5 equal nodes on, N+1 fits inside the 20 % reserve."),
 }
+
+# --- PDF edition: differences from the Markdown doc -------------------------------------------------------------
+
+PDF_EDITS = {
+    "replace": [("80–85 %", "80 %")],
+    # On-prem only: bullets about AKS are left out, one is reworded.
+    "drop": [r"\bAKS\b"],
+    "reword": {"On-prem there is no autoscaling of nodes": "**No node autoscaling**: capacity is bought ahead, "
+               "which is why allocation is conservative."},
+    "append": {"A1": ["**Minimum size**: 3 worker nodes in prod, better 5+ of equal size, so the N+1 reserve stays "
+                      "within the 20 % we keep anyway (F3)."]},
+}
+
+FINANCE_MD = """
+## F. Finance — what it costs
+
+*Platform team owns the cost model and publishes the rates; finance approves them; projects pay from their budget.*
+
+### F1. Cost model and unit rates
+
+- **Monthly cost per node**: hardware amortisation (5 years), power and cooling, rack space and network, Rancher
+  licence (F2), shared services (monitoring, logging, backup, registry) and the platform team's share.
+- **Sellable capacity** = allocatable − platform components − N+1 reserve, and at most **80 %** of allocatable in prod.
+- **Unit rates** = cluster cost ÷ sellable capacity, as **€ per vCPU-month** and **€ per GiB-month** (cost split
+  between CPU and memory by a fixed ratio), published once a year.
+- **The reserve is not free**: the N+1 node and the 20 % headroom are paid for through the rates. Nobody is billed
+  for them separately, and nobody can buy them.
+- **Projects pay for allocated quota**, not for usage (ADR-0002): budgets stay predictable, and giving back unused
+  quota is the way to save.
+- **Showback every month**: quota vs. requests vs. usage per project, on the same basis for every project.
+- **Non-prod is cheaper per unit**: dev is overcommitted, so the same hardware sells more quota there.
+- Shared and platform services are part of the rate unless finance decides to fund them separately (Q12).
+- Unspent budget is fine; unused quota is not: it blocks capacity that others pay for.
+
+### F2. Rancher licence (CPU cores)
+
+- The Rancher subscription is counted on **CPU cores only**: memory, disk and the number of nodes don't change the
+  licence cost.
+- **Every core is licensed**, sold or not: the N+1 node and the 20 % reserve cost licence like the rest.
+- **Licence cost goes into the CPU rate only**; the memory rate carries no licence.
+- **Memory-rich nodes** (more GiB per core) give cheaper memory; don't buy cores the projects won't request.
+- **Oversized CPU requests cost twice**: hardware and licence. CPU right-sizing lowers the licence need at renewal.
+- **A new node is a licence step**: all its cores count from day one; plan node purchases with the licence renewal.
+- To confirm in the contract: physical cores or threads, and whether control plane / etcd nodes count (Q16).
+
+### F3. Cluster size: minimum worker nodes and N+1
+
+- The N+1 reserve is **one whole node** (hardware and licence): the fewer the nodes, the larger its share.
+- Sellable share in prod = min((n − 1) ÷ n, 80 %) of allocatable (after platform components): 2 nodes 50 %,
+  3 nodes 67 %, 4 nodes 75 %, **5 or more 80 %**.
+- **Prod minimum: 3 worker nodes.** With 2, half the cluster is reserve, and a drain puts every workload on one node.
+  3 also lets quorum systems (3 replicas) spread over nodes.
+- **Prod target: 5 or more equal nodes**: from there the 80 % ceiling, not N+1, is the limit, so the N+1 reserve costs
+  nothing extra.
+- **Acc/test**: 3 worker nodes when N+1 is kept (recommended), otherwise 2. **Dev**: at least 2, so a drain doesn't
+  stop the environment.
+- **Equal node sizes**: the largest node sets the reserve (A1); one big node makes the whole cluster more expensive.
+- **Not too many tiny nodes** either: each node has fixed overhead (OS and kubelet reserves, DaemonSets for CNI,
+  monitoring and logging, rack space, power). Prefer 5–10 equal nodes per prod cluster.
+- **Control plane / etcd nodes** come on top (3 for HA, D1) and are not worker capacity.
+- **Buy a node** when the next approved quota would take the cluster above 80 % or turn N+1 red.
+"""
 
 # --- Markdown (the subset the doc uses) -------------------------------------------------------------------------
 
@@ -125,18 +201,16 @@ def inline(text):
     return re.sub(r"\x00(\d+)\x00", lambda m: codes[int(m.group(1))], text)
 
 
-def parse(path):
+def parse(text):
     """Return {category letter: {"title", "intro", "topics": [{id, title, lead, bullets}]}}."""
     cats, cat, topic, item = {}, None, None, None
-    with open(path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-    for line in lines:
-        m = re.match(r"^## ([A-E])\. (.+)$", line)
+    for line in text.splitlines():
+        m = re.match(r"^## ([A-F])\. (.+)$", line)
         if m:
             cat = cats.setdefault(m.group(1), {"title": m.group(2), "intro": "", "topics": []})
             topic = item = None
             continue
-        m = re.match(r"^### ([A-E]\d)\. (.+)$", line)
+        m = re.match(r"^### ([A-F]\d)\. (.+)$", line)
         if m and cat is not None:
             topic = {"id": m.group(1), "title": m.group(2), "lead": "", "bullets": []}
             cat["topics"].append(topic)
@@ -165,6 +239,24 @@ def parse(path):
         c["intro"] = c["intro"].strip()
         for t in c["topics"]:
             t["bullets"] = [" ".join(b) for b in t["bullets"]]
+    return cats
+
+
+def edit(cats):
+    """Apply PDF_EDITS to the parsed doc."""
+    for c in cats.values():
+        for tp in c["topics"]:
+            bullets = []
+            for b in tp["bullets"]:
+                for start, new in PDF_EDITS["reword"].items():
+                    if b.startswith(start):
+                        b = new
+                if any(re.search(rx, b) for rx in PDF_EDITS["drop"]):
+                    continue
+                for old, new in PDF_EDITS["replace"]:
+                    b = b.replace(old, new)
+                bullets.append(b)
+            tp["bullets"] = bullets + PDF_EDITS["append"].get(tp["id"], [])
     return cats
 
 
@@ -221,7 +313,7 @@ def fig_a1():
 def fig_a2():
     c = CATEGORIES["A"]["color"]
     x0, full = 120, 300  # 100 % = 300 px
-    rows = [("Prod", 0.82, "≤ 80–85 %: guaranteed, N+1"), ("Acc / Test", 1.0, "≤ 100 %: some Pending at peaks"),
+    rows = [("Prod", 0.80, "≤ 80 %: guaranteed, N+1"), ("Acc / Test", 1.0, "≤ 100 %: some Pending at peaks"),
             ("Dev", 1.5, "100–150 %: overcommit, not guaranteed")]
     b = ""
     for i, (name, share, note) in enumerate(rows):
@@ -237,9 +329,9 @@ def fig_a2():
     b += (f'<line x1="{x0 + full}" y1="8" x2="{x0 + full}" y2="130" stroke="{INK}" stroke-width="1.5" '
           f'stroke-dasharray="4 3"/>')
     b += t(x0 + full, 146, "capacity = allocatable − platform (and N+1)", 10, INK, "middle")
-    b += (f'<rect x="{x0 + 0.82 * full}" y="16" width="{0.18 * full}" height="24" fill="none" '
+    b += (f'<rect x="{x0 + 0.80 * full}" y="16" width="{0.20 * full}" height="24" fill="none" '
           f'stroke="{INK}" stroke-dasharray="2 2"/>')
-    b += t(x0 + 0.91 * full, 12, "reserve", 9.5, INK, "middle", 600)
+    b += t(x0 + 0.90 * full, 12, "reserve", 9.5, INK, "middle", 600)
     return svg(154, b)
 
 
@@ -420,33 +512,90 @@ def fig_e3():
     return svg(100, b)
 
 
+def fig_f1():
+    c, tint = CATEGORIES["F"]["color"], CATEGORIES["F"]["tint"]
+    items = [("Hardware", 30), ("Power, rack", 16), ("Rancher licence", 12), ("Shared services", 6),
+             ("Platform team", 36)]
+    b = t(20, 14, "Cluster cost per month", 11, INK, weight=700)
+    x = 20
+    shades = [c, "#22c55e", "#86efac", "#bbf7d0", "#166534"]
+    for (name, share), col in zip(items, shades):
+        w = share * 2.6
+        b += f'<rect x="{x}" y="22" width="{w}" height="26" fill="{col}"/>'
+        x += w
+    for i, ((name, _), col) in enumerate(zip(items, shades)):
+        lx, ly = 20 + (i % 3) * 92, 62 + (i // 3) * 14
+        b += f'<rect x="{lx}" y="{ly - 8}" width="9" height="9" fill="{col}"/>' + t(lx + 13, ly, name, 9, MUTED)
+    b += t(20, 90, "illustrative shares", 8.5, GREY)
+    b += t(300, 40, "÷", 22, INK, "middle", 700)
+    b += t(330, 14, "Sellable capacity", 11, INK, weight=700)
+    b += f'<rect x="330" y="22" width="200" height="26" fill="{c}"/>'
+    b += f'<rect x="530" y="22" width="50" height="26" fill="url(#hatchg)" stroke="{GREY}"/>'
+    b += t(430, 39, "≤ 80 % sold as quota", 10.5, "#fff", "middle", 700)
+    b += t(555, 62, "reserve", 9, MUTED, "middle")
+    b += t(430, 62, "after platform and N+1", 9, MUTED, "middle")
+    b += f'<rect x="120" y="100" width="400" height="34" rx="17" fill="{tint}" stroke="{c}" stroke-width="1.5"/>'
+    b += t(320, 122, "= € per vCPU-month  ·  € per GiB-month", 12, c, "middle", 700)
+    return svg(142, b)
+
+
+def fig_f3():
+    c = CATEGORIES["F"]["color"]
+    x0, base, hgt, step = 112, 150, 120, 70  # 100 % = 120 px
+    b = t(20, 14, "Share of a prod cluster that can be sold, by number of equal worker nodes", 11, INK, weight=700)
+    for i, n in enumerate(range(2, 9)):
+        x = x0 + i * step
+        nplus1 = (n - 1) / n
+        sold = min(nplus1, 0.8)
+        b += f'<rect x="{x}" y="{base - hgt}" width="46" height="{hgt}" fill="url(#hatchg)" opacity=".6"/>'
+        b += f'<rect x="{x}" y="{base - hgt}" width="46" height="{hgt / n}" fill="url(#hatch)"/>'
+        b += f'<rect x="{x}" y="{base - sold * hgt}" width="46" height="{sold * hgt}" fill="{c if n >= 3 else "#fca5a5"}"/>'
+        b += t(x + 23, base - sold * hgt + 14, f"{round(sold * 100)} %", 10.5, "#fff" if n >= 3 else INK, "middle", 700)
+        b += t(x + 23, base + 14, f"{n} nodes", 10, INK, "middle", 600)
+        b += t(x + 23, base + 28, f"{1 / sold:.2f}×", 9.5, MUTED, "middle")
+    y80 = base - 0.8 * hgt
+    b += f'<line x1="{x0 - 8}" y1="{y80}" x2="{x0 + 7 * step - 22}" y2="{y80}" stroke="{INK}" stroke-dasharray="4 3"/>'
+    b += t(x0 - 12, y80 + 4, "80 %", 9.5, INK, "end", 700)
+    b += t(x0 - 12, base + 28, "cost per sold unit", 8.5, MUTED, "end")
+    b += f'<rect x="{x0}" y="{base + 38}" width="12" height="10" fill="url(#hatch)"/>'
+    b += t(x0 + 18, base + 47, "N+1 reserve (one node)", 9.5, MUTED)
+    b += f'<rect x="{x0 + 180}" y="{base + 38}" width="12" height="10" fill="url(#hatchg)"/>'
+    b += t(x0 + 198, base + 47, "headroom above 80 %", 9.5, MUTED)
+    b += t(x0 + 360, base + 47, "min 3 · target 5+", 10.5, c, weight=700)
+    return svg(base + 56, b)
+
+
 FIGURES = {"A1": fig_a1, "A2": fig_a2, "A3": fig_a3, "B1": fig_b1, "C1": fig_c1, "C2": fig_c2, "C3": fig_c3,
-           "D1": fig_d1, "E1": fig_e1, "E3": fig_e3}
+           "D1": fig_d1, "E1": fig_e1, "E3": fig_e3, "F1": fig_f1, "F3": fig_f3}
 
 ALERT_ICONS = ["server", "gauge", "pause", "skull", "snail", "alert"]
 
 
 def fig_overview():
-    """Cover diagram: D underpins A, A enables B and C; E keeps all of them true."""
+    """Cover diagram: F pays for D, D underpins A, A enables B and C; E keeps all of them true."""
     b = ""
-    order = ["D", "A", "B", "C"]
-    for i, k in enumerate(order):
+    names = {"F": ("F. Finance", ""), "D": ("D. Platform", "reliability"), "A": ("A. Capacity", ""),
+             "B": ("B. Tenancy", ""), "C": ("C. Workload", "standards")}
+    for i, k in enumerate("FDABC"):
         cat = CATEGORIES[k]
-        x = 8 + i * 158
-        b += f'<rect x="{x}" y="8" width="136" height="70" rx="10" fill="{cat["tint"]}" stroke="{cat["color"]}" stroke-width="1.6"/>'
-        b += f'<g transform="translate({x + 56},16)" color="{cat["color"]}">{icon(cat["icon"], 24)}</g>'
-        b += t(x + 68, 56, f'{k}. {cat["name"]}', 11, cat["color"], "middle", 700)
-        b += t(x + 68, 70, cat["tag"], 9.5, MUTED, "middle")
-        if i < 3:
-            b += f'<line x1="{x + 138}" y1="43" x2="{x + 156}" y2="43" stroke="{MUTED}" stroke-width="1.6" marker-end="url(#arr)"/>'
+        x = 6 + i * 124
+        l1, l2 = names[k]
+        b += f'<rect x="{x}" y="8" width="108" height="78" rx="10" fill="{cat["tint"]}" stroke="{cat["color"]}" stroke-width="1.6"/>'
+        b += f'<g transform="translate({x + 43},15)" color="{cat["color"]}">{icon(cat["icon"], 22)}</g>'
+        b += t(x + 54, 51, l1, 10.5, cat["color"], "middle", 700)
+        if l2:
+            b += t(x + 54, 64, l2, 10.5, cat["color"], "middle", 700)
+        b += t(x + 54, 78, cat["tag"] if len(cat["tag"]) < 20 else "what teams must do", 8.5, MUTED, "middle")
+        if i < 4:
+            b += f'<line x1="{x + 110}" y1="47" x2="{x + 122}" y2="47" stroke="{MUTED}" stroke-width="1.6" marker-end="url(#arr)"/>'
     e = CATEGORIES["E"]
-    b += f'<rect x="8" y="112" width="610" height="42" rx="10" fill="{e["tint"]}" stroke="{e["color"]}" stroke-width="1.6"/>'
-    b += f'<g transform="translate(200,121)" color="{e["color"]}">{icon(e["icon"], 24)}</g>'
-    b += t(232, 138, "E. Day 2 operations — keeps all of it true", 11.5, e["color"], weight=700)
-    for i in range(4):
-        x = 76 + i * 158
-        b += f'<line x1="{x}" y1="110" x2="{x}" y2="82" stroke="{e["color"]}" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr)"/>'
-    return svg(160, b, w=626)
+    b += f'<rect x="6" y="118" width="604" height="40" rx="10" fill="{e["tint"]}" stroke="{e["color"]}" stroke-width="1.6"/>'
+    b += f'<g transform="translate(196,126)" color="{e["color"]}">{icon(e["icon"], 22)}</g>'
+    b += t(226, 142, "E. Day 2 operations — keeps all of it true", 11.5, e["color"], weight=700)
+    for i in range(1, 5):
+        x = 60 + i * 124
+        b += f'<line x1="{x}" y1="116" x2="{x}" y2="90" stroke="{e["color"]}" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr)"/>'
+    return svg(164, b, w=616)
 
 
 # --- Page ---------------------------------------------------------------------------------------------------------
@@ -470,7 +619,7 @@ svg text { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans
 .cover .band { display: flex; gap: 2mm; margin: 9mm 0 8mm; }
 .cover .band span { flex: 1; height: 3mm; border-radius: 2mm; }
 .cover .fig { margin: 2mm 0 6mm; }
-.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3mm; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; }
 .card { border: 1px solid; border-radius: 3mm; padding: 3mm; font-size: 8.4pt; line-height: 1.35; }
 .card h3 { margin: 1.5mm 0 1.5mm; font-size: 10pt; }
 .card .q { color: #334155; margin-bottom: 2mm; }
@@ -480,8 +629,8 @@ svg text { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans
 h2.page-title { font-size: 18pt; margin: 0 0 1mm; letter-spacing: -.01em; }
 .lede { color: #475569; margin: 0 0 5mm; }
 table.glance { width: 100%; border-collapse: collapse; }
-table.glance td { padding: 2.2mm 2mm; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
-table.glance tr.cat td { padding-top: 4mm; border-bottom: 2px solid; font-weight: 700; font-size: 10.5pt; }
+table.glance td { padding: 1.5mm 2mm; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
+table.glance tr.cat td { padding-top: 3mm; border-bottom: 2px solid; font-weight: 700; font-size: 10.5pt; }
 table.glance td.id { width: 11mm; font-weight: 700; }
 table.glance td.ic { width: 9mm; }
 table.glance td.name { width: 44mm; font-weight: 600; }
@@ -527,9 +676,9 @@ def render(cats):
            f"<style>{CSS}</style></head><body>"]
 
     # Cover
-    band = "".join(f'<span style="background:{CATEGORIES[k]["color"]}"></span>' for k in "ABCDE")
+    band = "".join(f'<span style="background:{CATEGORIES[k]["color"]}"></span>' for k in ORDER)
     cards = ""
-    for k in "ABCDE":
+    for k in ORDER:
         c = CATEGORIES[k]
         topics = " · ".join(f"{tid} {cats[k]['topics'][i]['title'].split(' (')[0]}"
                             for i, tid in enumerate(t_["id"] for t_ in cats[k]["topics"]))
@@ -543,15 +692,15 @@ def render(cats):
     out.append(f'<div class="cover"><div class="kicker">Cluster resource allocation · Platform team</div>'
                f'<h1>Operating<br>Principles</h1>'
                f'<div class="sub">The rules behind the allocation model — N+1, fairness between tenants, conservative '
-               f'allocation, requests and limits, replicas, HA and day 2 operations — grouped by what the platform '
-               f'team owns, enforces, requires and runs.</div>'
+               f'allocation, requests and limits, replicas, HA, day 2 operations and what it all costs — grouped by what '
+               f'the platform team owns, enforces, requires, runs and charges. On-prem clusters.</div>'
                f'<div class="band">{band}</div>{fig_overview()}<div class="cards">{cards}</div>'
                f'<div class="meta"><span>Source: docs/09-operating-principles.md</span><span>Printed {today}</span>'
                f'</div></div>')
 
     # At a glance
     rows = ""
-    for k in "ABCDE":
+    for k in ORDER:
         c = CATEGORIES[k]
         rows += (f'<tr class="cat" style="color:{c["color"]};border-color:{c["color"]}"><td colspan="5" '
                  f'style="border-color:{c["color"]}">{k}. {html.escape(c["name"])} — {html.escape(c["tag"])}</td></tr>')
@@ -566,7 +715,7 @@ def render(cats):
                f'today.</p><table class="glance">{rows}</table></section>')
 
     # Categories
-    for k in "ABCDE":
+    for k in ORDER:
         c = CATEGORIES[k]
         cat = cats[k]
         # The banner stays on the same page as the first topic's heading, rule and figure (class "keep").
@@ -618,7 +767,8 @@ def main():
     ap.add_argument("--html", help="also write the intermediate HTML here")
     args = ap.parse_args()
 
-    cats = parse(SOURCE)
+    with open(SOURCE, encoding="utf-8") as f:
+        cats = edit(parse(f.read() + "\n" + FINANCE_MD))
     missing = [tp["id"] for c in cats.values() for tp in c["topics"] if tp["id"] not in TOPICS]
     if set(cats) != set(CATEGORIES) or missing:
         sys.exit(f"Doc structure changed: categories {sorted(cats)}, topics without a rule/icon {missing}")

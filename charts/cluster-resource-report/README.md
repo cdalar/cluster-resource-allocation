@@ -135,8 +135,7 @@ rancher:
   isLocalCluster: true
   publishNames:
     enabled: true
-  deployDownstream:
-    enabled: true
+  deployDownstream:                   # on by default on the local cluster
     clusterGroup:                     # default target: a ClusterGroup the chart creates
       clusterNames:                   # Rancher cluster names; the default change-me matches none
         - onprem-prod-01
@@ -227,7 +226,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
 | `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
-| `rancher.deployDownstream.enabled` | `false` | Local cluster only: a Fleet HelmOp installs this chart on chosen downstream clusters (see above) |
+| `rancher.deployDownstream.enabled` | `true` | A Fleet HelmOp installs this chart on chosen downstream clusters (see above). Rendered only with `rancher.isLocalCluster` and Fleet HelmOps, skipped elsewhere; installs nothing while `clusterNames` is `[change-me]` |
 | `rancher.deployDownstream.clusterGroup.name` / `.create` / `.clusterNames` | `resource-report` / `true` / `[change-me]` | Default target: a Fleet ClusterGroup the chart creates, selecting these Rancher cluster names (`change-me` matches none). `create: false` or a plain name uses an existing group |
 | `rancher.deployDownstream.clusters` / `.clusterSelector` | `[]` / `null` | More targets: Fleet cluster names (each a name or `{name, values}`), a label selector |
 | `rancher.deployDownstream.workspace` / `.namespace` / `.releaseName` | `fleet-default` / `resource-report` / `resource-report` | Fleet workspace; release namespace (must equal `publishNames.targetNamespace`) and name downstream |

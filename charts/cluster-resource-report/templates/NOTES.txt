@@ -14,7 +14,13 @@ Open the dashboard (it is not exposed outside the cluster):
 Usage history is read from {{ .Values.prometheus.service }} via the API server proxy.
 If the dashboard shows "prometheus unavailable", check that Rancher Monitoring is installed or set prometheus.service / prometheus.url.
 {{- end }}
-{{- if dig "deployDownstream" "enabled" false .Values.rancher }}
+{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) .Values.rancher.isLocalCluster }}
+{{- if not (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
+
+rancher.deployDownstream is on, but this cluster has no Fleet HelmOps (fleet.cattle.io/v1alpha1 HelmOp: Fleet >= 0.12,
+Rancher 2.11+): nothing is deployed to downstream clusters. Install the chart there by hand, or set
+rancher.deployDownstream.enabled=false to hide this message.
+{{- else }}
 
 Downstream clusters get this chart through the Fleet HelmOp {{ dig "deployDownstream" "workspace" "fleet-default" .Values.rancher }}/{{ include "crr.fullname" . }}
 (Rancher: Continuous Delivery -> App Bundles). Check it with:
@@ -23,5 +29,6 @@ Downstream clusters get this chart through the Fleet HelmOp {{ dig "deployDownst
 {{- if and (kindIs "map" $g) (has "change-me" ($g.clusterNames | default list)) }}
 The ClusterGroup {{ $g.name | default "resource-report" }} still lists the placeholder change-me: set
 rancher.deployDownstream.clusterGroup.clusterNames to the Rancher cluster names that should get the chart.
+{{- end }}
 {{- end }}
 {{- end }}

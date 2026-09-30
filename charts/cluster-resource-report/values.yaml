@@ -51,9 +51,10 @@ rancher:
   # Fleet HelmOp (an "App Bundle" in Continuous Delivery), no GitRepo. Fleet keeps the downstream releases at this
   # release's chart version, so `helm upgrade` here upgrades them too; uninstalling this release (or disabling
   # this) makes Fleet uninstall them. Needs Fleet >= 0.12 (Rancher 2.11+). Plan: docs/08-fleet-deployment.md.
-  # Each key names the HelmOp field it sets.
+  # On by default, but only rendered with isLocalCluster and Fleet HelmOps; skipped on other clusters. It installs
+  # nothing until clusterGroup.clusterNames lists real clusters. Each key names the HelmOp field it sets.
   deployDownstream:
-    enabled: false
+    enabled: true
     workspace: fleet-default          # metadata.namespace: Fleet workspace of the downstream clusters
     # spec.targets -- where to install. A cluster matching any of these gets the chart. By default only the
     # ClusterGroup below, whose placeholder cluster change-me matches nothing: nothing is installed until you

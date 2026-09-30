@@ -67,7 +67,7 @@ only and needs `isLocalCluster`.
 ```yaml
 rancher:
   deployDownstream:
-    enabled: false
+    enabled: true                     # rendered only with isLocalCluster and Fleet HelmOps; skipped elsewhere
     workspace: fleet-default          # Fleet workspace of the downstream clusters (the local cluster is in fleet-local)
     # Where to install; a cluster matching any target gets the chart. By default only the ClusterGroup, whose
     # placeholder change-me matches nothing. With no target at all the chart fails and asks for one.
@@ -112,9 +112,9 @@ rancher:
 It follows the style of `templates/publish-names.yaml`: gated with `dig`, and the defaults merged in the template
 so that `--reuse-values` upgrades from older releases keep working.
 
-The template fails with a clear message when:
-- `isLocalCluster` is not set;
-- `fleet.cattle.io/v1alpha1/HelmOp` is not in `.Capabilities.APIVersions` ("needs Fleet ≥ 0.12 / Rancher 2.11+");
+`enabled` is `true` by default. The template renders nothing, without an error, when `isLocalCluster` is not
+set (downstream and plain clusters) or `fleet.cattle.io/v1alpha1/HelmOp` is not in `.Capabilities.APIVersions`
+(Fleet < 0.12 / Rancher < 2.11; `NOTES.txt` says so). It fails with a clear message when:
 - `clusters`, `clusterSelector` and `clusterGroup` are all empty;
 - the chart creates the group and `clusterGroup.clusterNames` is empty;
 - `publishNames` is enabled and its `targetNamespace` differs from `deployDownstream.namespace`.

@@ -108,14 +108,14 @@ Without it, the dashboard still works and shows project IDs.
 On the Rancher local cluster itself no secret is needed: `--set rancher.isLocalCluster=true` reads the names
 from that cluster and adds read access to those two resources to the chart's ClusterRole.
 
-**Without any token on downstream clusters (Fleet, no GitRepo):** on the local cluster, also set
-`rancher.publishNames.enabled=true`. A CronJob (own service account, may only create/update the one Bundle)
+**Without any token on downstream clusters (Fleet, no GitRepo):** on the local cluster this is on by default
+(`rancher.publishNames.enabled`, only rendered with `isLocalCluster`). A CronJob (own service account, may only create/update the one Bundle)
 publishes a Fleet Bundle containing the ConfigMap `rancher-project-names`, which Fleet copies to the downstream
 clusters. There, install with `rancher.namesConfigMap.enabled=true`:
 
 ```bash
 # Rancher local cluster
-helm upgrade --install ... --set rancher.isLocalCluster=true --set rancher.publishNames.enabled=true
+helm upgrade --install ... --set rancher.isLocalCluster=true
 # each downstream cluster
 helm upgrade --install ... --set rancher.namesConfigMap.enabled=true
 ```
@@ -132,10 +132,8 @@ be able to pull the chart and image. Design: [docs/08](../../docs/08-fleet-deplo
 ```yaml
 # values-local.yaml
 rancher:
-  isLocalCluster: true
-  publishNames:
-    enabled: true
-  deployDownstream:                   # on by default on the local cluster
+  isLocalCluster: true               # publishNames and deployDownstream are on by default here
+  deployDownstream: on the local cluster
     clusterGroup:                     # default target: a ClusterGroup the chart creates
       clusterNames:                   # Rancher cluster names; the default change-me matches none
         - onprem-prod-01
@@ -224,7 +222,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `prometheus.service` | Rancher Monitoring | `<ns>/<scheme>:<svc>:<port>`, queried via the API server service proxy; the chart grants `services/proxy` on exactly this service |
 | `prometheus.url` / `prometheus.tokenSecret` | `""` | Direct Prometheus URL (and optional bearer token secret) instead of the proxy |
 | `rancher.isLocalCluster` | `false` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) |
-| `rancher.publishNames.enabled` | `false` | Local cluster only: CronJob that publishes the names to downstream clusters as a Fleet Bundle |
+| `rancher.publishNames.enabled` | `true` | CronJob that publishes the names to downstream clusters as a Fleet Bundle. Rendered only with `rancher.isLocalCluster`, skipped elsewhere |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
 | `rancher.deployDownstream.enabled` | `true` | A Fleet HelmOp installs this chart on chosen downstream clusters (see above). Rendered only with `rancher.isLocalCluster` and Fleet HelmOps, skipped elsewhere; installs nothing while `clusterNames` is `[change-me]` |
 | `rancher.deployDownstream.clusterGroup.name` / `.create` / `.clusterNames` | `resource-report` / `true` / `[change-me]` | Default target: a Fleet ClusterGroup the chart creates, selecting these Rancher cluster names (`change-me` matches none). `create: false` or a plain name uses an existing group |

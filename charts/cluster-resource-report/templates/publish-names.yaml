@@ -1,7 +1,5 @@
-{{- if dig "publishNames" "enabled" false .Values.rancher }}
-{{- if not .Values.rancher.isLocalCluster }}
-{{- fail "rancher.publishNames.enabled needs rancher.isLocalCluster=true (it runs on the Rancher local cluster)" }}
-{{- end }}
+{{- /* on by default, but only on the Rancher local cluster; skipped elsewhere */}}
+{{- if and (dig "publishNames" "enabled" true .Values.rancher) .Values.rancher.isLocalCluster }}
 {{- /* CronJob names are limited to 52 characters */}}
 {{- $name := printf "%s-publish-names" (include "crr.fullname" . | trunc 38 | trimSuffix "-") }}
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}

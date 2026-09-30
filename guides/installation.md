@@ -136,7 +136,7 @@ Create `values-local.yaml`:
 rancher:
   isLocalCluster: true        # read Rancher clusters, nodes and Project names from this cluster
   publishNames:
-    enabled: true             # publish Project names to all downstream clusters (Fleet Bundle)
+    enabled: true             # the default: publish Project names to all downstream clusters (Fleet Bundle)
 planner:
   enabled: true               # allocation planner (budgets, rates, costs)
 capacityPlanner:
@@ -494,7 +494,6 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Prometheus queries time out on a large cluster | 7 days at 5-minute steps is heavy | `collection.step: 15m` |
 | No **Resource report** entry in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
 | Chart fails: "ingress was removed" or "service.type was removed" | Values from an older release that exposed the dashboard | Remove `ingress.*` and `service.type` from your values; open the dashboard through Rancher |
-| Chart fails: "publishNames.enabled needs rancher.isLocalCluster=true" | Name publisher enabled on a downstream cluster | Only enable it on the local cluster |
 | Chart fails: "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup" | Fleet deployment enabled without a target | Name the clusters, or set a selector or group; `clusterSelector: {}` = every cluster in the workspace |
 | Chart fails: "rancher.deployDownstream needs Fleet HelmOps" | Fleet older than 0.12, or not the Rancher local cluster | Upgrade Rancher (2.11+), or install downstream by hand (option B) |
 | Cluster added to or removed from the ClusterGroup, nothing happens | Fleet re-matches groups only when a cluster changes (agent check-in, up to ~15 min) | Wait, or **Force Update** the App Bundle in Continuous Delivery (see Step 3, option A) |

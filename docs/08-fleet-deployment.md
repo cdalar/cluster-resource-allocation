@@ -93,11 +93,8 @@ Example for the local cluster, extending `values-local.yaml`:
 
 ```yaml
 rancher:
-  isLocalCluster: true
-  publishNames:
-    enabled: true
+  isLocalCluster: true                # publishNames and deployDownstream are on by default here
   deployDownstream:
-    enabled: true
     clusterGroup:
       clusterNames: [onprem-prod-01, onprem-test-01]
     values:

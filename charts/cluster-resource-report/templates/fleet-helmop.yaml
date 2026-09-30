@@ -4,14 +4,14 @@
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
 {{- $d := merge (deepCopy .Values.rancher.deployDownstream) (dict "workspace" "fleet-default" "clusters" list "clusterGroup" "" "namespace" "resource-report" "releaseName" "resource-report" "helmSecretName" "" "insecureSkipTLSVerify" false "values" dict) }}
 {{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://ghcr.io/cdalar/charts/cluster-resource-report" "version" "") }}
-{{- if dig "publishNames" "enabled" false .Values.rancher }}
+{{- if dig "publishNames" "enabled" true .Values.rancher }}
 {{- $ns := dig "publishNames" "targetNamespace" "resource-report" .Values.rancher }}
 {{- if ne $ns $d.namespace }}
 {{- fail (printf "rancher.deployDownstream.namespace (%s) must equal rancher.publishNames.targetNamespace (%s): the downstream release reads the names ConfigMap from its own namespace" $d.namespace $ns) }}
 {{- end }}
 {{- end }}
 {{- /* downstream values: defaults from this release, then deployDownstream.values, then the local-only settings off */}}
-{{- $base := dict "image" (dict "repository" .Values.image.repository "pullPolicy" .Values.image.pullPolicy) "imagePullSecrets" (.Values.imagePullSecrets | default list) "rancher" (dict "namesConfigMap" (dict "enabled" (dig "publishNames" "enabled" false .Values.rancher))) }}
+{{- $base := dict "image" (dict "repository" .Values.image.repository "pullPolicy" .Values.image.pullPolicy) "imagePullSecrets" (.Values.imagePullSecrets | default list) "rancher" (dict "namesConfigMap" (dict "enabled" (dig "publishNames" "enabled" true .Values.rancher))) }}
 {{- $off := dict "rancher" (dict "isLocalCluster" false "publishNames" (dict "enabled" false) "deployDownstream" (dict "enabled" false)) "planner" (dict "enabled" false) "capacityPlanner" (dict "enabled" false) }}
 {{- $common := mergeOverwrite (deepCopy $base) (deepCopy ($d.values | default dict)) (deepCopy $off) }}
 {{- /* Fleet uses the first target that matches a cluster: named clusters (with their own values) come first */}}

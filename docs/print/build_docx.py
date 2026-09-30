@@ -3,7 +3,7 @@
 
 One .docx holds the text, tables and diagrams: every Mermaid block is rendered to a PNG and embedded, so Confluence's
 Word import (Data Center: page ⋯ → Import Word document) creates the page and its image attachment in one step.
-Links to other repo files point to GitHub, links within the doc stay as anchors. Needs `mmdc` (npm
+Links to other files become plain text, links within the doc stay as anchors. Needs `mmdc` (npm
 @mermaid-js/mermaid-cli) and `pandoc` on the PATH; otherwise standard library only.
 
     python3 docs/print/build_docx.py                       # writes docs/print/operating-principles.docx
@@ -12,7 +12,6 @@ Links to other repo files point to GitHub, links within the doc stay as anchors.
 
 import argparse
 import os
-import posixpath
 import re
 import shutil
 import subprocess
@@ -23,10 +22,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 SOURCE = os.path.join(REPO, "docs", "09-operating-principles.md")
 OUTPUT = os.path.join(HERE, "operating-principles.docx")
-GITHUB = "https://github.com/cdalar/cluster-resource-allocation/blob/main/"
 
 MERMAID = re.compile(r"^```mermaid\n(.*?)^```\n", re.S | re.M)
-LINK = re.compile(r"\]\(([^)#\s]+)(#[^)\s]*)?\)")
+LINK = re.compile(r"(?<!!)\[([^\]]+)\]\((?!#)[^)\s]+\)")
 
 
 def need(tool, hint):
@@ -45,23 +43,14 @@ def render_mermaid(text, tmp):
         with open(src, "w", encoding="utf-8") as f:
             f.write(m.group(1))
         subprocess.run(["mmdc", "-q", "-i", src, "-o", png, "-s", "2", "-b", "white"], check=True)
-        return f"![]({png})\n"
+        return f"![](diagram-{count}.png)\n"
 
     return MERMAID.sub(one, text)
 
 
-def absolute_links(text, source):
-    """Point relative links to other repo files at GitHub; the files aren't in Confluence."""
-    base = posixpath.relpath(os.path.dirname(os.path.abspath(source)), REPO).replace(os.sep, "/")
-
-    def one(m):
-        target, anchor = m.group(1), m.group(2) or ""
-        if re.match(r"^[a-z]+:", target):
-            return m.group(0)
-        path = posixpath.normpath(posixpath.join(base, target))
-        return f"]({GITHUB}{path}{anchor})"
-
-    return LINK.sub(one, text)
+def drop_links(text):
+    """Keep only the text of links that leave the doc; the targets aren't in Confluence. In-doc anchors stay."""
+    return LINK.sub(r"\1", text)
 
 
 def main():
@@ -78,12 +67,12 @@ def main():
         text = f.read()
 
     with tempfile.TemporaryDirectory() as tmp:
-        text = render_mermaid(absolute_links(text, args.source), tmp)
+        text = render_mermaid(drop_links(text), tmp)
         md = os.path.join(tmp, "doc.md")
         with open(md, "w", encoding="utf-8") as f:
             f.write(text)
         # gfm: same heading anchors as GitHub, so the in-doc links keep working.
-        subprocess.run(["pandoc", "-f", "gfm", "-t", "docx", md, "-o", os.path.abspath(out)], check=True)
+        subprocess.run(["pandoc", "-f", "gfm", "-t", "docx", md, "-o", os.path.abspath(out)], check=True, cwd=tmp)
     print(out)
 
 

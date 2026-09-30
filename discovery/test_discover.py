@@ -158,6 +158,26 @@ class NodeFailure(unittest.TestCase):
         self.assertEqual((c["alloc_cpu_n1"], c["alloc_mem_gib_n1"]), (2, 8))  # 6 - 4, 24 - 16
         self.assertEqual((c["cpu_for_projects_n1"], c["mem_gib_for_projects_n1"]), (1.5, 7))  # minus system
 
+    def test_requests_on_excluded_nodes_are_not_on_capacity(self):
+        # system pods on a tainted control-plane node (apiserver, etcd, DaemonSets that tolerate everything) are
+        # requests, but not on the schedulable nodes: they don't shrink the room for projects or raise "% requested"
+        from discover import summarize_cluster
+        def node(cpu, mem, taint=None):
+            return {"spec": {"taints": [{"key": "node-role.kubernetes.io/control-plane", "effect": taint}] if taint else []},
+                    "status": {"allocatable": {"cpu": str(cpu), "memory": f"{mem}Gi"}}}
+        nodes = [node(4, 16), node(4, 16), node(8, 32, taint="NoSchedule")]
+        rows = []
+        for cat, cpu, mem, cpu_off, mem_off in (("system", 2.0, 4.0, 1.5, 3.0), ("tenant", 1.0, 2.0, 0.0, 0.0)):
+            r = {k: 0.0 for k in NS_NUMERIC}
+            r.update(category=cat, cpu_requests=cpu, mem_requests_gib=mem,
+                     cpu_requests_excluded_nodes=cpu_off, mem_requests_excluded_nodes_gib=mem_off)
+            rows.append(r)
+        c = summarize_cluster("c1", "ctx", nodes, rows, None)
+        self.assertEqual((c["alloc_cpu_schedulable"], c["largest_node_cpu"]), (8, 4))
+        self.assertEqual((c["cpu_requests_system"], c["cpu_requests_excluded_system"]), (2.0, 1.5))
+        self.assertEqual((c["cpu_for_projects_n1"], c["mem_gib_for_projects_n1"]), (3.5, 15))  # 4 - 0.5, 16 - 1
+        self.assertEqual(c["cpu_requests_pct_of_schedulable"], 18.8)  # (3 - 1.5) / 8
+
     def test_single_node_leaves_nothing(self):
         from discover import summarize_cluster
         c = summarize_cluster("c1", "ctx", [{"status": {"allocatable": {"cpu": "2", "memory": "8Gi"}}}], [], None)

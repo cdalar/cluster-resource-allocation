@@ -126,33 +126,55 @@ def _qty(value, divisor=1):
     return round(discover.parse_quantity(value) / divisor, 3) if value else None
 
 
+def _excluded_reason(internal_spec):
+    """Why a node doesn't count as capacity for pods (as discover.node_schedulable decides), or None."""
+    if internal_spec.get("unschedulable"):
+        return "cordoned"
+    for t in internal_spec.get("taints") or []:
+        if t.get("effect") in ("NoSchedule", "NoExecute"):
+            return f'taint {t.get("key", "")}:{t["effect"]}'
+    return None
+
+
 def parse_inventory(clusters_json, projects_json, nodes_json=None):
-    """Clusters (capacity, requests, node sizes) and projects (current quota) from Rancher's management objects."""
-    node_sizes = {}
+    """Clusters (capacity, requests, node sizes) and projects (current quota) from Rancher's management objects.
+
+    Capacity counts the schedulable nodes only, like the dashboard: nodes with a NoSchedule / NoExecute taint
+    (dedicated control-plane and etcd nodes) and cordoned nodes are left out of the allocatable and of the nodes
+    that can fail, and listed in excluded_nodes. Rancher's cluster allocatable includes them, so it is only used
+    when Rancher reports no nodes for the cluster."""
+    node_sizes, excluded, seen = {}, {}, set()
     for n in nodes_json or []:
         st, spec = n.get("status") or {}, n.get("spec") or {}
-        if (spec.get("internalNodeSpec") or {}).get("unschedulable"):
-            continue  # cordoned: already not usable for pods, so not part of what can fail over
+        cluster_id, name = n["metadata"]["namespace"], st.get("nodeName") or n["metadata"]["name"]
+        seen.add(cluster_id)
+        reason = _excluded_reason(spec.get("internalNodeSpec") or {})
+        if reason:
+            excluded.setdefault(cluster_id, []).append({"name": name, "reason": reason})
+            continue
         alloc = (st.get("internalNodeStatus") or {}).get("allocatable") or {}
-        node_sizes.setdefault(n["metadata"]["namespace"], []).append({
-            "name": st.get("nodeName") or n["metadata"]["name"],
+        node_sizes.setdefault(cluster_id, []).append({
+            "name": name,
             "cpu": _qty(alloc.get("cpu")) or 0.0,
             "mem_gib": _qty(alloc.get("memory"), discover.GIB) or 0.0,
         })
     clusters = []
     for c in clusters_json:
-        st = c.get("status") or {}
+        st, cid = c.get("status") or {}, c["metadata"]["name"]
         alloc, req = st.get("allocatable") or {}, st.get("requested") or {}
+        sizes = sorted(node_sizes.get(cid, []), key=lambda x: x["name"])
+        known = cid in seen
         clusters.append({
-            "id": c["metadata"]["name"],
-            "name": (c.get("spec") or {}).get("displayName") or c["metadata"]["name"],
-            "nodes": st.get("nodeCount"),
-            "alloc_cpu": _qty(alloc.get("cpu")),
-            "alloc_mem_gib": _qty(alloc.get("memory"), discover.GIB),
+            "id": cid,
+            "name": (c.get("spec") or {}).get("displayName") or cid,
+            "nodes": len(sizes) if known else st.get("nodeCount"),
+            "alloc_cpu": round(sum(x["cpu"] for x in sizes), 3) if known else _qty(alloc.get("cpu")),
+            "alloc_mem_gib": round(sum(x["mem_gib"] for x in sizes), 3) if known else _qty(alloc.get("memory"), discover.GIB),
             "requested_cpu": _qty(req.get("cpu")),
             "requested_mem_gib": _qty(req.get("memory"), discover.GIB),
-            # None when Rancher reported no nodes for it (then N+1 can't be computed)
-            "node_sizes": sorted(node_sizes.get(c["metadata"]["name"], []), key=lambda x: x["name"]) or None,
+            # None when Rancher reported no schedulable nodes for it (then N+1 can't be computed)
+            "node_sizes": sizes or None,
+            "excluded_nodes": sorted(excluded.get(cid, []), key=lambda x: x["name"]),
             "platform_measured_cpu": None,
             "platform_measured_mem_gib": None,
         })
@@ -188,7 +210,8 @@ def add_report_requests(inventory, report, system_project_re=discover.DEFAULT_SY
     """Current requests per project, and the measured platform reserve, from this collector's own report.
 
     Both only for the cluster the collector scans: the platform reserve is what the report classes as `system`
-    (Rancher's System project, *platform* projects and the system namespaces: cattle-*, kube-system, ...).
+    (Rancher's System project, *platform* projects and the system namespaces: cattle-*, kube-system, ...), without
+    what runs on excluded nodes (tainted control plane, cordoned), since their capacity isn't counted either.
     Projects whose name matches `system_project_re` are marked `system`: they are in the platform reserve, so the
     page hides them like Rancher's own projects instead of planning a quota for them as well.
     """
@@ -198,8 +221,10 @@ def add_report_requests(inventory, report, system_project_re=discover.DEFAULT_SY
     system = [p for p in report.get("projects", []) if p.get("category") == "system"]
     for c in inventory["clusters"]:
         if system and (c["id"] in scanned or c["name"] in scanned):
-            c["platform_measured_cpu"] = round(sum(p["cpu_requests"] for p in system), 3)
-            c["platform_measured_mem_gib"] = round(sum(p["mem_requests_gib"] for p in system), 3)
+            c["platform_measured_cpu"] = round(sum(
+                p["cpu_requests"] - p.get("cpu_requests_excluded_nodes", 0.0) for p in system), 3)
+            c["platform_measured_mem_gib"] = round(sum(
+                p["mem_requests_gib"] - p.get("mem_requests_excluded_nodes_gib", 0.0) for p in system), 3)
     by_key = {}
     for p in (report or {}).get("projects", []):
         if p.get("project_id"):

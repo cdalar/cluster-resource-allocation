@@ -74,10 +74,11 @@ Key columns:
 | `cpu_usage_{avg,p95,max}`, `mem_usage_{avg,p95,max}_gib` | Namespace-total usage over `--window` (Prometheus) |
 | `cpu_requests_peak`, `mem_requests_peak_gib` | Max Σ requests over `--window` (captures HPA scale-outs and rollouts) |
 | `cpu_request_efficiency_pct`, `mem_request_efficiency_pct` | P95 usage / requests (projects.csv; falls back to snapshot without Prometheus) |
-| `*_pct_of_schedulable` | Scheduled requests / allocatable of schedulable nodes (clusters.csv) |
+| `*_pct_of_schedulable` | Requests on schedulable nodes / allocatable of schedulable nodes (clusters.csv). *Schedulable* = not cordoned and no `NoSchedule` / `NoExecute` taint, so dedicated control-plane and etcd nodes are not capacity |
+| `cpu_requests_excluded_nodes`, `mem_requests_excluded_nodes_gib` | Part of the requests on nodes that are not schedulable (tainted control plane, cordoned): counted in requests and quota, but not against the schedulable nodes; `*_excluded_system*` = the System part of it (clusters.csv) |
 | `largest_node_cpu`, `largest_node_mem_gib` | Allocatable of the largest schedulable node (clusters.csv) |
 | `alloc_cpu_n1`, `alloc_mem_gib_n1` | N+1: schedulable allocatable minus the largest node, i.e. what is left if it fails |
-| `cpu_for_projects_n1`, `mem_gib_for_projects_n1` | N+1 capacity minus the `system` (platform component) requests: what projects can safely have. The dashboard shows it as the dashed line in *Cluster capacity*, the text under it and the *Room for projects (N+1)* tile |
+| `cpu_for_projects_n1`, `mem_gib_for_projects_n1` | N+1 capacity minus the `system` (platform component) requests on schedulable nodes: what projects can safely have. The dashboard shows it as the dashed line in *Cluster capacity*, the text under it and the *Room for projects (N+1)* tile |
 
 ## Deriving a first quota (Phase 2)
 
@@ -149,10 +150,12 @@ User guide with every parameter explained: [guides/allocation-planner.md](../gui
   `projects.management.cattle.io` (current quota). Current requests per project come from this collector's own
   report, so only for the cluster it scans.
 - **Checks:** planned cost vs. budget per project; planned quota vs. each cluster's **limit for projects** =
-  min(allocatable − the environment's N largest nodes (`nodes.management.cattle.io`) − platform reserve,
+  min(allocatable − the environment's N largest nodes − platform reserve,
   max % × (allocatable − platform reserve)), per CPU and memory; projects missing in Rancher; clusters without
-  environment/platform/platform reserve. The platform reserve is measured (`system` requests) for the cluster the
-  collector scans and entered for the others.
+  environment/platform/platform reserve. Allocatable and the node sizes come from the schedulable nodes in
+  `nodes.management.cattle.io` (tainted control-plane / etcd and cordoned nodes are listed as excluded; Rancher's
+  cluster total is used only when it reports no nodes). The platform reserve is measured (`system` requests on
+  schedulable nodes) for the cluster the collector scans and entered for the others.
 - **Storage:** with `--plan-configmaps NAMESPACE/PREFIX` (the chart sets it), a ConfigMap `PREFIX-planner` in the
   cluster the server runs in: current plan and the last 30 versions gzip-compressed in `binaryData`, trimmed to
   stay below the 1 MiB ConfigMap limit. It needs `get`/`update` on that ConfigMap only (`create` if it doesn't

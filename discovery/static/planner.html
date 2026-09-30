@@ -193,7 +193,7 @@ details summary { cursor: pointer; }
     <div class="banner" style="margin:12px 0">
       <b>How much each cluster can give to projects</b> (CPU and memory separately):
       <ol class="explain" style="margin:6px 0 4px; padding-left:20px">
-        <li><b>Allocatable</b> of the schedulable nodes,</li>
+        <li><b>Allocatable</b> of the schedulable nodes — not nodes with a NoSchedule / NoExecute taint (dedicated control-plane and etcd nodes) or cordoned ones; the node count shows them as <i>excluded</i>,</li>
         <li><b>minus the largest node(s)</b> — N+1: if the environment tolerates N node failures (prod: 1), all project quota must still fit after the N largest nodes are gone,</li>
         <li><b>minus the platform reserve</b> — what platform components (cattle-*, kube-system, monitoring, ingress, storage …) request. They are in no project quota but take capacity first. It is <i>measured</i> for the cluster this planner runs on; for other clusters enter the <i>System</i> requests shown in that cluster's resource dashboard, or use its total requests now as a safe upper bound,</li>
         <li><b>and at most the environment's max %</b> of allocatable minus the platform reserve (room for rollouts).</li>
@@ -524,12 +524,14 @@ function renderClusters() {
     const cpuIn = reserveIn("platform_cpu", c.platform_measured_cpu, "CPU"), memIn = reserveIn("platform_mem_gib", c.platform_measured_mem_gib, "GiB");
     const useRequests = c.requested_cpu != null && h("button", {type: "button", class: "small", title: "the cluster's total requests now: a safe upper bound for the platform reserve",
       onclick: () => { cfg.platform_cpu = c.requested_cpu; cfg.platform_mem_gib = c.requested_mem_gib; cpuIn.value = c.requested_cpu; memIn.value = c.requested_mem_gib; markDirty(); }}, "Use requests now");
-    const nodes = c.node_sizes ? `${c.node_sizes.length}` : fmt(c.nodes, 0);
+    const excluded = c.excluded_nodes || [];
+    const nodes = (c.node_sizes ? `${c.node_sizes.length}` : fmt(c.nodes, 0)) + (excluded.length ? ` (+${excluded.length} excluded)` : "");
     return h("tr", {"data-cluster": c.id},
       h("td", {}, c.name, c.id !== c.name && h("span", {class: "muted"}, " " + c.id)),
       h("td", {class: "l"}, select(Object.keys(s.envs), cfg.env, (v) => { cfg.env = v; markDirty(); renderProjects(); }, `${c.name} environment`)),
       h("td", {class: "l money"}, select(Object.keys(s.platforms || {}), cfg.platform, (v) => { cfg.platform = v; markDirty(); renderProjects(); }, `${c.name} platform`)),
-      h("td", {title: c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown"}, nodes),
+      h("td", {title: (c.node_sizes ? c.node_sizes.map((n) => `${n.name}: ${fmt(n.cpu, 2)} CPU / ${fmt(n.mem_gib)} GiB`).join("\n") : "node sizes unknown") +
+        (excluded.length ? "\n\nNot counted as capacity (no regular pods):\n" + excluded.map((n) => `${n.name}: ${n.reason}`).join("\n") : "")}, nodes),
       h("td", {}, pair(c.alloc_cpu, c.alloc_mem_gib)),
       h("td", {"data-k": "failover"}),
       h("td", {class: "l"}, h("span", {class: "conv"}, cpuIn, "/", memIn, h("span", {class: "muted", "data-k": "source"}), useRequests)),

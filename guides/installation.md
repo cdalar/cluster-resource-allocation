@@ -76,9 +76,21 @@ Every release is published on GHCR and copied to Docker Hub, public, with no log
 | **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.6.1` |
 | **Image** | `ghcr.io/cdalar/cluster-resource-report` | `docker.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
-Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub instead
-(e.g. when your registry proxy only mirrors Docker Hub), set `CHART` to the Docker Hub location below and add
-`image.repository: docker.io/cdalar/cluster-resource-report` to the values files.
+Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub only
+(e.g. when the cluster has no access to `ghcr.io`, or your registry proxy only mirrors Docker Hub), set `CHART` to
+the Docker Hub location below and add to the values files:
+
+```yaml
+image:
+  repository: docker.io/cdalar/cluster-resource-report
+rancher:
+  deployDownstream:           # local cluster: where Fleet fetches the chart for the downstream clusters
+    chart:
+      repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
+```
+
+The downstream releases Fleet installs take `image.repository` from the local release, so they pull from Docker
+Hub too. Fleet fetches the chart on the local cluster; the downstream clusters only pull the image.
 
 Available versions: the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the
 repository, the chart's [GHCR package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)

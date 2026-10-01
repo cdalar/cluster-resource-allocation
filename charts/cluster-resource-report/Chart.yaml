@@ -1,5 +1,5 @@
 apiVersion: v2
-name: cluster-resource-report
+name: cluster-resource-report-chart
 description: Collects resource requests, limits and usage per Rancher Project and namespace, and serves a web dashboard.
 type: application
 version: 0.6.2

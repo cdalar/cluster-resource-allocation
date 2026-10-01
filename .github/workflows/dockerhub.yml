@@ -2,7 +2,8 @@ name: dockerhub
 
 # Copies a release from GHCR to Docker Hub (GHCR stays the source; nothing is rebuilt):
 #   image  ghcr.io/<owner>/cluster-resource-report:X.Y.Z        -> docker.io/<ns>/cluster-resource-report:X.Y.Z, X.Y, latest
-#   chart  ghcr.io/<owner>/charts/cluster-resource-report:X.Y.Z -> docker.io/<ns>/cluster-resource-report-chart:X.Y.Z
+#   chart  ghcr.io/<owner>/charts/cluster-resource-report-chart:X.Y.Z -> docker.io/<ns>/cluster-resource-report-chart:X.Y.Z
+#          (up to 0.6.2 the chart was named cluster-resource-report: ghcr.io/<owner>/charts/cluster-resource-report)
 # The chart gets its own repository because image and chart tags (X.Y.Z) would collide in one.
 # Called by image.yml and chart.yml on release tags; run manually to copy an existing release.
 # Needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Docker Hub access token, Read & Write); without them
@@ -72,7 +73,9 @@ jobs:
         if: env.DOCKERHUB_TOKEN != '' && inputs.what != 'image'
         run: |
           version="${TAG#v}"
-          crane copy "$SRC/charts/cluster-resource-report:$version" "$DST/cluster-resource-report-chart:$version"
+          src="$SRC/charts/cluster-resource-report-chart:$version"
+          crane digest "$src" > /dev/null 2>&1 || src="$SRC/charts/cluster-resource-report:$version"   # <= 0.6.2
+          crane copy "$src" "$DST/cluster-resource-report-chart:$version"
 
       - name: Check
         if: env.DOCKERHUB_TOKEN != ''

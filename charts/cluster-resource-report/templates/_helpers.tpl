@@ -1,12 +1,17 @@
+{{/* The name used in object names and selector labels. Fixed to cluster-resource-report: the chart was published
+     as cluster-resource-report up to 0.6.2 and is cluster-resource-report-chart since 0.6.3 (one tile in Rancher
+     Apps with the Docker Hub repository). Keeping this name keeps object names, the Deployment selector (immutable)
+     and the plan ConfigMaps of existing installs unchanged. */}}
 {{- define "crr.name" -}}
-{{- .Chart.Name | trunc 63 | trimSuffix "-" -}}
+cluster-resource-report
 {{- end -}}
 
 {{- define "crr.fullname" -}}
-{{- if contains .Chart.Name .Release.Name -}}
+{{- $name := include "crr.name" . -}}
+{{- if contains $name .Release.Name -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 

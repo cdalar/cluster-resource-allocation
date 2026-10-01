@@ -227,7 +227,7 @@ a logged-in browser save a plan through Rancher's proxy.
 
 | Value | Default | Description |
 |---|---|---|
-| `registry` | `""` (Docker Hub) | Registry for the image and the Fleet HelmOp's chart, with Docker Hub's paths: a proxy or mirror such as `repo.development.int` |
+| `registry` | `docker.io` (Docker Hub) | Registry for the image and the Fleet HelmOp's chart, with Docker Hub's paths: a proxy or mirror such as `repo.development.int` |
 | `image.repository` / `image.tag` | `""` (`<registry>/cdalar/cluster-resource-report`) / appVersion | Image built from `discovery/Dockerfile`; set the repository to override `registry` |
 | `imagePullSecrets` | `[]` | For a private registry |
 | `clusterName` | `""` | Display name; default is the Rancher cluster name (with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`) or `in-cluster` |

@@ -84,7 +84,7 @@ rancher:
     namespace: resource-report        # release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report
     chart:
-      repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart   # Docker Hub; or GHCR / an internal mirror
+      repo: ""                        # "" = oci://<registry>/cdalar/cluster-resource-report-chart (Docker Hub by default)
       version: ""                     # default: this chart's version
     helmSecretName: ""                # Fleet secret (in the workspace) for a private registry
     insecureSkipTLSVerify: false
@@ -137,7 +137,7 @@ It renders one `HelmOp`:
 The default downstream values are (the local-only settings `isLocalCluster`, `publishNames`, `deployDownstream`,
 `planner` and `capacityPlanner` are always switched off after `deployDownstream.values` is applied):
 - `rancher.namesConfigMap.enabled`: equal to `publishNames.enabled`;
-- `image.repository`, `image.pullPolicy` and `imagePullSecrets`: copied from the local values, so an air-gapped
+- `registry`, `image.repository`, `image.pullPolicy` and `imagePullSecrets`: copied from the local values, so an air-gapped
   mirror is configured once.
 
 `image.tag` is left out on purpose. Downstream uses its own chart's appVersion, which is the same version.

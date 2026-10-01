@@ -99,7 +99,15 @@ rancher:
   navLink:
     enabled: true
     label: Resource report
-    group: ""          # optional menu group, e.g. "Monitoring"
+    # Menu group: the side menu shows one "Resource Allocation" entry, which opens a page with a card per link
+    # (dashboard, and on the local cluster the two planners). "" = each link directly in the side menu.
+    group: Resource Allocation
+    # Card images (spec.iconSrc): "" = the chart's built-in icon (icons/*.svg, embedded as a data: URI), or your
+    # own image URL / data: URI (JPEG, PNG or SVG; Rancher suggests 21 px high, at most 20 KB).
+    icons:
+      report: ""
+      planner: ""
+      capacity: ""
   # Downstream clusters, alternative: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
   # Rancher Project / cluster display names instead of IDs (p-xxxxx). Needs read on
   # projects.management.cattle.io and clusters.management.cattle.io.

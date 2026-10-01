@@ -11,6 +11,7 @@ spec:
   {{- with dig "navLink" "group" "" .Values.rancher }}
   group: {{ . | quote }}
   {{- end }}
+  iconSrc: {{ include "crr.navLinkIcon" (list . "report") | quote }}
   description: Requests, limits and usage per Rancher Project and namespace
   target: _blank
   toService:
@@ -32,6 +33,7 @@ spec:
   {{- with dig "navLink" "group" "" .Values.rancher }}
   group: {{ . | quote }}
   {{- end }}
+  iconSrc: {{ include "crr.navLinkIcon" (list . "planner") | quote }}
   description: Plan budgets and quotas per project and cluster (planning only, nothing is applied)
   target: _blank
   toService:
@@ -54,6 +56,7 @@ spec:
   {{- with dig "navLink" "group" "" .Values.rancher }}
   group: {{ . | quote }}
   {{- end }}
+  iconSrc: {{ include "crr.navLinkIcon" (list . "capacity") | quote }}
   description: Plan CPU and memory per project and cluster, without money (planning only, nothing is applied)
   target: _blank
   toService:

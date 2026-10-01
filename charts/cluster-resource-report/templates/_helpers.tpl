@@ -41,6 +41,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
 {{- end -}}
 
+{{/* iconSrc of a NavLink: rancher.navLink.icons.<name> when set (an image URL or data: URI), else the chart's
+     icons/<name>.svg as a data: URI, so it also works on air-gapped clusters. Call with (list . "<name>"). */}}
+{{- define "crr.navLinkIcon" -}}
+{{- $root := index . 0 }}{{- $name := index . 1 -}}
+{{- dig "navLink" "icons" $name "" $root.Values.rancher | default (printf "data:image/svg+xml;base64,%s" ($root.Files.Get (printf "icons/%s.svg" $name) | b64enc)) -}}
+{{- end }}
+
 {{/* Non-empty on the Rancher local cluster. rancher.isLocalCluster: true / false, or auto (the default): local when
      the cluster serves Rancher's Project API and runs the Rancher server (Deployment cattle-system/rancher).
      `lookup` sees nothing in `helm template` or a client-side dry run, so auto then means "not local". */}}

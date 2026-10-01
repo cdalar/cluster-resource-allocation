@@ -336,6 +336,8 @@ so for option B repeat it on each downstream cluster.
      `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` (not the parent `oci://ghcr.io/cdalar/charts`: it can't
      be listed anonymously and fails with *403 Forbidden*).
    - Authentication: none for the public registries; for your proxy, if it needs a login, a basic-auth secret.
+   - For a self-signed or internal certificate on the proxy: tick **Skip TLS verification**
+     (`spec.insecureSkipTLSVerify` on the ClusterRepo), or add its CA bundle.
    - **Create**, and wait until the repository is *Active*.
 2. **Apps → Charts**, pick the repository in the filter, open **Cluster Resource Report**
    (`cluster-resource-report-chart`) and click **Install**.
@@ -347,6 +349,9 @@ so for option B repeat it on each downstream cluster.
    - **Rancher local cluster:** `auto` detects it; keep it.
    - **Downstream clusters (Fleet):** replace `change-me` with the Rancher names of the clusters that should get
      the chart (local cluster only).
+   - **Skip TLS verification for the chart download (Fleet):** on for a registry with a self-signed or internal
+     certificate. It sets `insecureSkipTLSVerify` on the App Bundle; the nodes pulling the image need the
+     registry's CA (or `insecure_skip_verify`) in containerd's `registries.yaml`.
    - Planners, Prometheus and the usage window are on by default.
    Anything else (e.g. `imagePullSecrets`, values for the downstream releases) goes in **Edit YAML**, as in
    `values-local.yaml`.

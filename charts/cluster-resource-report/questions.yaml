@@ -32,6 +32,15 @@ questions:
     type: boolean
     default: true
     group: Downstream clusters
+  - variable: rancher.deployDownstream.insecureSkipTLSVerify
+    label: Skip TLS verification for the chart download (Fleet)
+    description: >-
+      For a registry with a self-signed or internal certificate. Only Fleet's chart download; the image is pulled
+      by containerd on the nodes, which needs the registry in its own configuration (registries.yaml).
+    type: boolean
+    default: false
+    group: Downstream clusters
+    show_if: "rancher.deployDownstream.enabled=true"
   - variable: planner.enabled
     label: Allocation planner
     description: Budgets and quotas per project and cluster (local cluster only).

@@ -63,7 +63,7 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 | Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
 
 To release, set `version` and `appVersion` in `Chart.yaml` to the same number, push that commit, then tag it:
-`git tag v0.6.1 && git push origin v0.6.1`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
+`git tag v0.6.2 && git push origin v0.6.2`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
 default image tag is its `appVersion`. The dashboard and planners show the chart version and image tag under their title
 (`CHART_VERSION` / `IMAGE_TAG`, set by the chart).
 
@@ -71,22 +71,22 @@ The images and charts are public, so clusters with internet access pull them wit
 
 Clusters without internet access (most on-prem clusters) pull from an internal registry instead: set `registry`
 to a proxy of Docker Hub (Artifactory, Nexus, Harbor), or mirror the image (e.g. `crane copy
-docker.io/cdalar/cluster-resource-report:0.6.1 registry.example.com/platform/cluster-resource-report:0.6.1`) and
+docker.io/cdalar/cluster-resource-report:0.6.2 registry.example.com/platform/cluster-resource-report:0.6.2`) and
 set `image.repository`.
 
 #### Build locally
 
 ```bash
 cd discovery
-docker build -t registry.example.com/platform/cluster-resource-report:0.6.1 .
-docker push registry.example.com/platform/cluster-resource-report:0.6.1
+docker build -t registry.example.com/platform/cluster-resource-report:0.6.2 .
+docker push registry.example.com/platform/cluster-resource-report:0.6.2
 # KUBECTL_VERSION is a build arg
 ```
 
 ## 2. Install
 
 ```bash
-helm upgrade --install resource-report oci://registry-1.docker.io/cdalar/cluster-resource-report-chart --version 0.6.1 \
+helm upgrade --install resource-report oci://registry-1.docker.io/cdalar/cluster-resource-report-chart --version 0.6.2 \
   -n resource-report --create-namespace
 # through a proxy of Docker Hub: chart oci://repo.development.int/cdalar/cluster-resource-report-chart and
 #   --set registry=repo.development.int

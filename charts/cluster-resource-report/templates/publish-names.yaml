@@ -112,8 +112,7 @@ spec:
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               resources:
-                requests: {cpu: 10m, memory: 64Mi}
-                limits: {memory: 128Mi}
+                {{- toYaml (dig "publishNames" "resources" (dict "requests" (dict "cpu" "10m" "memory" "64Mi") "limits" (dict "cpu" "200m" "memory" "128Mi")) .Values.rancher) | nindent 16 }}
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp

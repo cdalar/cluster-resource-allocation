@@ -5,9 +5,9 @@ questions:
     description: >-
       Proxy or mirror of Docker Hub for the image and for the chart Fleet installs downstream, e.g.
       repo.development.int (from oci://repo.development.int/cdalar/cluster-resource-report-chart).
-      Empty = public Docker Hub.
+      docker.io = public Docker Hub.
     type: string
-    default: ""
+    default: docker.io
     group: Registry
   - variable: rancher.isLocalCluster
     label: Rancher local cluster

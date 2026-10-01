@@ -342,8 +342,8 @@ so for option B repeat it on each downstream cluster.
 3. **Metadata:** namespace `resource-report` and name `resource-report` are filled in by the chart; keep them
    (the menu links and the name publisher expect them). Choose the version, e.g. `0.6.1`.
 4. **Values:** the chart shows a form:
-   - **Registry:** your proxy, e.g. `repo.development.int` (the host and path in front of `/cdalar/...` in the
-     repository URL). Empty = public Docker Hub.
+   - **Registry:** shows `docker.io` (public Docker Hub); replace it with your proxy, e.g. `repo.development.int`
+     (the host and path in front of `/cdalar/...` in the repository URL).
    - **Rancher local cluster:** `auto` detects it; keep it.
    - **Downstream clusters (Fleet):** replace `change-me` with the Rancher names of the clusters that should get
      the chart (local cluster only).

@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to copy (e.g. v0.6.2)
+        description: Release tag to copy (e.g. v0.6.3)
         required: true
       what:
         description: What to copy

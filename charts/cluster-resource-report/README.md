@@ -178,7 +178,8 @@ rancher:
 The app has **no login of its own**. Recommended ways to open it, in order:
 
 1. **Through Rancher (uses your Rancher login and RBAC):** in the Rancher UI, open the cluster and click
-   **Resource report** in its side menu (a Rancher `NavLink` the chart creates, `rancher.navLink`). It opens
+   **Resource Allocation → Resource report** in its side menu (a Rancher `NavLink` the chart creates,
+   `rancher.navLink`; the group entry opens a page with a card per link). It opens
    `https://<rancher-host>/k8s/clusters/<cluster-id>/api/v1/namespaces/resource-report/services/http:resource-report-cluster-resource-report:80/proxy/`
 2. **Port-forward:** `kubectl -n resource-report port-forward svc/resource-report-cluster-resource-report 8080:80`
 
@@ -245,7 +246,8 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |
 | `capacityPlanner.enabled` | `true` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
 | `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
-| `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `""` | Menu entry in the Rancher UI that opens the dashboard through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists |
+| `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `Resource Allocation` | Menu entries in the Rancher UI that open the dashboard (and the planners) through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists. With a group, the side menu shows one entry that opens a page with a card per link; `""` puts each link in the side menu directly |
+| `rancher.navLink.icons.report` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |

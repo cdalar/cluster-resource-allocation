@@ -506,7 +506,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | "prometheus unavailable" in the log, columns show **CPU now / Mem now** | Rancher Monitoring not installed or under another name | Install it, or set `prometheus.service` / `prometheus.url`, or `prometheus.enabled: false` |
 | Log shows "prometheus has 0.0 days of data" | Prometheus was just installed | Wait; P95 covers what exists so far. A shorter `collection.window` (e.g. `1d`) gives useful numbers sooner |
 | Prometheus queries time out on a large cluster | 7 days at 5-minute steps is heavy | `collection.step: 15m` |
-| No **Resource report** entry in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
+| No **Resource Allocation** group (or **Resource report** entry) in the Rancher menu | Not a Rancher-managed cluster, or `rancher.navLink.enabled: false` | Use the port-forward; the NavLink is only created where the CRD exists |
 | Chart fails: "ingress was removed" or "service.type was removed" | Values from an older release that exposed the dashboard | Remove `ingress.*` and `service.type` from your values; open the dashboard through Rancher |
 | Chart fails: "rancher.deployDownstream: set clusters, clusterSelector or clusterGroup" | Fleet deployment enabled without a target | Name the clusters, or set a selector or group; `clusterSelector: {}` = every cluster in the workspace |
 | Chart fails: "rancher.deployDownstream needs Fleet HelmOps" | Fleet older than 0.12, or not the Rancher local cluster | Upgrade Rancher (2.11+), or install downstream by hand (option B) |

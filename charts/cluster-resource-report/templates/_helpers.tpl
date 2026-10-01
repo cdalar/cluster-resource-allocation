@@ -41,6 +41,29 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- dig "namesConfigMap" "namespace" "" .Values.rancher | default .Release.Namespace -}}
 {{- end -}}
 
+{{/* registry without scheme or trailing slash; "" = Docker Hub */}}
+{{- define "crr.registry" -}}
+{{- .Values.registry | default "" | trimPrefix "oci://" | trimPrefix "https://" | trimPrefix "http://" | trimSuffix "/" -}}
+{{- end }}
+
+{{/* Image repository: image.repository when set, else <registry>/cdalar/cluster-resource-report (Docker Hub path) */}}
+{{- define "crr.imageRepository" -}}
+{{- .Values.image.repository | default (printf "%s/cdalar/cluster-resource-report" (include "crr.registry" . | default "docker.io")) -}}
+{{- end }}
+
+{{/* Image with tag (default: the chart's appVersion) */}}
+{{- define "crr.image" -}}
+{{- printf "%s:%s" (include "crr.imageRepository" .) (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- end }}
+
+{{/* Chart for the Fleet HelmOp: rancher.deployDownstream.chart.repo when set, else
+     oci://<registry>/cdalar/cluster-resource-report-chart (Docker Hub's registry host is registry-1.docker.io) */}}
+{{- define "crr.chartRepo" -}}
+{{- $r := include "crr.registry" . -}}
+{{- if or (not $r) (eq $r "docker.io") (eq $r "index.docker.io") }}{{ $r = "registry-1.docker.io" }}{{ end -}}
+{{- dig "deployDownstream" "chart" "repo" "" .Values.rancher | default (printf "oci://%s/cdalar/cluster-resource-report-chart" $r) -}}
+{{- end }}
+
 {{/* iconSrc of a NavLink: rancher.navLink.icons.<name> when set (an image URL or data: URI), else the chart's
      icons/<name>.svg as a data: URI, so it also works on air-gapped clusters. Call with (list . "<name>"). */}}
 {{- define "crr.navLinkIcon" -}}

@@ -3,7 +3,7 @@
 {{- if and (dig "deployDownstream" "enabled" true .Values.rancher) (include "crr.isLocal" .) (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
 {{- $d := merge (deepCopy .Values.rancher.deployDownstream) (dict "workspace" "fleet-default" "clusters" list "clusterGroup" "" "namespace" "resource-report" "releaseName" "resource-report" "helmSecretName" "" "insecureSkipTLSVerify" false "values" dict) }}
-{{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://registry-1.docker.io/cdalar/cluster-resource-report-chart" "version" "") }}
+{{- $chart := dict "repo" (include "crr.chartRepo" .) "version" (dig "chart" "version" "" $d) }}
 {{- if dig "publishNames" "enabled" true .Values.rancher }}
 {{- $ns := dig "publishNames" "targetNamespace" "resource-report" .Values.rancher }}
 {{- if ne $ns $d.namespace }}
@@ -11,7 +11,7 @@
 {{- end }}
 {{- end }}
 {{- /* downstream values: defaults from this release, then deployDownstream.values, then the local-only settings off */}}
-{{- $base := dict "image" (dict "repository" .Values.image.repository "pullPolicy" .Values.image.pullPolicy) "imagePullSecrets" (.Values.imagePullSecrets | default list) "rancher" (dict "namesConfigMap" (dict "enabled" (dig "publishNames" "enabled" true .Values.rancher))) }}
+{{- $base := dict "registry" (.Values.registry | default "") "image" (dict "repository" (.Values.image.repository | default "") "pullPolicy" .Values.image.pullPolicy) "imagePullSecrets" (.Values.imagePullSecrets | default list) "rancher" (dict "namesConfigMap" (dict "enabled" (dig "publishNames" "enabled" true .Values.rancher))) }}
 {{- $off := dict "rancher" (dict "isLocalCluster" false "publishNames" (dict "enabled" false) "deployDownstream" (dict "enabled" false)) "planner" (dict "enabled" false) "capacityPlanner" (dict "enabled" false) }}
 {{- $common := mergeOverwrite (deepCopy $base) (deepCopy ($d.values | default dict)) (deepCopy $off) }}
 {{- /* Fleet uses the first target that matches a cluster: named clusters (with their own values) come first */}}

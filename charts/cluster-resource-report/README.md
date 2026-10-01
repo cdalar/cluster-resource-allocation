@@ -25,14 +25,18 @@ Each release `vX.Y.Z` publishes both, public, on GHCR and (copied from there) on
 | | GHCR (source) | Docker Hub (copy) | Built by |
 |---|---|---|---|
 | Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report`, version `X.Y.Z` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, version `X.Y.Z` | `.github/workflows/chart.yml` |
-| Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` (the chart's default) | `docker.io/cdalar/cluster-resource-report:X.Y.Z` (also `X.Y`, `latest`) | `.github/workflows/image.yml` |
+| Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` | `docker.io/cdalar/cluster-resource-report:X.Y.Z` (also `X.Y`, `latest`; the chart's default) | `.github/workflows/image.yml` |
 
 On Docker Hub the chart has its own repository (`-chart`), since image and chart share the tag `X.Y.Z`.
 `.github/workflows/dockerhub.yml` does the copy after each push to GHCR (`crane copy`, nothing is rebuilt). It
 needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with Read &
 Write) and optionally the variable `DOCKERHUB_NAMESPACE` (default `cdalar`); without the secrets it only warns.
 To copy an existing release, run it manually (Actions → dockerhub → Run workflow, input `tag`).
-To use the image from Docker Hub, set `image.repository=docker.io/cdalar/cluster-resource-report`.
+The chart uses Docker Hub by default. `registry` points the image and the Fleet HelmOp's chart at a proxy or
+mirror that keeps Docker Hub's paths (e.g. `registry: repo.development.int` →
+`repo.development.int/cdalar/cluster-resource-report` and
+`oci://repo.development.int/cdalar/cluster-resource-report-chart`). For GHCR set
+`image.repository=ghcr.io/cdalar/cluster-resource-report` (and `rancher.deployDownstream.chart.repo`).
 
 `chart.yml` runs on version tags: it checks that the tag matches the chart's `version` and `appVersion`, lints,
 runs `helm package` and `helm push` to `oci://ghcr.io/cdalar/charts`, and pulls the chart back as a check. To
@@ -63,12 +67,12 @@ To release, set `version` and `appVersion` in `Chart.yaml` to the same number, p
 default image tag is its `appVersion`. The dashboard and planners show the chart version and image tag under their title
 (`CHART_VERSION` / `IMAGE_TAG`, set by the chart).
 
-The repository and the GHCR package are public, so clusters with internet access pull the image without a
-pull secret.
+The images and charts are public, so clusters with internet access pull them without a pull secret.
 
-Clusters without internet access (most on-prem clusters) pull from an internal registry instead. In that case,
-mirror the image (e.g. `crane copy ghcr.io/cdalar/cluster-resource-report:0.6.1 registry.example.com/platform/cluster-resource-report:0.6.1`)
-and set `image.repository`.
+Clusters without internet access (most on-prem clusters) pull from an internal registry instead: set `registry`
+to a proxy of Docker Hub (Artifactory, Nexus, Harbor), or mirror the image (e.g. `crane copy
+docker.io/cdalar/cluster-resource-report:0.6.1 registry.example.com/platform/cluster-resource-report:0.6.1`) and
+set `image.repository`.
 
 #### Build locally
 
@@ -82,10 +86,10 @@ docker push registry.example.com/platform/cluster-resource-report:0.6.1
 ## 2. Install
 
 ```bash
-helm upgrade --install resource-report oci://ghcr.io/cdalar/charts/cluster-resource-report --version 0.6.1 \
-  -n resource-report --create-namespace \
-  --set image.repository=registry.example.com/platform/cluster-resource-report \
-  --set image.tag=0.6.1          # or omit both to use ghcr.io/cdalar/cluster-resource-report:<appVersion>
+helm upgrade --install resource-report oci://registry-1.docker.io/cdalar/cluster-resource-report-chart --version 0.6.1 \
+  -n resource-report --create-namespace
+# through a proxy of Docker Hub: chart oci://repo.development.int/cdalar/cluster-resource-report-chart and
+#   --set registry=repo.development.int
 ```
 
 From a checkout, use `charts/cluster-resource-report` instead of the `oci://` location. On a Rancher-managed
@@ -160,7 +164,7 @@ rancher:
   chart fails; write `clusterSelector: {}` for all clusters in the workspace.
 - **A group created earlier by hand** with the same name blocks the install (Helm won't adopt it): delete it,
   or set `clusterGroup.create: false` to keep using it.
-- **Values downstream:** `image.repository`, `image.pullPolicy` and `imagePullSecrets` are copied from the local
+- **Values downstream:** `registry`, `image.repository`, `image.pullPolicy` and `imagePullSecrets` are copied from the local
   release, and `rancher.namesConfigMap.enabled` follows `publishNames.enabled`. Then `deployDownstream.values` is
   applied, and the local-only settings (`isLocalCluster`, `publishNames`, `deployDownstream`, the planners) are
   always switched off.
@@ -169,7 +173,8 @@ rancher:
   App Bundle (Continuous Delivery → App Bundles → ⋮) applies them at once.
 - **Lifecycle:** `helm upgrade` here upgrades the downstream releases; removing a cluster from the targets, disabling
   this, or uninstalling the local release makes Fleet uninstall the chart there.
-- **Private registry / mirror:** set `chart.repo`, and `helmSecretName` (a secret in the workspace with
+- **Private registry / mirror:** `registry` sets the chart's address too (`oci://<registry>/cdalar/cluster-resource-report-chart`);
+  for another path set `chart.repo`, and `helmSecretName` (a secret in the workspace with
   `username`/`password`). `insecureSkipTLSVerify` skips TLS verification for the chart download only; the image is
   pulled by containerd on the nodes, which needs the registry in its own configuration.
 
@@ -222,7 +227,8 @@ a logged-in browser save a plan through Rancher's proxy.
 
 | Value | Default | Description |
 |---|---|---|
-| `image.repository` / `image.tag` | `ghcr.io/cdalar/cluster-resource-report` / appVersion | Image built from `discovery/Dockerfile` |
+| `registry` | `""` (Docker Hub) | Registry for the image and the Fleet HelmOp's chart, with Docker Hub's paths: a proxy or mirror such as `repo.development.int` |
+| `image.repository` / `image.tag` | `""` (`<registry>/cdalar/cluster-resource-report`) / appVersion | Image built from `discovery/Dockerfile`; set the repository to override `registry` |
 | `imagePullSecrets` | `[]` | For a private registry |
 | `clusterName` | `""` | Display name; default is the Rancher cluster name (with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`) or `in-cluster` |
 | `collection.interval` | `30m` | Time between collections; the dashboard also has a "Collect now" button |
@@ -240,7 +246,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.deployDownstream.clusterGroup.name` / `.create` / `.clusterNames` | `resource-report` / `true` / `[change-me]` | Default target: a Fleet ClusterGroup the chart creates, selecting these Rancher cluster names (`change-me` matches none). `create: false` or a plain name uses an existing group |
 | `rancher.deployDownstream.clusters` / `.clusterSelector` | `[]` / `null` | More targets: Fleet cluster names (each a name or `{name, values}`), a label selector |
 | `rancher.deployDownstream.workspace` / `.namespace` / `.releaseName` | `fleet-default` / `resource-report` / `resource-report` | Fleet workspace; release namespace (must equal `publishNames.targetNamespace`) and name downstream |
-| `rancher.deployDownstream.chart.repo` / `.chart.version` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` / this chart's version | Full OCI URL of the chart, and its version downstream |
+| `rancher.deployDownstream.chart.repo` / `.chart.version` | `""` (`oci://<registry>/cdalar/cluster-resource-report-chart`) / this chart's version | Full OCI URL of the chart, and its version downstream |
 | `rancher.deployDownstream.helmSecretName` / `.insecureSkipTLSVerify` | `""` / `false` | Registry credentials secret in the workspace; skip TLS verification for the chart download |
 | `rancher.deployDownstream.values` | `{}` | Values for every downstream release |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |

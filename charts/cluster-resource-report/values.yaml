@@ -1,6 +1,15 @@
-# Image built from discovery/Dockerfile. Push it to a registry your clusters can pull from.
+# Registry for the image and for the chart the Fleet HelmOp installs downstream: one place for a mirror or proxy
+# of Docker Hub (e.g. Artifactory). Both addresses are built from Docker Hub's paths:
+#   image  <registry>/cdalar/cluster-resource-report:<appVersion>
+#   chart  oci://<registry>/cdalar/cluster-resource-report-chart   (rancher.deployDownstream)
+# "" = public Docker Hub (docker.io, chart from registry-1.docker.io). A scheme (oci://, https://) and a trailing
+# slash are ignored; a path prefix works, e.g. repo.development.int/dockerhub. GHCR instead: set image.repository
+# and rancher.deployDownstream.chart.repo (ghcr.io/cdalar/cluster-resource-report, oci://ghcr.io/cdalar/charts/...).
+registry: ""
+
+# Image built from discovery/Dockerfile.
 image:
-  repository: ghcr.io/cdalar/cluster-resource-report
+  repository: ""     # "" = <registry>/cdalar/cluster-resource-report; set to override (any registry/path)
   tag: ""            # defaults to the chart appVersion
   pullPolicy: IfNotPresent
 imagePullSecrets: []
@@ -78,14 +87,15 @@ rancher:
     namespace: resource-report        # spec.defaultNamespace: release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report      # spec.helm.releaseName
     chart:
-      repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart   # spec.helm.repo: full OCI URL of the chart (Docker Hub; GHCR: oci://ghcr.io/cdalar/charts/cluster-resource-report, or a mirror)
+      repo: ""                        # spec.helm.repo: full OCI URL of the chart; "" = oci://<registry>/cdalar/cluster-resource-report-chart
+                                      # (see registry above); set to override, e.g. oci://ghcr.io/cdalar/charts/cluster-resource-report
       version: ""                     # spec.helm.version; "" = this chart's version
     helmSecretName: ""                # spec.helmSecretName: secret in the workspace with registry credentials
                                       # (username/password), for a private registry or mirror
     insecureSkipTLSVerify: false      # spec.insecureSkipTLSVerify: skip TLS verification when Fleet downloads the
                                       # chart. Not for the image: containerd on the nodes pulls that (registries.yaml)
     # spec.helm.values: values for every downstream release, over these defaults taken from this release:
-    # image.repository, image.pullPolicy, imagePullSecrets, and rancher.namesConfigMap.enabled = publishNames.enabled.
+    # registry, image.repository, image.pullPolicy, imagePullSecrets, and rancher.namesConfigMap.enabled = publishNames.enabled.
     # Local-only settings (rancher.isLocalCluster, publishNames, deployDownstream, planner, capacityPlanner) are
     # always switched off downstream.
     values: {}

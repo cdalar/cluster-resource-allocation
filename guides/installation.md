@@ -54,7 +54,7 @@ Per cluster:
 |---|---|---|---|
 | **metrics-server** | "now" usage snapshot (always) | `kubectl top pods -A \| head` | Included in k3s, RKE2 and AKS; otherwise install it |
 | **Rancher Monitoring** (Prometheus, kube-state-metrics) | P95 usage and request peaks over 7 days | `kubectl -n cattle-monitoring-system get svc rancher-monitoring-prometheus` | Rancher UI → cluster → **Apps → Charts → Monitoring**; or install without history (step 3) |
-| **Access to `ghcr.io` or Docker Hub** (chart and image), or an internal mirror | installing, pulling the image | `helm show chart oci://ghcr.io/cdalar/charts/cluster-resource-report` | Step 1 (Docker Hub, or *Clusters without internet access*) |
+| **Access to Docker Hub** (chart and image), a proxy of it (`registry`), GHCR, or an internal mirror | installing, pulling the image | `helm show chart oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | Step 1 |
 
 Rancher: tested with v2.15. The Rancher menu entries need Rancher's `NavLink` CRD, which every Rancher-managed
 cluster has; on other clusters the chart skips them.
@@ -71,39 +71,44 @@ kubectl config use-context <cluster>
 
 Every release is published on GHCR and copied to Docker Hub, public, with no login needed:
 
-| | GHCR (default) | Docker Hub | Version |
+| | Docker Hub (default) | GHCR | Version |
 |---|---|---|---|
-| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.6.1` |
-| **Image** | `ghcr.io/cdalar/cluster-resource-report` | `docker.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
+| **Helm chart** (OCI) | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | the release, e.g. `0.6.1` |
+| **Image** | `docker.io/cdalar/cluster-resource-report` | `ghcr.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
-Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub only
-(e.g. when the cluster has no access to `ghcr.io`, or your registry proxy only mirrors Docker Hub), set `CHART` to
-the Docker Hub location below and add to the values files:
+Both locations hold the same artifacts. The chart uses Docker Hub by default, for the image and for the chart the
+Fleet HelmOp installs downstream (Step 3 option A).
+
+**Through a proxy or mirror of Docker Hub** (e.g. Artifactory, no rate limit): set one value, `registry`, in every
+values file. The chart builds both addresses from Docker Hub's paths:
 
 ```yaml
-image:
-  repository: docker.io/cdalar/cluster-resource-report
+registry: repo.development.int      # oci:// or https:// in front and a trailing / are ignored; a path prefix works
+#   image  repo.development.int/cdalar/cluster-resource-report:<appVersion>
+#   chart  oci://repo.development.int/cdalar/cluster-resource-report-chart   (Fleet HelmOp)
 ```
 
-The Fleet HelmOp already gets the chart from Docker Hub by default
-(`rancher.deployDownstream.chart.repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`).
+and install from `CHART=oci://repo.development.int/cdalar/cluster-resource-report-chart`. The downstream releases
+Fleet installs get the same `registry`. With a HelmOp each downstream cluster's Fleet agent downloads the chart
+itself, so the downstream clusters need access to the registry for the chart and the image.
 
-The downstream releases Fleet installs take `image.repository` from the local release, so they pull from Docker
-Hub too. With a HelmOp, each downstream cluster's Fleet agent downloads the chart itself, so the downstream
-clusters need Docker Hub access for both the chart and the image.
+**From GHCR instead:** set `image.repository: ghcr.io/cdalar/cluster-resource-report` and
+`rancher.deployDownstream.chart.repo: oci://ghcr.io/cdalar/charts/cluster-resource-report`; both override
+`registry`.
 
 Available versions: the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the
 repository, the chart's [GHCR package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)
 or its [Docker Hub tags](https://hub.docker.com/r/cdalar/cluster-resource-report-chart/tags).
 
-Docker Hub limits anonymous pulls per IP address; with many clusters behind one address, prefer GHCR or log in
-to Docker Hub (`imagePullSecrets`).
+Docker Hub limits anonymous pulls per IP address; with many clusters behind one address, use a proxy
+(`registry`), GHCR, or a Docker Hub login (`imagePullSecrets`, and `rancher.deployDownstream.helmSecretName`).
 
 Set the chart and version once in your shell; every command below uses them:
 
 ```bash
-CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
-# or: CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
+CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
+# or through your proxy: CHART=oci://repo.development.int/cdalar/cluster-resource-report-chart
+# or GHCR:               CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
 VERSION=0.6.1
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
@@ -114,12 +119,13 @@ There is no `helm repo add`: OCI charts are installed straight from their `oci:/
 
 ### Clusters without internet access
 
-Mirror both the chart and the image into your internal registry, then point `CHART` and the values at it:
+With a proxy of Docker Hub, `registry` (above) is all you need. To copy the chart and the image into a registry
+of your own instead:
 
 ```bash
 helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.6.1.tgz
 helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
-crane copy ghcr.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
+crane copy docker.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
 
 CHART=oci://registry.example.com/platform/charts/cluster-resource-report
 ```
@@ -129,9 +135,15 @@ and add to every values file below:
 ```yaml
 image:
   repository: registry.example.com/platform/cluster-resource-report
+rancher:
+  deployDownstream:          # local cluster, Fleet install: the chart you pushed
+    chart:
+      repo: oci://registry.example.com/platform/charts/cluster-resource-report
 imagePullSecrets:            # only if the registry needs a login
   - name: registry-pull
 ```
+
+(If you keep Docker Hub's paths in your registry, `registry: registry.example.com` replaces both.)
 
 The image tag defaults to the chart's `appVersion`, so it follows `VERSION` without being set.
 
@@ -233,7 +245,7 @@ kubectl -n fleet-default get helmops,bundles                          # the Helm
 If a ClusterGroup `resource-report` was already created by hand, Helm refuses to take it over: delete it first,
 or set `clusterGroup.create: false` to keep using it as it is.
 
-What goes downstream: the local image repository, pull policy and pull secrets; `rancher.namesConfigMap.enabled`
+What goes downstream: the local `registry`, image repository, pull policy and pull secrets; `rancher.namesConfigMap.enabled`
 when `publishNames` is on; then `deployDownstream.values` and the cluster's own `values`. Local-only settings
 (`isLocalCluster`, `publishNames`, the planners) are always off downstream.
 
@@ -255,7 +267,8 @@ kubectl: `kubectl -n fleet-default patch helmop resource-report-cluster-resource
 '{"spec":{"forceSyncGeneration":<current + 1>}}'`, or touch the Fleet cluster with
 `kubectl -n fleet-default annotate clusters.fleet.cattle.io <cluster> resource-report/resync="$(date +%s)" --overwrite`.
 
-**Private registry or mirror:** set `deployDownstream.chart.repo` to the chart's full OCI URL and, with a login,
+**Private registry or mirror:** `registry` sets the chart's address too (see Step 1); for another path set
+`deployDownstream.chart.repo` to the chart's full OCI URL. With a login, set
 `deployDownstream.helmSecretName` (a secret with `username` / `password` in `fleet-default`).
 `deployDownstream.insecureSkipTLSVerify: true` skips TLS verification for the chart download only; the image is
 pulled by containerd on the nodes, which needs the registry's CA (or `insecure_skip_verify`) in its own
@@ -521,7 +534,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 |---|---|---|
 | `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
 | `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.6.1`); see the package page (step 1) |
-| Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the mirror lacks the tag | Mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
+| Pod `ImagePullBackOff` | The cluster can't reach Docker Hub (or the registry set), or the mirror lacks the tag | Set `registry` to a proxy, or mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
 | Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
 | Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |
 | Project IDs (`p-xxxxx`) instead of names on a downstream dashboard | ConfigMap not there yet, or `rancher.namesConfigMap.enabled` not set | Check `kubectl -n resource-report get configmap rancher-project-names`; on the local cluster check the CronJob's last job and the Bundle's state; names appear after the next collection |

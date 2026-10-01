@@ -24,7 +24,7 @@ Each release `vX.Y.Z` publishes both, public, on GHCR and (copied from there) on
 
 | | GHCR (source) | Docker Hub (copy) | Built by |
 |---|---|---|---|
-| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report`, version `X.Y.Z` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, version `X.Y.Z` | `.github/workflows/chart.yml` |
+| Chart | `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`, version `X.Y.Z` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, version `X.Y.Z` | `.github/workflows/chart.yml` |
 | Image | `ghcr.io/cdalar/cluster-resource-report:X.Y.Z` | `docker.io/cdalar/cluster-resource-report:X.Y.Z` (also `X.Y`, `latest`; the chart's default) | `.github/workflows/image.yml` |
 
 On Docker Hub the chart has its own repository (`-chart`), since image and chart share the tag `X.Y.Z`.
@@ -42,7 +42,7 @@ mirror that keeps Docker Hub's paths (e.g. `registry: repo.development.int` →
 runs `helm package` and `helm push` to `oci://ghcr.io/cdalar/charts`, and pulls the chart back as a check. To
 publish the chart of an existing tag again, run it manually (Actions → chart → Run workflow, input `tag`).
 Rancher can use it as a repository: **Apps → Repositories → Create**, target *OCI repository*, URL
-`oci://ghcr.io/cdalar/charts/cluster-resource-report` (the chart's own location: GHCR refuses to list the parent
+`oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` (the chart's own location: GHCR refuses to list the parent
 `oci://ghcr.io/cdalar/charts` without a login, which Rancher reports as *403 Forbidden*), or
 `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`. Both tested with Rancher 2.15.
 

@@ -1,7 +1,8 @@
 name: chart
 
 # Packages the Helm chart and pushes it to GHCR as an OCI artifact:
-#   oci://ghcr.io/<owner>/charts/cluster-resource-report:<version>
+#   oci://ghcr.io/<owner>/charts/cluster-resource-report-chart:<version>   (chart name from Chart.yaml;
+#   up to 0.6.2 the chart was named cluster-resource-report and lives at charts/cluster-resource-report)
 #   tag vX.Y.Z   -> chart version X.Y.Z (tag must match the chart version and appVersion)
 #   manual run   -> publishes the chart of an existing release tag (input `tag`), e.g. to republish it
 # Then copied to Docker Hub as <ns>/cluster-resource-report-chart (dockerhub.yml).
@@ -58,9 +59,10 @@ jobs:
       - name: Pull back
         run: |
           version=$(awk '/^version:/ {print $2}' "$CHART_DIR/Chart.yaml")
+          name=$(awk '/^name:/ {print $2}' "$CHART_DIR/Chart.yaml")
           mkdir -p pulled
-          helm pull "$REGISTRY/cluster-resource-report" --version "$version" --destination pulled
-          helm template x pulled/cluster-resource-report-*.tgz > /dev/null
+          helm pull "$REGISTRY/$name" --version "$version" --destination pulled
+          helm template x "pulled/$name-$version.tgz" > /dev/null
 
   dockerhub:
     needs: chart

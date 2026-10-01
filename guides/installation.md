@@ -73,7 +73,7 @@ Every release is published on GHCR and copied to Docker Hub, public, with no log
 
 | | Docker Hub (default) | GHCR | Version |
 |---|---|---|---|
-| **Helm chart** (OCI) | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | the release, e.g. `0.6.2` |
+| **Helm chart** (OCI) | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` | the release, e.g. `0.6.2` |
 | **Image** | `docker.io/cdalar/cluster-resource-report` | `ghcr.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
 Both locations hold the same artifacts. The chart uses Docker Hub by default, for the image and for the chart the
@@ -93,7 +93,7 @@ Fleet installs get the same `registry`. With a HelmOp each downstream cluster's 
 itself, so the downstream clusters need access to the registry for the chart and the image.
 
 **From GHCR instead:** set `image.repository: ghcr.io/cdalar/cluster-resource-report` and
-`rancher.deployDownstream.chart.repo: oci://ghcr.io/cdalar/charts/cluster-resource-report`; both override
+`rancher.deployDownstream.chart.repo: oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`; both override
 `registry`.
 
 Available versions: the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the
@@ -108,7 +108,7 @@ Set the chart and version once in your shell; every command below uses them:
 ```bash
 CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
 # or through your proxy: CHART=oci://repo.development.int/cdalar/cluster-resource-report-chart
-# or GHCR:               CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
+# or GHCR:               CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report-chart
 VERSION=0.6.2
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
@@ -123,11 +123,11 @@ With a proxy of Docker Hub, `registry` (above) is all you need. To copy the char
 of your own instead:
 
 ```bash
-helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.6.2.tgz
-helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
+helm pull $CHART --version $VERSION                                   # cluster-resource-report-chart-0.6.2.tgz
+helm push cluster-resource-report-chart-$VERSION.tgz oci://registry.example.com/platform/charts
 crane copy docker.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
 
-CHART=oci://registry.example.com/platform/charts/cluster-resource-report
+CHART=oci://registry.example.com/platform/charts/cluster-resource-report-chart
 ```
 
 and add to every values file below:
@@ -138,7 +138,7 @@ image:
 rancher:
   deployDownstream:          # local cluster, Fleet install: the chart you pushed
     chart:
-      repo: oci://registry.example.com/platform/charts/cluster-resource-report
+      repo: oci://registry.example.com/platform/charts/cluster-resource-report-chart
 imagePullSecrets:            # only if the registry needs a login
   - name: registry-pull
 ```
@@ -333,12 +333,12 @@ so for option B repeat it on each downstream cluster.
    - URL: the chart's own location, through your proxy
      `oci://repo.development.int/cdalar/cluster-resource-report-chart`, or Docker Hub
      `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, or GHCR
-     `oci://ghcr.io/cdalar/charts/cluster-resource-report` (not the parent `oci://ghcr.io/cdalar/charts`: it can't
+     `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` (not the parent `oci://ghcr.io/cdalar/charts`: it can't
      be listed anonymously and fails with *403 Forbidden*).
    - Authentication: none for the public registries; for your proxy, if it needs a login, a basic-auth secret.
    - **Create**, and wait until the repository is *Active*.
-2. **Apps → Charts**, pick the repository in the filter, open **cluster-resource-report** (see the note on two
-   tiles below) and click **Install**.
+2. **Apps → Charts**, pick the repository in the filter, open **Cluster Resource Report**
+   (`cluster-resource-report-chart`) and click **Install**.
 3. **Metadata:** namespace `resource-report` and name `resource-report` are filled in by the chart; keep them
    (the menu links and the name publisher expect them). Choose the version, e.g. `0.6.2`.
 4. **Values:** the chart shows a form:
@@ -352,11 +352,10 @@ so for option B repeat it on each downstream cluster.
    `values-local.yaml`.
 5. **Install.** Check the pods in `resource-report`, and the **Resource Allocation** entry in the cluster's menu.
 
-A repository URL ending in `-chart` (Docker Hub and proxies of it) gives two tiles in **Apps → Charts**:
-**cluster-resource-report** with the newest version, and **cluster-resource-report-chart** with the older ones.
-Rancher reads only the newest tag of an OCI repository and lists the others under the repository's name. Install
-and upgrade from **cluster-resource-report**; both tiles hold the same chart. On GHCR the repository has the
-chart's own name, so there is one tile.
+The chart is named `cluster-resource-report-chart` (since 0.6.3), like its repository, so **Apps → Charts** shows
+one tile with all versions. Rancher reads only the newest tag of an OCI repository and lists the older ones under
+the repository's name; with chart 0.6.2 or older as the newest version you would see a second tile,
+`cluster-resource-report`.
 
 New versions appear after Rancher's next refresh of the repository, or at once with **Apps → Repositories → ⋮ →
 Refresh**. Upgrades then show up under **Apps → Installed Apps**; the upgrade keeps your values.
@@ -524,6 +523,17 @@ of Docker Hub, e.g. `registry: repo.development.int`. To stay on GHCR set
 from the Rancher UI, the chart now shows a form (registry, local cluster, downstream clusters, planners,
 Prometheus) and fills in the name and namespace `resource-report`.
 
+Upgrading to 0.6.3: the chart is renamed `cluster-resource-report-chart` (it was `cluster-resource-report`), so
+Rancher's **Apps → Charts** shows one tile for the Docker Hub repository. Object names, plans and values don't
+change. Its GHCR location moves to `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` (0.6.2 and older
+stay at `.../charts/cluster-resource-report`); Docker Hub and `registry` are unchanged. An app installed from the
+Rancher UI with the old name doesn't show the upgrade under **Installed Apps**: upgrade it once with `helm`, after
+which Rancher offers later upgrades again:
+
+```bash
+helm upgrade resource-report $CHART --version 0.6.3 -n resource-report --reuse-values
+```
+
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
 converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep
 `persistence.enabled: true` for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
@@ -558,7 +568,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
 | `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.6.2`); see the package page (step 1) |
 | Pod `ImagePullBackOff` | The cluster can't reach Docker Hub (or the registry set), or the mirror lacks the tag | Set `registry` to a proxy, or mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
-| Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
+| Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` |
 | Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |
 | Project IDs (`p-xxxxx`) instead of names on a downstream dashboard | ConfigMap not there yet, or `rancher.namesConfigMap.enabled` not set | Check `kubectl -n resource-report get configmap rancher-project-names`; on the local cluster check the CronJob's last job and the Bundle's state; names appear after the next collection |
 | ConfigMap delivered to the wrong namespace | Downstream release not in `resource-report` | Install in `resource-report`, or set `rancher.publishNames.targetNamespace` and `rancher.namesConfigMap.namespace` to match |

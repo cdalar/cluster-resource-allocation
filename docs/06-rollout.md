@@ -2,6 +2,7 @@
 
 Enabling quotas on running clusters can block deployments if done carelessly. Roll out in phases,
 coordinated with the requests/limits initiative.
+The step-by-step version, with owners and exit criteria per step, is the [implementation plan](10-implementation-plan.md).
 
 ## Phase 0 — Discovery (2–4 weeks)
 

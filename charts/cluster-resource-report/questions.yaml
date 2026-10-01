@@ -1,0 +1,58 @@
+# Form shown by Rancher (Apps -> Charts -> Install). Everything else is in the YAML view (values.yaml).
+questions:
+  - variable: registry
+    label: Registry
+    description: >-
+      Proxy or mirror of Docker Hub for the image and for the chart Fleet installs downstream, e.g.
+      repo.development.int (from oci://repo.development.int/cdalar/cluster-resource-report-chart).
+      Empty = public Docker Hub.
+    type: string
+    default: ""
+    group: Registry
+  - variable: rancher.isLocalCluster
+    label: Rancher local cluster
+    description: >-
+      auto detects the Rancher local cluster (Rancher server in cattle-system). There the planners, the Project
+      name publisher and the Fleet install on downstream clusters are on.
+    type: enum
+    options: ["auto", "true", "false"]
+    default: auto
+    group: Cluster
+  - variable: rancher.deployDownstream.clusterGroup.clusterNames
+    label: Downstream clusters (Fleet)
+    description: >-
+      Rancher cluster names that get this chart through Fleet (local cluster only). change-me matches none:
+      nothing is installed downstream until you list clusters.
+    type: array[string]
+    default: ["change-me"]
+    group: Downstream clusters
+    show_if: "rancher.deployDownstream.enabled=true"
+  - variable: rancher.deployDownstream.enabled
+    label: Install on downstream clusters with Fleet
+    type: boolean
+    default: true
+    group: Downstream clusters
+  - variable: planner.enabled
+    label: Allocation planner
+    description: Budgets and quotas per project and cluster (local cluster only).
+    type: boolean
+    default: true
+    group: Planners
+  - variable: capacityPlanner.enabled
+    label: Capacity planner
+    description: CPU and memory per project and cluster, without money (local cluster only).
+    type: boolean
+    default: true
+    group: Planners
+  - variable: prometheus.enabled
+    label: Use Prometheus (Rancher Monitoring) for usage history
+    type: boolean
+    default: true
+    group: Collection
+  - variable: collection.window
+    label: Usage history window
+    description: Rancher Monitoring keeps about 10 days by default.
+    type: string
+    default: 7d
+    group: Collection
+    show_if: "prometheus.enabled=true"

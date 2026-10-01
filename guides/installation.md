@@ -73,7 +73,7 @@ Every release is published on GHCR and copied to Docker Hub, public, with no log
 
 | | Docker Hub (default) | GHCR | Version |
 |---|---|---|---|
-| **Helm chart** (OCI) | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` | the release, e.g. `0.6.2` |
+| **Helm chart** (OCI) | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` | the release, e.g. `0.6.3` |
 | **Image** | `docker.io/cdalar/cluster-resource-report` | `ghcr.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
 Both locations hold the same artifacts. The chart uses Docker Hub by default, for the image and for the chart the
@@ -109,7 +109,7 @@ Set the chart and version once in your shell; every command below uses them:
 CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
 # or through your proxy: CHART=oci://repo.development.int/cdalar/cluster-resource-report-chart
 # or GHCR:               CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report-chart
-VERSION=0.6.2
+VERSION=0.6.3
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
 helm show values $CHART --version $VERSION     # all values with their defaults
@@ -123,7 +123,7 @@ With a proxy of Docker Hub, `registry` (above) is all you need. To copy the char
 of your own instead:
 
 ```bash
-helm pull $CHART --version $VERSION                                   # cluster-resource-report-chart-0.6.2.tgz
+helm pull $CHART --version $VERSION                                   # cluster-resource-report-chart-0.6.3.tgz
 helm push cluster-resource-report-chart-$VERSION.tgz oci://registry.example.com/platform/charts
 crane copy docker.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
 
@@ -340,7 +340,7 @@ so for option B repeat it on each downstream cluster.
 2. **Apps → Charts**, pick the repository in the filter, open **Cluster Resource Report**
    (`cluster-resource-report-chart`) and click **Install**.
 3. **Metadata:** namespace `resource-report` and name `resource-report` are filled in by the chart; keep them
-   (the menu links and the name publisher expect them). Choose the version, e.g. `0.6.2`.
+   (the menu links and the name publisher expect them). Choose the version, e.g. `0.6.3`.
 4. **Values:** the chart shows a form:
    - **Registry:** shows `docker.io` (public Docker Hub); replace it with your proxy, e.g. `repo.development.int`
      (the host and path in front of `/cdalar/...` in the repository URL).
@@ -566,7 +566,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Symptom | Cause | Fix |
 |---|---|---|
 | `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
-| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.6.2`); see the package page (step 1) |
+| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.6.3`); see the package page (step 1) |
 | Pod `ImagePullBackOff` | The cluster can't reach Docker Hub (or the registry set), or the mirror lacks the tag | Set `registry` to a proxy, or mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
 | Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart` |
 | Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |

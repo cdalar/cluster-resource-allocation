@@ -706,24 +706,13 @@ def find_chrome():
     sys.exit("Chrome/Chromium not found; set CHROME=/path/to/chrome")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=OUTPUT, help="PDF to write (default: %(default)s)")
-    ap.add_argument("--html", help="also write the intermediate HTML here")
-    args = ap.parse_args()
-
-    with open(SOURCE, encoding="utf-8") as f:
-        cats = parse(f.read())
-    missing = [tp["id"] for c in cats.values() for tp in c["topics"] if tp["id"] not in TOPICS]
-    if set(cats) != set(CATEGORIES) or missing:
-        sys.exit(f"Doc structure changed: categories {sorted(cats)}, topics without a rule/icon {missing}")
-    page = render(cats)
-
+def print_pdf(page, out, html_path=None, name="page.html"):
+    """Print the HTML page to a PDF with headless Chrome; keep the HTML at html_path if given."""
     with tempfile.TemporaryDirectory() as tmp:
-        src = args.html or os.path.join(tmp, "operating-principles.html")
+        src = html_path or os.path.join(tmp, name)
         with open(src, "w", encoding="utf-8") as f:
             f.write(page)
-        out = os.path.abspath(args.out)
+        out = os.path.abspath(out)
         if os.path.exists(out):
             os.remove(out)
         # Chrome on macOS sometimes keeps running after printing: wait for the PDF, then stop it.
@@ -744,6 +733,22 @@ def main():
             proc.wait(10)
         if not os.path.exists(out) or os.path.getsize(out) == 0:
             sys.exit("Chrome didn't write the PDF")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--out", default=OUTPUT, help="PDF to write (default: %(default)s)")
+    ap.add_argument("--html", help="also write the intermediate HTML here")
+    args = ap.parse_args()
+
+    with open(SOURCE, encoding="utf-8") as f:
+        cats = parse(f.read())
+    missing = [tp["id"] for c in cats.values() for tp in c["topics"] if tp["id"] not in TOPICS]
+    if set(cats) != set(CATEGORIES) or missing:
+        sys.exit(f"Doc structure changed: categories {sorted(cats)}, topics without a rule/icon {missing}")
+    page = render(cats)
+
+    print_pdf(page, args.out, args.html, "operating-principles.html")
     print(args.out)
 
 

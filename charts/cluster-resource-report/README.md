@@ -240,7 +240,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.deployDownstream.clusterGroup.name` / `.create` / `.clusterNames` | `resource-report` / `true` / `[change-me]` | Default target: a Fleet ClusterGroup the chart creates, selecting these Rancher cluster names (`change-me` matches none). `create: false` or a plain name uses an existing group |
 | `rancher.deployDownstream.clusters` / `.clusterSelector` | `[]` / `null` | More targets: Fleet cluster names (each a name or `{name, values}`), a label selector |
 | `rancher.deployDownstream.workspace` / `.namespace` / `.releaseName` | `fleet-default` / `resource-report` / `resource-report` | Fleet workspace; release namespace (must equal `publishNames.targetNamespace`) and name downstream |
-| `rancher.deployDownstream.chart.repo` / `.chart.version` | `oci://ghcr.io/cdalar/charts/cluster-resource-report` / this chart's version | Full OCI URL of the chart, and its version downstream |
+| `rancher.deployDownstream.chart.repo` / `.chart.version` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` / this chart's version | Full OCI URL of the chart, and its version downstream |
 | `rancher.deployDownstream.helmSecretName` / `.insecureSkipTLSVerify` | `""` / `false` | Registry credentials secret in the workspace; skip TLS verification for the chart download |
 | `rancher.deployDownstream.values` | `{}` | Values for every downstream release |
 | `rancher.namesConfigMap.enabled` / `.namespace` | `false` / release namespace | Downstream: read names from the published ConfigMap |

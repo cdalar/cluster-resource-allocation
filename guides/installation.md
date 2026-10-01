@@ -73,7 +73,7 @@ Every release is published on GHCR and copied to Docker Hub, public, with no log
 
 | | GHCR (default) | Docker Hub | Version |
 |---|---|---|---|
-| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.5.2` |
+| **Helm chart** (OCI) | `oci://ghcr.io/cdalar/charts/cluster-resource-report` | `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart` | the release, e.g. `0.6.0` |
 | **Image** | `ghcr.io/cdalar/cluster-resource-report` | `docker.io/cdalar/cluster-resource-report` | the same number (the chart's `appVersion`, used by default) |
 
 Both locations hold the same artifacts. The chart's default image is the GHCR one. To use Docker Hub instead
@@ -92,7 +92,7 @@ Set the chart and version once in your shell; every command below uses them:
 ```bash
 CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
 # or: CHART=oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
-VERSION=0.5.2
+VERSION=0.6.0
 
 helm show chart  $CHART --version $VERSION     # check that the chart can be pulled
 helm show values $CHART --version $VERSION     # all values with their defaults
@@ -105,7 +105,7 @@ There is no `helm repo add`: OCI charts are installed straight from their `oci:/
 Mirror both the chart and the image into your internal registry, then point `CHART` and the values at it:
 
 ```bash
-helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.5.2.tgz
+helm pull $CHART --version $VERSION                                   # cluster-resource-report-0.6.0.tgz
 helm push cluster-resource-report-$VERSION.tgz oci://registry.example.com/platform/charts
 crane copy ghcr.io/cdalar/cluster-resource-report:$VERSION registry.example.com/platform/cluster-resource-report:$VERSION
 
@@ -181,7 +181,7 @@ it on each cluster yourself.
 
 ### Option A. With Fleet, from the local cluster
 
-Needs Fleet ≥ 0.12 (Rancher 2.11+) and a chart version with `rancher.deployDownstream` (later than 0.5.2). The local
+Needs Fleet ≥ 0.12 (Rancher 2.11+) and chart 0.6.0 or later. The local
 release renders one Fleet HelmOp (Rancher: **Continuous Delivery → App Bundles**) that installs the chart on the
 clusters you choose, at the local release's chart version. It is on by default on the local cluster
 (detected by `isLocalCluster: auto`), but installs nothing until you list clusters. Design and background:
@@ -307,7 +307,7 @@ Rancher repositories belong to one cluster:
    `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`. No authentication.
 2. **Apps → Charts**, find **cluster-resource-report**, **Install**.
 3. Namespace `resource-report`, name `resource-report` (the menu links and the name publisher expect these),
-   version `0.5.2`.
+   version `0.6.0`.
 4. In the YAML step, paste the content of `values-local.yaml` or `values-downstream.yaml`, then **Install**.
 
 Upgrades then show up under **Apps → Installed Apps** when a new version is published (after the repository
@@ -451,6 +451,19 @@ Upgrading to 0.5.2: in the what-if calculator, CPU and memory are per replica (l
 and a *Single instance* option checks N+1 for applications that can't run as several replicas. The dashboard and
 planners show the chart version and image tag under their title.
 
+Upgrading to 0.6.0: more is on by default, and the chart detects the Rancher local cluster
+(`rancher.isLocalCluster: auto`). On the local cluster a plain install now brings both planners, the Project name
+publisher and the Fleet install on downstream clusters (Step 3 option A), which targets the ClusterGroup
+`resource-report` with the placeholder cluster `change-me`, so nothing is installed downstream until you list
+clusters. Downstream installs are unchanged. Things to check:
+- A ClusterGroup `resource-report` created by hand in `fleet-default` blocks the upgrade (Helm won't adopt it):
+  delete it, or set `rancher.deployDownstream.clusterGroup.create: false` to keep it.
+- `--reuse-values` keeps the old stored values (`isLocalCluster`, `enabled: false`), so the new defaults don't
+  apply; upgrade with `-f values-local.yaml` instead.
+- With `helm template` or Argo CD the local cluster can't be detected: set `rancher.isLocalCluster: true` there.
+- To keep a part off, set its `enabled: false` (`planner`, `capacityPlanner`, `rancher.publishNames`,
+  `rancher.deployDownstream`).
+
 Saved plans are kept across upgrades (they're in ConfigMaps that Helm doesn't overwrite); older plans are
 converted when loaded. Upgrading from 0.3.x to 0.4 or later, where plans were files on the PVC: keep
 `persistence.enabled: true` for this upgrade, open each planner and click **Save plan** once. That moves the plan into its ConfigMap; after
@@ -483,7 +496,7 @@ Uninstalling on the local cluster also removes the CronJob, but not the Fleet Bu
 | Symptom | Cause | Fix |
 |---|---|---|
 | `helm` fails: "failed to do request … ghcr.io" | No access to `ghcr.io` from where you run `helm` | Mirror the chart (step 1) and set `CHART` to the mirror |
-| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.5.2`); see the package page (step 1) |
+| `helm` fails: "… not found" for the version | `VERSION` isn't a published release, or has a leading `v` | Use the number without `v` (e.g. `0.6.0`); see the package page (step 1) |
 | Pod `ImagePullBackOff` | The cluster can't reach `ghcr.io`, or the mirror lacks the tag | Mirror the image (step 1) and set `image.repository`; with an authenticated registry add `imagePullSecrets` |
 | Rancher repository shows *403 Forbidden* | URL is `oci://ghcr.io/cdalar/charts` | Use the chart's own location `oci://ghcr.io/cdalar/charts/cluster-resource-report` |
 | Pulls from Docker Hub fail with *429 Too Many Requests* | Docker Hub's anonymous pull limit | Use GHCR (the default), or add a Docker Hub login as `imagePullSecrets` |

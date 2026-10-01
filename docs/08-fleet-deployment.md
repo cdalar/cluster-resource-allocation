@@ -5,7 +5,9 @@ the release on the Rancher local cluster, without a GitRepo. Status: **chart par
 `templates/fleet-helmop.yaml`, chart README, installation guide Step 3 option A) and **tested** on the test Rancher
 (Fleet v0.16.2, cluster `cra-downstream-2` through a ClusterGroup; see *Test results*). By default the chart
 creates that ClusterGroup itself (`resource-report`, placeholder cluster `change-me`, so nothing is installed until
-names are set); that default is not yet tested on Rancher. Still open: a release with it.
+names are set). Released in 0.6.0, where it is on by default on the local cluster (detected with
+`isLocalCluster: auto`; checked with a server-side dry run on the test Rancher). Not yet run end to end: the
+chart-created group installing on a downstream cluster.
 
 ## Starting point
 

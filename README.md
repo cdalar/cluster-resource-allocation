@@ -51,7 +51,7 @@ The chart is published as an OCI artifact on GHCR (a copy is on Docker Hub):
 
 ```bash
 CHART=oci://ghcr.io/cdalar/charts/cluster-resource-report
-VERSION=0.5.2
+VERSION=0.6.0
 
 # On every cluster: collector + dashboard
 helm upgrade --install resource-report $CHART --version $VERSION \

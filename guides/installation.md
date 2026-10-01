@@ -84,13 +84,14 @@ the Docker Hub location below and add to the values files:
 image:
   repository: docker.io/cdalar/cluster-resource-report
 rancher:
-  deployDownstream:           # local cluster: where Fleet fetches the chart for the downstream clusters
+  deployDownstream:           # local cluster: where Fleet gets the chart for the downstream clusters
     chart:
       repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
 ```
 
 The downstream releases Fleet installs take `image.repository` from the local release, so they pull from Docker
-Hub too. Fleet fetches the chart on the local cluster; the downstream clusters only pull the image.
+Hub too. With a HelmOp, each downstream cluster's Fleet agent downloads the chart itself, so the downstream
+clusters need Docker Hub access for both the chart and the image.
 
 Available versions: the [releases (tags)](https://github.com/cdalar/cluster-resource-allocation/tags) of the
 repository, the chart's [GHCR package page](https://github.com/cdalar/cluster-resource-allocation/pkgs/container/charts%2Fcluster-resource-report)

@@ -63,7 +63,7 @@ The image is `python:3.13-slim` with `kubectl` (checksum-verified) and the disco
 | Manual run (Actions → image → Run workflow) | Same as for the branch or tag it runs on |
 
 To release, set `version` and `appVersion` in `Chart.yaml` to the same number, push that commit, then tag it:
-`git tag v0.6.4 && git push origin v0.6.4`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
+`git tag v0.6.5 && git push origin v0.6.5`. Both workflows fail if the tag and `Chart.yaml` differ. The chart's
 default image tag is its `appVersion`. The dashboard and planners show the chart version and image tag under their title
 (`CHART_VERSION` / `IMAGE_TAG`, set by the chart).
 
@@ -71,22 +71,22 @@ The images and charts are public, so clusters with internet access pull them wit
 
 Clusters without internet access (most on-prem clusters) pull from an internal registry instead: set `registry`
 to a proxy of Docker Hub (Artifactory, Nexus, Harbor), or mirror the image (e.g. `crane copy
-docker.io/cdalar/cluster-resource-report:0.6.4 registry.example.com/platform/cluster-resource-report:0.6.4`) and
+docker.io/cdalar/cluster-resource-report:0.6.5 registry.example.com/platform/cluster-resource-report:0.6.5`) and
 set `image.repository`.
 
 #### Build locally
 
 ```bash
 cd discovery
-docker build -t registry.example.com/platform/cluster-resource-report:0.6.4 .
-docker push registry.example.com/platform/cluster-resource-report:0.6.4
+docker build -t registry.example.com/platform/cluster-resource-report:0.6.5 .
+docker push registry.example.com/platform/cluster-resource-report:0.6.5
 # KUBECTL_VERSION is a build arg
 ```
 
 ## 2. Install
 
 ```bash
-helm upgrade --install resource-report oci://registry-1.docker.io/cdalar/cluster-resource-report-chart --version 0.6.4 \
+helm upgrade --install resource-report oci://registry-1.docker.io/cdalar/cluster-resource-report-chart --version 0.6.5 \
   -n resource-report --create-namespace
 # through a proxy of Docker Hub: chart oci://repo.development.int/cdalar/cluster-resource-report-chart and
 #   --set registry=repo.development.int
@@ -242,6 +242,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.isLocalCluster` | `auto` | Installed on the Rancher local cluster: read project/cluster names from it (no secret) and turn on the local-only parts. `auto` detects it at install (Project API + `cattle-system/rancher` Deployment); set `true`/`false` with `helm template` or Argo CD |
 | `rancher.publishNames.enabled` | `true` | CronJob that publishes the names to downstream clusters as a Fleet Bundle. Rendered only with `rancher.isLocalCluster`, skipped elsewhere |
 | `rancher.publishNames.schedule` / `.workspace` / `.targetNamespace` / `.clusterSelector` | `*/10 * * * *` / `fleet-default` / `resource-report` / `{}` | Publish schedule, Fleet workspace, ConfigMap namespace on downstream clusters, Fleet clusterSelector |
+| `rancher.publishNames.resources` | 10m / 64Mi, limits 200m / 128Mi | Requests and limits of the CronJob's container |
 | `rancher.deployDownstream.enabled` | `true` | A Fleet HelmOp installs this chart on chosen downstream clusters (see above). Rendered only with `rancher.isLocalCluster` and Fleet HelmOps, skipped elsewhere; installs nothing while `clusterNames` is `[change-me]` |
 | `rancher.deployDownstream.clusterGroup.name` / `.create` / `.clusterNames` | `resource-report` / `true` / `[change-me]` | Default target: a Fleet ClusterGroup the chart creates, selecting these Rancher cluster names (`change-me` matches none). `create: false` or a plain name uses an existing group |
 | `rancher.deployDownstream.clusters` / `.clusterSelector` | `[]` / `null` | More targets: Fleet cluster names (each a name or `{name, values}`), a label selector |
@@ -257,7 +258,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
-| `resources` | 50m / 128Mi, limit 512Mi | Raise the memory limit for clusters with many thousands of pods |
+| `resources` | 50m / 128Mi, limits 500m / 512Mi | Requests and limits of the dashboard container (CPU and memory both limited, for admission policies that require it). Raise the memory limit for clusters with many thousands of pods |
 | `podSecurityContext` / `securityContext` | non-root 65534, read-only root FS, no capabilities | |
 
 ## Permissions

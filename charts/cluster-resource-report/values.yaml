@@ -60,6 +60,9 @@ rancher:
     workspace: fleet-default          # Fleet workspace: fleet-default = all downstream clusters
     targetNamespace: resource-report  # namespace of the ConfigMap on downstream clusters
     clusterSelector: {}               # Fleet clusterSelector; {} = every cluster in the workspace
+    resources:                        # the CronJob's container
+      requests: {cpu: 10m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 128Mi}
   # Rancher local cluster only (needs isLocalCluster): install this chart on chosen downstream clusters with one
   # Fleet HelmOp (an "App Bundle" in Continuous Delivery), no GitRepo. Fleet keeps the downstream releases at this
   # release's chart version, so `helm upgrade` here upgrades them too; uninstalling this release (or disabling
@@ -153,11 +156,14 @@ persistence:
   storageClass: ""
   size: 1Gi
 
+# Requests and limits on every container, so admission policies that require them (Kubewarden, Kyverno,
+# Gatekeeper) accept the pods. The CPU limit only caps a collection run (parsing all pods), which then takes longer.
 resources:
   requests:
     cpu: 50m
     memory: 128Mi
   limits:
+    cpu: 500m
     memory: 512Mi    # raise for clusters with many thousands of pods
 
 podSecurityContext:

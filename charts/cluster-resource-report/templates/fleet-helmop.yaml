@@ -3,7 +3,7 @@
 {{- if and (dig "deployDownstream" "enabled" true .Values.rancher) (include "crr.isLocal" .) (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") }}
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
 {{- $d := merge (deepCopy .Values.rancher.deployDownstream) (dict "workspace" "fleet-default" "clusters" list "clusterGroup" "" "namespace" "resource-report" "releaseName" "resource-report" "helmSecretName" "" "insecureSkipTLSVerify" false "values" dict) }}
-{{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://ghcr.io/cdalar/charts/cluster-resource-report" "version" "") }}
+{{- $chart := merge (deepCopy ($d.chart | default dict)) (dict "repo" "oci://registry-1.docker.io/cdalar/cluster-resource-report-chart" "version" "") }}
 {{- if dig "publishNames" "enabled" true .Values.rancher }}
 {{- $ns := dig "publishNames" "targetNamespace" "resource-report" .Values.rancher }}
 {{- if ne $ns $d.namespace }}

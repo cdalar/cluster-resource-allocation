@@ -84,7 +84,7 @@ rancher:
     namespace: resource-report        # release namespace downstream (= publishNames.targetNamespace)
     releaseName: resource-report
     chart:
-      repo: oci://ghcr.io/cdalar/charts/cluster-resource-report   # or docker.io / an internal mirror
+      repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart   # Docker Hub; or GHCR / an internal mirror
       version: ""                     # default: this chart's version
     helmSecretName: ""                # Fleet secret (in the workspace) for a private registry
     insecureSkipTLSVerify: false

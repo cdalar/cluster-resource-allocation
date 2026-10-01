@@ -83,11 +83,10 @@ the Docker Hub location below and add to the values files:
 ```yaml
 image:
   repository: docker.io/cdalar/cluster-resource-report
-rancher:
-  deployDownstream:           # local cluster: where Fleet gets the chart for the downstream clusters
-    chart:
-      repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart
 ```
+
+The Fleet HelmOp already gets the chart from Docker Hub by default
+(`rancher.deployDownstream.chart.repo: oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`).
 
 The downstream releases Fleet installs take `image.repository` from the local release, so they pull from Docker
 Hub too. With a HelmOp, each downstream cluster's Fleet agent downloads the chart itself, so the downstream

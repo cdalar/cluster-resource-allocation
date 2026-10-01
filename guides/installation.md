@@ -322,6 +322,13 @@ Rancher repositories belong to one cluster:
    version `0.6.1`.
 4. In the YAML step, paste the content of `values-local.yaml` or `values-downstream.yaml`, then **Install**.
 
+With the Docker Hub URL, **Apps → Charts** shows two tiles: **cluster-resource-report** with the newest version,
+and **cluster-resource-report-chart** with the older ones. Rancher reads only the newest tag of an OCI repository
+and lists the others under the repository's name, which on Docker Hub ends in `-chart` (on GHCR it is the chart's
+own name, so there is one tile). Install and upgrade from **cluster-resource-report**; both tiles hold the same
+chart. New versions appear after Rancher's next refresh of the repository, or at once with **Apps →
+Repositories → ⋮ → Refresh**.
+
 Upgrades then show up under **Apps → Installed Apps** when a new version is published (after the repository
 refreshes, or **Refresh** on the repository).
 

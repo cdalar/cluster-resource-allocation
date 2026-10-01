@@ -323,27 +323,43 @@ It must have the cAdvisor metrics and kube-state-metrics.
 
 ### Alternatively: install from the Rancher UI
 
-Instead of `helm` on the command line, the chart can be installed as a Rancher app. Do this per cluster, since
-Rancher repositories belong to one cluster:
+Instead of `helm` on the command line, install the chart as a Rancher app. With Fleet (option A) this is needed
+only on the **local** cluster; Fleet installs the downstream clusters. Rancher repositories belong to one cluster,
+so for option B repeat it on each downstream cluster.
 
-1. Cluster → **Apps → Repositories → Create**: name `cluster-resource-report`, target **OCI repository**,
-   URL `oci://ghcr.io/cdalar/charts/cluster-resource-report` (the chart's own location; the parent
-   `oci://ghcr.io/cdalar/charts` can't be listed anonymously and fails with *403 Forbidden*), or from Docker Hub
-   `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`. No authentication.
-2. **Apps → Charts**, find **cluster-resource-report**, **Install**.
-3. Namespace `resource-report`, name `resource-report` (the menu links and the name publisher expect these),
-   version `0.6.1`.
-4. In the YAML step, paste the content of `values-local.yaml` or `values-downstream.yaml`, then **Install**.
+1. Open the cluster (e.g. **local**) → **Apps → Repositories → Create**:
+   - Name: `cluster-resource-report`
+   - Target: **OCI repository**
+   - URL: the chart's own location, through your proxy
+     `oci://repo.development.int/cdalar/cluster-resource-report-chart`, or Docker Hub
+     `oci://registry-1.docker.io/cdalar/cluster-resource-report-chart`, or GHCR
+     `oci://ghcr.io/cdalar/charts/cluster-resource-report` (not the parent `oci://ghcr.io/cdalar/charts`: it can't
+     be listed anonymously and fails with *403 Forbidden*).
+   - Authentication: none for the public registries; for your proxy, if it needs a login, a basic-auth secret.
+   - **Create**, and wait until the repository is *Active*.
+2. **Apps → Charts**, pick the repository in the filter, open **cluster-resource-report** (see the note on two
+   tiles below) and click **Install**.
+3. **Metadata:** namespace `resource-report` and name `resource-report` are filled in by the chart; keep them
+   (the menu links and the name publisher expect them). Choose the version, e.g. `0.6.1`.
+4. **Values:** the chart shows a form:
+   - **Registry:** your proxy, e.g. `repo.development.int` (the host and path in front of `/cdalar/...` in the
+     repository URL). Empty = public Docker Hub.
+   - **Rancher local cluster:** `auto` detects it; keep it.
+   - **Downstream clusters (Fleet):** replace `change-me` with the Rancher names of the clusters that should get
+     the chart (local cluster only).
+   - Planners, Prometheus and the usage window are on by default.
+   Anything else (e.g. `imagePullSecrets`, values for the downstream releases) goes in **Edit YAML**, as in
+   `values-local.yaml`.
+5. **Install.** Check the pods in `resource-report`, and the **Resource Allocation** entry in the cluster's menu.
 
-With the Docker Hub URL, **Apps → Charts** shows two tiles: **cluster-resource-report** with the newest version,
-and **cluster-resource-report-chart** with the older ones. Rancher reads only the newest tag of an OCI repository
-and lists the others under the repository's name, which on Docker Hub ends in `-chart` (on GHCR it is the chart's
-own name, so there is one tile). Install and upgrade from **cluster-resource-report**; both tiles hold the same
-chart. New versions appear after Rancher's next refresh of the repository, or at once with **Apps →
-Repositories → ⋮ → Refresh**.
+A repository URL ending in `-chart` (Docker Hub and proxies of it) gives two tiles in **Apps → Charts**:
+**cluster-resource-report** with the newest version, and **cluster-resource-report-chart** with the older ones.
+Rancher reads only the newest tag of an OCI repository and lists the others under the repository's name. Install
+and upgrade from **cluster-resource-report**; both tiles hold the same chart. On GHCR the repository has the
+chart's own name, so there is one tile.
 
-Upgrades then show up under **Apps → Installed Apps** when a new version is published (after the repository
-refreshes, or **Refresh** on the repository).
+New versions appear after Rancher's next refresh of the repository, or at once with **Apps → Repositories → ⋮ →
+Refresh**. Upgrades then show up under **Apps → Installed Apps**; the upgrade keeps your values.
 
 ## Step 4. Clusters outside Rancher (optional)
 

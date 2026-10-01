@@ -5,3 +5,8 @@ type: application
 version: 0.6.1
 appVersion: "0.6.1"
 keywords: [kubernetes, rancher, resource-quota, capacity, showback]
+annotations:
+  # Rancher Apps: display name, and the release name and namespace the menu links and the name publisher expect
+  catalog.cattle.io/display-name: Cluster Resource Report
+  catalog.cattle.io/release-name: resource-report
+  catalog.cattle.io/namespace: resource-report

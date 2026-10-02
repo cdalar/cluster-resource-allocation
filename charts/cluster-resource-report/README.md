@@ -260,6 +260,8 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
 | `resources` | 50m / 128Mi, limits 500m / 512Mi | Requests and limits of the dashboard container (CPU and memory both limited, for admission policies that require it). Raise the memory limit for clusters with many thousands of pods |
+| `priorityClass.create` / `.value` | `true` / `1000000` | PriorityClass `<fullname>` for the dashboard pod, so it preempts ordinary workloads (priority 0) on a full cluster instead of staying Pending; below the `system-*-critical` classes |
+| `priorityClassName` | `""` | An existing PriorityClass to use instead; the chart then creates none |
 | `podSecurityContext` / `securityContext` | non-root 65534, read-only root FS, no capabilities | |
 
 ## Permissions

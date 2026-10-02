@@ -149,3 +149,12 @@ true
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/* PriorityClass of the dashboard pod: priorityClassName, else the chart's own (priorityClass.create), else none */}}
+{{- define "crr.priorityClassName" -}}
+{{- if .Values.priorityClassName -}}
+{{- .Values.priorityClassName -}}
+{{- else if .Values.priorityClass.create -}}
+{{- include "crr.fullname" . -}}
+{{- end -}}
+{{- end }}

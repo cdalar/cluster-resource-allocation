@@ -182,7 +182,12 @@ securityContext:
   capabilities:
     drop: [ALL]
 
-priorityClassName: ""
+# PriorityClass for the dashboard pod, so it is still scheduled on a full cluster: it preempts ordinary workloads
+# (priority 0) instead of staying Pending. Kept below system-cluster-critical / system-node-critical.
+priorityClass:
+  create: true                        # create a PriorityClass named like the release (<fullname>) and use it
+  value: 1000000
+priorityClassName: ""                 # use this existing PriorityClass instead (the chart then creates none)
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

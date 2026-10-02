@@ -117,3 +117,35 @@ true
 true
 {{- end -}}
 {{- end }}
+
+{{/* Fleet targets of the downstream HelmOp, without values, as JSON (empty when the chart renders no HelmOp):
+     the clusters it lists, its clusterSelector and its ClusterGroup. The names Bundle uses them by default, so the
+     names reach the same clusters as the dashboard. Keep in sync with the targets in fleet-helmop.yaml. */}}
+{{- define "crr.downstreamTargets" -}}
+{{- if and (dig "deployDownstream" "enabled" true .Values.rancher) (include "crr.isLocal" .) (.Capabilities.APIVersions.Has "fleet.cattle.io/v1alpha1/HelmOp") -}}
+{{- $d := .Values.rancher.deployDownstream | default dict -}}
+{{- $targets := list -}}
+{{- range ($d.clusters | default list) -}}
+{{- if kindIs "string" . -}}
+{{- $targets = append $targets (dict "clusterName" .) -}}
+{{- else if and (kindIs "map" .) .name -}}
+{{- $targets = append $targets (dict "clusterName" .name) -}}
+{{- end -}}
+{{- end -}}
+{{- if kindIs "map" $d.clusterSelector -}}
+{{- $targets = append $targets (dict "clusterSelector" $d.clusterSelector) -}}
+{{- end -}}
+{{- $group := "" -}}
+{{- if kindIs "map" $d.clusterGroup -}}
+{{- $group = $d.clusterGroup.name | default "resource-report" -}}
+{{- else if $d.clusterGroup -}}
+{{- $group = $d.clusterGroup -}}
+{{- end -}}
+{{- if $group -}}
+{{- $targets = append $targets (dict "clusterGroup" $group) -}}
+{{- end -}}
+{{- if $targets -}}
+{{- toJson $targets -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

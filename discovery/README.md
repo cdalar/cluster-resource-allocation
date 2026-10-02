@@ -122,7 +122,8 @@ python3 server.py --no-collect --data-dir <dir-with-report.json> --listen 127.0.
 Downstream clusters only carry project IDs. Instead of giving each cluster a token for the Rancher local cluster,
 `publish_rancher_names.py` runs on the local cluster and applies one Fleet `Bundle` (no GitRepo) whose only
 resource is a ConfigMap `rancher-project-names` with `projects.json` and `clusters.json`. Fleet delivers it to the
-downstream clusters (workspace `fleet-default`, all clusters or a `--cluster-selector`), and the report reads it
+downstream clusters (workspace `fleet-default`, all clusters, a `--cluster-selector`, or a list of Fleet `--targets`;
+the chart passes the targets of its downstream HelmOp), and the report reads it
 there with `--rancher-names-configmap <ns>/rancher-project-names`.
 
 ```bash

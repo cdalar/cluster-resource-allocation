@@ -3,7 +3,13 @@
 {{- /* CronJob names are limited to 52 characters */}}
 {{- $name := printf "%s-publish-names" (include "crr.fullname" . | trunc 38 | trimSuffix "-") }}
 {{- /* defaults repeated here so `helm upgrade --reuse-values` from an older release still works */}}
-{{- $p := merge (deepCopy .Values.rancher.publishNames) (dict "schedule" "*/10 * * * *" "workspace" "fleet-default" "targetNamespace" "resource-report" "clusterSelector" dict) }}
+{{- $p := merge (deepCopy .Values.rancher.publishNames) (dict "schedule" "*/10 * * * *" "workspace" "fleet-default" "targetNamespace" "resource-report") }}
+{{- /* where the names go: an explicit clusterSelector; else the HelmOp's targets (same clusters as the dashboard);
+       else every cluster in the workspace */}}
+{{- $targets := "" }}
+{{- if not (kindIs "map" $p.clusterSelector) }}
+{{- $targets = include "crr.downstreamTargets" . }}
+{{- end }}
 # Publishes Rancher Project/cluster names to downstream clusters: one Fleet Bundle holding a ConfigMap.
 # Separate service account: the dashboard itself stays read-only.
 apiVersion: v1
@@ -108,7 +114,11 @@ spec:
               args:
                 - --workspace={{ $p.workspace }}
                 - --target-namespace={{ $p.targetNamespace }}
-                - {{ printf "--cluster-selector=%s" (toJson $p.clusterSelector) | quote }}
+                {{- if $targets }}
+                - {{ printf "--targets=%s" $targets | quote }}
+                {{- else }}
+                - {{ printf "--cluster-selector=%s" (toJson ($p.clusterSelector | default dict)) | quote }}
+                {{- end }}
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               resources:

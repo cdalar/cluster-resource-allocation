@@ -21,7 +21,8 @@ import discover
 BUNDLE_NAME = discover.NAMES_CONFIGMAP
 
 
-def build_bundle(projects, clusters, workspace, target_namespace, cluster_selector):
+def build_bundle(projects, clusters, workspace, target_namespace, cluster_selector, targets=None):
+    """The names Bundle; targets (a list of Fleet targets) replaces the single clusterSelector target."""
     configmap = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -39,7 +40,7 @@ def build_bundle(projects, clusters, workspace, target_namespace, cluster_select
         "spec": {
             "defaultNamespace": target_namespace,
             "resources": [{"name": "configmap.yaml", "content": json.dumps(configmap, indent=1)}],
-            "targets": [{"clusterSelector": cluster_selector}],
+            "targets": targets if targets else [{"clusterSelector": cluster_selector}],
         },
     }
 
@@ -54,6 +55,10 @@ def main():
     ap.add_argument("--cluster-selector", default="{}",
                     help='Fleet clusterSelector as JSON (default: {} = every cluster in the workspace), '
                          'e.g. \'{"matchLabels": {"env": "test"}}\'')
+    ap.add_argument("--targets",
+                    help='Fleet targets as a JSON list, instead of --cluster-selector, e.g. '
+                         '\'[{"clusterGroup": "resource-report"}, {"clusterName": "onprem-test-01"}]\' '
+                         '(the chart passes the HelmOp\'s targets)')
     ap.add_argument("--dry-run", action="store_true", help="print the Bundle instead of applying it")
     args = ap.parse_args()
 
@@ -61,6 +66,14 @@ def main():
         selector = json.loads(args.cluster_selector)
     except json.JSONDecodeError as e:
         sys.exit(f"--cluster-selector: invalid JSON: {e}")
+    targets = None
+    if args.targets:
+        try:
+            targets = json.loads(args.targets)
+        except json.JSONDecodeError as e:
+            sys.exit(f"--targets: invalid JSON: {e}")
+        if not isinstance(targets, list) or not targets or not all(isinstance(t, dict) for t in targets):
+            sys.exit("--targets: expected a non-empty JSON list of Fleet targets")
     try:
         projects, clusters = discover.load_rancher_projects(args.context)
     except discover.KubectlError as e:
@@ -68,7 +81,8 @@ def main():
     if not projects:
         sys.exit("no Rancher projects found; is this the Rancher local cluster?")
 
-    bundle = json.dumps(build_bundle(projects, clusters, args.workspace, args.target_namespace, selector), indent=1)
+    bundle = json.dumps(build_bundle(projects, clusters, args.workspace, args.target_namespace, selector, targets),
+                        indent=1)
     if args.dry_run:
         print(bundle)
         return

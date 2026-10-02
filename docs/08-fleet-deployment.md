@@ -255,7 +255,7 @@ AGENTS.md requires these to stay in sync:
      `--api-versions fleet.cattle.io/v1alpha1/HelmOp`. Check the version (= Chart version), the merged values and
      the targets.
    - Each fail case above must fail: no HelmOp API, `isLocalCluster=false`, no target, and a namespace mismatch.
-   - Run the unit tests in `discovery/` and `kibana/`. They are unchanged, but run them as a sanity check.
+   - Run the unit tests in `discovery/`. They are unchanged, but run them as a sanity check.
 2. **Test Rancher (cra-report, not production):**
    - Upgrade the local release from the new chart with `clusters: [cra-downstream-2]` only. The other downstream
      boxes are offline or paused and stay that way.

@@ -16,7 +16,7 @@ Numbers and rules live in those docs; this one says **what to do in which order*
 |---|---|---|
 | Design | Drafts 01–09 written. ADR-0001 (Rancher Project quotas via Terraform), ADR-0002 (pay for allocated quota) and ADR-0003 (no CPU limit quota) are *Proposed*. Operating principles not yet agreed | [docs](.), [ADRs](adr/) |
 | Open questions | 20 raised (Q20 by this plan), none answered, Q16 partly (Rancher licence counts CPU cores) | [open questions](open-questions.md) |
-| Tooling | Released and usable (v0.6.4): dashboard per cluster with *Room for projects (N+1)*, allocation and capacity planners with N+1 and headroom checks and a what-if calculator, Kibana dashboards, Fleet install on downstream clusters. Tested on the test Rancher only | [README](../README.md), [installation guide](../guides/installation.md) |
+| Tooling | Released and usable (v0.6.4): dashboard per cluster with *Room for projects (N+1)*, allocation and capacity planners with N+1 and headroom checks and a what-if calculator, Fleet install on downstream clusters. Tested on the test Rancher only | [README](../README.md), [installation guide](../guides/installation.md) |
 | Enforcement | **None**: no Rancher Project quotas, no container defaults (LimitRange), no admission policies, no tenant PriorityClasses | [04](04-technical-design.md) |
 | Allocation as code | File format proposed, planner exports it. No allocations repository, no Terraform, no CI validation (Q6, Q13) | [04.2](04-technical-design.md#42-allocation-as-code) |
 | Process | Designed (RACI, change requests, reviews, emergency increase), not running | [05](05-process.md) |

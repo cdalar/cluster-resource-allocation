@@ -18,9 +18,8 @@ several namespaces each), plus some AKS clusters.
 |---|---|
 | `docs/` | Design and process docs (numbered), `open-questions.md`; `docs/images/` holds the README screenshots (synthetic demo data) |
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
-| `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `kibana-dashboard.md`), separate from the design docs |
+| `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`), separate from the design docs |
 | `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
-| `kibana/` | `build_dashboard.py` generates `cluster-resources-as-is.ndjson` (dashboards *Cluster resources (as-is)* and *Cluster resource report*) and, with `--no-project`, `cluster-resources-as-is-no-project.ndjson` (Kibana dashboard on the OTel metrics in the central Elastic; stdlib only); `otel-collector-fragment.yaml` lists the collector settings it needs. Regenerate and commit the script and both `.ndjson` files after changing queries |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 
 ## Conventions
@@ -34,8 +33,7 @@ several namespaces each), plus some AKS clusters.
   the running app) may render one Fleet `HelmOp` that installs this chart itself on chosen downstream clusters
   (`rancher.deployDownstream`). Never other workloads, quotas or Rancher objects.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
-- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`;
-  for `kibana/`: `cd kibana && python3 -m unittest -v test_build_dashboard`.
+- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`.
   After changing the chart: `helm lint charts/cluster-resource-report`.
 - Keep `discovery/README.md`, `discovery/rbac.yaml` and the chart (values, RBAC, README) in sync with the code.
 - Test against a throwaway cluster, never against production kubeconfig contexts.

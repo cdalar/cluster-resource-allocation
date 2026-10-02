@@ -224,6 +224,12 @@ class NamesConfigMap(unittest.TestCase):
                                           "labels": {"app.kubernetes.io/part-of": "cluster-resource-report"}})
         self.assertEqual(names_from_configmap(cm), (projects, clusters))
 
+    def test_bundle_with_targets(self):
+        from publish_rancher_names import build_bundle
+        targets = [{"clusterName": "a"}, {"clusterGroup": "resource-report"}]
+        bundle = build_bundle({}, {}, "fleet-default", "resource-report", {}, targets)
+        self.assertEqual(bundle["spec"]["targets"], targets)
+
     def test_empty_configmap(self):
         from discover import names_from_configmap
         self.assertEqual(names_from_configmap({}), ({}, {}))

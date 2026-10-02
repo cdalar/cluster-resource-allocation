@@ -59,7 +59,9 @@ rancher:
     schedule: "*/10 * * * *"
     workspace: fleet-default          # Fleet workspace: fleet-default = all downstream clusters
     targetNamespace: resource-report  # namespace of the ConfigMap on downstream clusters
-    clusterSelector: {}               # Fleet clusterSelector; {} = every cluster in the workspace
+    clusterSelector: null             # where the names go. null: the same targets as deployDownstream (its ClusterGroup,
+                                      # clusters and clusterSelector), or every cluster when deployDownstream is off;
+                                      # a Fleet clusterSelector instead, e.g. {} = every cluster in the workspace
     resources:                        # the CronJob's container
       requests: {cpu: 10m, memory: 64Mi}
       limits: {cpu: 200m, memory: 128Mi}

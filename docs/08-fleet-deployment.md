@@ -191,8 +191,9 @@ create it in the Rancher UI:
 
 Removing a cluster from the targets (a name, a label, or group membership) makes Fleet uninstall the chart there.
 
-The names Bundle (`publishNames.clusterSelector`, default `{}`) still goes to every cluster in the workspace.
-That is harmless, since it is only a ConfigMap of names, but it can use the same selector.
+The names Bundle goes to the same targets as the HelmOp (since 0.6.6: `publishNames.clusterSelector: null`, the
+default), so one list of clusters decides both. Set `publishNames.clusterSelector` (e.g. `{}` for every cluster in
+the workspace) to send the names elsewhere.
 
 ## Lifecycle
 

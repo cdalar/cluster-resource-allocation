@@ -1,0 +1,12 @@
+{{- if and .Values.priorityClass.create (not .Values.priorityClassName) }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "crr.fullname" . }}
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+value: {{ .Values.priorityClass.value | int }}
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: Cluster Resource Report dashboard; scheduled ahead of ordinary workloads on a full cluster.
+{{- end }}

@@ -185,7 +185,6 @@ Use of higher classes can be restricted per namespace with `ResourceQuota` `scop
 | Requests vs. actual usage (efficiency) | Prometheus (cAdvisor + kube-state-metrics) |
 | Cost per project | **OpenCost** with custom on-prem pricing (unit rates from [03](03-allocation-model.md)); on AKS with Azure pricing |
 | Periodic report per project | Monthly export (OpenCost API / Prometheus query → CSV/report) |
-| As-is view in the central Kibana (where clusters send OpenTelemetry metrics to Elastic) | [Kibana dashboard](../guides/kibana-dashboard.md): ES\|QL panels on `k8s_cluster` + `kubeletstats` metrics; needs the collector settings listed there ([Q15](open-questions.md)) |
 
 Aggregation key: Rancher adds `field.cattle.io/projectId` to namespaces; additionally require labels
 `project`, `cost-center`, `env` on namespaces (set by the allocation pipeline) so reporting works the same

@@ -1,0 +1,57 @@
+# OpenTelemetry Collector settings the "Cluster resources (as-is)" dashboard needs.
+# A fragment to merge into the existing collector configuration of each cluster, not a complete config.
+# Tested with otel/opentelemetry-collector-contrib 0.135.0 -> Elasticsearch 9.1 (mapping mode otel).
+
+receivers:
+  # Cluster-wide metrics; run ONE instance per cluster (a Deployment, or leader election).
+  k8s_cluster:
+    auth_type: serviceAccount
+    collection_interval: 60s
+    # Node allocatable is off by default. Newer collector versions replace this option with
+    # metrics: {k8s.node.allocatable_cpu: {enabled: true}, k8s.node.allocatable_memory: {enabled: true}}
+    allocatable_types_to_report: [cpu, memory]
+    # On by default, listed for clarity: k8s.container.cpu_request / memory_request / cpu_limit /
+    # memory_limit / restarts, k8s.pod.phase
+
+  # Usage; runs on every node (DaemonSet) against the local kubelet.
+  kubeletstats:
+    auth_type: serviceAccount
+    collection_interval: 60s
+    endpoint: https://${env:K8S_NODE_IP}:10250   # K8S_NODE_IP from status.hostIP
+    insecure_skip_verify: true
+    metric_groups: [node, pod, container]
+    # Used: k8s.pod.cpu.usage, k8s.pod.memory.working_set, k8s.node.cpu.usage, k8s.node.memory.working_set
+
+processors:
+  k8sattributes:
+    auth_type: serviceAccount
+    extract:
+      metadata: [k8s.namespace.name, k8s.pod.name, k8s.pod.uid, k8s.node.name]
+      labels:
+        # Rancher Project of the namespace -> resource.attributes.rancher.project.id
+        - tag_name: rancher.project.id
+          key: field.cattle.io/projectId
+          from: namespace
+    pod_association:
+      - sources: [{from: resource_attribute, name: k8s.pod.uid}]
+      - sources: [{from: connection}]
+
+  # Cluster name; set per cluster (Rancher cluster name recommended).
+  resource/cluster:
+    attributes:
+      - {key: k8s.cluster.name, value: "<cluster-name>", action: upsert}
+
+exporters:
+  elasticsearch:
+    endpoint: https://elastic.example:9200
+    mapping: {mode: otel}   # data streams metrics-<receiver>.otel-<namespace>, fields metrics.* / resource.attributes.*
+
+service:
+  pipelines:
+    metrics:
+      receivers: [k8s_cluster, kubeletstats]
+      processors: [k8sattributes, resource/cluster]   # + memory_limiter / batch as already configured
+      exporters: [elasticsearch]
+
+# RBAC: get/list/watch on nodes, nodes/stats, nodes/proxy, namespaces, pods, replicasets, deployments,
+# statefulsets, daemonsets, jobs, cronjobs, resourcequotas, horizontalpodautoscalers.

@@ -9,6 +9,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 |---|---|
 | [`kibana/cluster-resources-as-is.ndjson`](../kibana/cluster-resources-as-is.ndjson) | Saved objects to import: two dashboards, *Cluster resources (as-is)* and *Cluster resource report* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resources-as-is-no-project.ndjson`](../kibana/cluster-resources-as-is-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
+| [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
 | [`kibana/otel-collector-fragment.yaml`](../kibana/otel-collector-fragment.yaml) | Collector settings the dashboard needs (receivers, `k8sattributes`, cluster name) |
 

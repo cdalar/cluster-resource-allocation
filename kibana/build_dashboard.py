@@ -20,6 +20,9 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --project-name-field --out with-names.ndjson
       # Project names from the metrics themselves (resource.attributes.rancher.project.name, set by the collector:
       # build_collector_values.py); the Project filter control then lists names
+  ./build_dashboard.py --no-quota --no-hpa --out no-quota-hpa.ndjson
+      # no cluster has a ResourceQuota / HorizontalPodAutoscaler yet, so Elasticsearch has no such fields
+      # ("Unknown column [metrics.k8s.resource_quota.hard_limit]"); the Quota / HPA columns then show 0
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -72,6 +75,9 @@ F = {
     "hpa_uid": "resource.attributes.k8s.hpa.uid",
     "hpa_max": "metrics.k8s.hpa.max_replicas",
 }
+# Metrics the k8s_cluster receiver only sends while such objects exist. When no cluster has any, no index has the
+# field and ES|QL rejects every query that names it ("Unknown column"): --no-quota / --no-hpa leave them out.
+OPTIONAL_FIELDS = {"quota": ("rq_uid", "rq_hard"), "hpa": ("hpa_uid", "hpa_max")}
 GIB = "1073741824.0"  # a double, so byte sums (longs) are not integer-divided
 NO_PROJECT = '"(no project)"'
 
@@ -99,7 +105,8 @@ def name_agg(raw):
 def q(text):
     """Substitute {field} placeholders and tidy whitespace."""
     lines = [line.rstrip() for line in text.strip().splitlines()]
-    return "\n".join(lines).format(**{**F, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
+    fields = {k: "NULL" if v is None else v for k, v in F.items()}  # --no-quota / --no-hpa
+    return "\n".join(lines).format(**{**fields, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
                                     category=category_expr(), pname_stage=pname_stage(),
                                     project_label=project_label_expr(), name_agg_raw=name_agg(True),
                                     name_agg=name_agg(False))
@@ -870,6 +877,11 @@ def main():
                     help="Project names from this lookup index in Elasticsearch (LOOKUP JOIN, Elasticsearch 9.1+), "
                          "e.g. rancher-projects; fill it with publish_project_names.py. Every report panel fails "
                          "while the index does not exist")
+    ap.add_argument("--no-quota", action="store_true",
+                    help=f"leave out the ResourceQuota metric ({F['rq_hard']}): no cluster has a quota yet, so "
+                         "the field does not exist. Needs --out")
+    ap.add_argument("--no-hpa", action="store_true",
+                    help=f"the same for the HorizontalPodAutoscaler metric ({F['hpa_max']})")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
                          "collector sets (build_collector_values.py). The Project filter control then lists names. "
@@ -894,6 +906,11 @@ def main():
         LOOKUP_INDEX[0] = args.project_lookup_index
     if args.no_project:
         F["project"] = None
+    if (args.no_quota or args.no_hpa) and not args.out and not args.check:
+        ap.error("--no-quota / --no-hpa need --out (the committed files are generated without them)")
+    for flag, kind in ((args.no_quota, "quota"), (args.no_hpa, "hpa")):
+        if flag:
+            F.update(dict.fromkeys(OPTIONAL_FIELDS[kind]))
     if args.rancher_projects:
         PROJECT_NAMES.update(load_rancher_projects(args.rancher_projects))
     out = args.out or default_out(args.no_project, bool(args.project_lookup_index))

@@ -13,6 +13,7 @@ import publish_project_names as ppn
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "discovery"))
 
 PROJECT_FIELD = bd.F["project"]
+FIELDS = dict(bd.F)
 
 
 class BuildDashboardTest(unittest.TestCase):
@@ -26,7 +27,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.build_report_panels(bd.DEFAULT_INDEX)
 
     def tearDown(self):
-        bd.F["project"] = PROJECT_FIELD
+        bd.F.update(FIELDS)
         bd.PROJECT_NAMES.clear()
         bd.LOOKUP_INDEX[0] = None
         bd.NAME_FIELD[0] = None
@@ -163,6 +164,17 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertNotIn("platform-tools", text)
         self.assertEqual(len(patched), len(exported))
         self.assertEqual(text.count("TO_LOWER(pname) RLIKE"), "".join(exported).count("TO_LOWER(pname) RLIKE"))
+
+    def test_without_quota_and_hpa_metrics(self):
+        for kind in bd.OPTIONAL_FIELDS:
+            bd.F.update(dict.fromkeys(bd.OPTIONAL_FIELDS[kind]))
+        self.rebuild()
+        text = self.generated()
+        for word in ("resource_quota", "resourcequota", "k8s.hpa"):
+            self.assertNotIn(word, text)
+        self.assertIn("NULL IS NOT NULL", text)
+        self.assertNotIn("None", "".join(p["esql"] or "" for p in bd.PANELS + bd.REPORT_PANELS))
+        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
 
     def test_project_name_field(self):
         bd.NAME_FIELD[0] = bd.DEFAULT_NAME_FIELD

@@ -1,0 +1,26 @@
+# Values overlay for the opentelemetry-kube-stack Helm chart (rendered with 0.20.1): node taints and cordoned nodes
+# as metrics, so the dashboards can tell which nodes take workloads. The OTel receivers do not report taints;
+# kube-state-metrics does (kube_node_spec_taint, kube_node_spec_unschedulable). The chart bundles it, off by default.
+#
+#   helm upgrade ... -f <your values>.yaml -f otel-kube-stack-values.yaml -f otel-kube-stack-node-taints.yaml
+#
+# Kept small on purpose: kube-state-metrics watches nodes only and exposes just these two metrics.
+# The collector picks it up through the chart's default scrape job "kubernetes-pods" (daemon collector,
+# scrape_configs_file: daemon_scrape_configs.yaml), which scrapes pods annotated prometheus.io/scrape on its own
+# node. If your collector does not use that job, add a scrape job for the kube-state-metrics service instead.
+
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  collectors:
+    - nodes
+  metricAllowlist:
+    - kube_node_spec_taint
+    - kube_node_spec_unschedulable
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+  prometheus:
+    monitor:
+      enabled: false        # no ServiceMonitor: the annotation above is enough for the default scrape job

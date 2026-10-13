@@ -23,7 +23,7 @@ mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.
 
 ## What it shows
 
-Every panel is an ES|QL panel over the dashboard's time range (default: last 7 days).
+Every panel is an ES|QL panel over the dashboard's time range (default: last 1 day; `build_dashboard.py --time-from now-7d` for another).
 
 | Panel | Content |
 |---|---|

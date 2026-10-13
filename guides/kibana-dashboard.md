@@ -9,6 +9,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 |---|---|
 | [`kibana/cluster-resources-as-is.ndjson`](../kibana/cluster-resources-as-is.ndjson) | Saved objects to import: two dashboards, *Cluster resources (as-is)* and *Cluster resource report* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resources-as-is-no-project.ndjson`](../kibana/cluster-resources-as-is-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
+| [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
 | [`kibana/publish_project_names.py`](../kibana/publish_project_names.py) | Writes the Rancher Project names to a lookup index in Elasticsearch, for a report generated with `--project-lookup-index` ([Project names](#project-names-from-a-lookup-index)) |
@@ -91,10 +92,12 @@ then needs only a new run of the publisher, not a new dashboard file. Needs Elas
 ```bash
 # 1. Fill the index (creates it with index.mode: lookup); Projects are read with kubectl from the Rancher local cluster
 ES_API_KEY=... ./kibana/publish_project_names.py https://elastic.example:9200 --context <rancher-local-context>
-# 2. Generate the report that joins it, check it, and import that file instead of the committed one
-./kibana/build_dashboard.py --project-lookup-index rancher-projects --out cluster-resources-lookup.ndjson
+# 2. Check the queries, then import kibana/cluster-resources-as-is-project-names.ndjson (same object IDs as the other files)
 ES_API_KEY=... ./kibana/build_dashboard.py --project-lookup-index rancher-projects --check https://elastic.example:9200
 ```
+
+The committed file is generated with `./kibana/build_dashboard.py --project-lookup-index rancher-projects`. For
+another index name, pass it to both scripts (`publish_project_names.py --index`) and add `--out`.
 
 | Point | Detail |
 |---|---|

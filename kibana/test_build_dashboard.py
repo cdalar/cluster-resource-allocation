@@ -45,6 +45,13 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertEqual(f.read(), self.generated(),
                              "run ./build_dashboard.py --no-project and commit the .ndjson")
 
+    def test_committed_project_names_ndjson_is_current(self):
+        bd.LOOKUP_INDEX[0] = bd.DEFAULT_LOOKUP_INDEX
+        self.rebuild()
+        with open(bd.default_out(lookup=True)) as f:
+            self.assertEqual(f.read(), self.generated(),
+                             "run ./build_dashboard.py --project-lookup-index rancher-projects and commit the .ndjson")
+
     def test_no_project_never_names_the_field(self):
         self.without_project()
         text = self.generated()

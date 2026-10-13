@@ -173,6 +173,20 @@ GET metrics-*.otel-*/_field_caps?fields=metrics.k8s.container.cpu_request,metric
 | Cluster name | `resource.attributes.k8s.cluster.name` | `resource` processor, set per cluster | All clusters show as `(unknown)` and are added together |
 | Rancher Project | `resource.attributes.rancher.project.id` | `k8sattributes`: namespace label `field.cattle.io/projectId` as `rancher.project.id` | Panels fail with `Unknown column [resource.attributes.rancher.project.id]`; import the `-no-project` file instead |
 
+Two metrics exist only while such objects exist, so on an Elastic where no cluster has any yet the report fails
+with `Unknown column [metrics.k8s.resource_quota.hard_limit]` (or `metrics.k8s.hpa.max_replicas`):
+
+| Metric | Sent when | If the field is missing |
+|---|---|---|
+| `metrics.k8s.resource_quota.hard_limit` | Some namespace has a ResourceQuota | Generate with `--no-quota`; the *Quota* column shows 0 |
+| `metrics.k8s.hpa.max_replicas` | Some HorizontalPodAutoscaler exists | Generate with `--no-hpa`; the *HPA* column shows 0 |
+
+```bash
+./kibana/build_dashboard.py --no-quota --no-hpa --out cluster-resources-no-quota-hpa.ndjson   # with any other option
+```
+
+Regenerate without the option once the first quota (or HPA) exists.
+
 The data must be written in OTel-native mode (`mapping: {mode: otel}` in the Elasticsearch exporter): data streams `metrics-k8sclusterreceiver.otel-*` and
 `metrics-kubeletstatsreceiver.otel-*`, fields under `metrics.*` and `resource.attributes.*`. With ECS mapping
 (`kubernetes.*` fields) the queries need other field names; see [Adapting](#adapting).

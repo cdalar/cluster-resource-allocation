@@ -14,6 +14,9 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --rancher-projects projects.json
       # Project names and System projects from `kubectl get projects.management.cattle.io -A -o json`
       # on the Rancher local cluster (without it the report shows Project IDs)
+  ./build_dashboard.py --project-lookup-index rancher-projects
+      # Project names from a lookup index in Elasticsearch instead (ES|QL LOOKUP JOIN, Elasticsearch 9.1+);
+      # publish_project_names.py fills it
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -80,7 +83,7 @@ def q(text):
     """Substitute {field} placeholders and tidy whitespace."""
     lines = [line.rstrip() for line in text.strip().splitlines()]
     return "\n".join(lines).format(**{**F, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
-                                    category=category_expr(), pname=pname_expr())
+                                    category=category_expr(), pname_stage=pname_stage())
 
 
 # Common first stage: one row per time bucket and entity (container, pod or node), holding that entity's
@@ -312,13 +315,24 @@ SYSTEM_NS_LUCENE = (
 )
 SYSTEM_PROJECT_LUCENE = "system|.*platform.*"  # matched against the lower-case Project name
 PROJECT_NAMES = {}  # Project ID -> display name, from --rancher-projects
+# Lookup index (index.mode: lookup) with one document per Project, from --project-lookup-index:
+# LOOKUP_KEY = Project ID, LOOKUP_NAME = display name. publish_project_names.py writes it.
+LOOKUP_INDEX = [None]
+LOOKUP_KEY = "project"  # the queries' column of the Project ID; LOOKUP JOIN needs the same name on both sides
+LOOKUP_NAME = "project_name"
+INDEX_NAME_RE = r"[a-z0-9][a-z0-9._-]*"
 NOW_WINDOW = "10 minutes"  # "now" values (pods, pending, standards) = the last 10 minutes of the time range
 
 
 def load_rancher_projects(path):
     """Project ID -> display name from `kubectl get projects.management.cattle.io -A -o json`."""
     with open(path) as f:
-        items = json.load(f).get("items", [])
+        return rancher_project_names(json.load(f))
+
+
+def rancher_project_names(projects):
+    """Project ID -> display name from a Project list (the parsed kubectl output)."""
+    items = projects.get("items", [])
     names = {}
     for it in items:
         pid, name = it["metadata"]["name"], (it.get("spec") or {}).get("displayName") or it["metadata"]["name"]
@@ -342,6 +356,15 @@ def pname_expr():
     return f"CASE({cases}, project)"
 
 
+def pname_stage():
+    """Stage that adds pname. With a lookup index the name is joined in Elasticsearch; a Project the index does
+    not have (and "(no project)") keeps its ID."""
+    if LOOKUP_INDEX[0] and F["project"] is not None:
+        return (f"| LOOKUP JOIN {LOOKUP_INDEX[0]} ON {LOOKUP_KEY}\n"
+                f"| EVAL pname = COALESCE({LOOKUP_NAME}, project)")
+    return f"| EVAL pname = {pname_expr()}"
+
+
 def system_ns_expr():
     """namespace matches SYSTEM_NS_LUCENE. One RLIKE over the whole expression is too complex for Lucene's automaton
     (too_complex_to_determinize), so plain wildcards become LIKE and only the rest stays RLIKE."""
@@ -359,7 +382,7 @@ def category_expr():
     sys_ns = system_ns_expr()
     if F["project"] is None:
         return f'CASE({sys_ns}, "System", "Workload")'
-    if PROJECT_NAMES:
+    if PROJECT_NAMES or LOOKUP_INDEX[0]:
         sys_ns += f' OR TO_LOWER(pname) RLIKE "{SYSTEM_PROJECT_LUCENE}"'
     return f'CASE({sys_ns}, "System", project == {NO_PROJECT}, "Unassigned", "Tenant")'
 
@@ -397,8 +420,8 @@ REPORT_POD_STAGE = """
 | EVAL rc = req_cpu * run, rm = req_mem * run, lm = lim_mem * run,
        pend_cpu = CASE(phase_now == 1, req_cpu, 0.0), pend_mem = CASE(phase_now == 1, req_mem, 0.0),
        pods = CASE(phase_now == 2, 1, 0), pending = CASE(phase_now == 1, 1, 0),
-       besteffort = CASE(phase_now == 2 AND containers > 0 AND any_set == 0, 1, 0),
-       pname = {pname}
+       besteffort = CASE(phase_now == 2 AND containers > 0 AND any_set == 0, 1, 0)
+{pname_stage}
 | EVAL category = {category}""".replace("NOW_WINDOW", NOW_WINDOW)
 
 # Per cluster, averaged over the buckets; "now" values are the maximum over the buckets (only the last ones have any).
@@ -469,7 +492,8 @@ def build_report_panels(index):
 
 def _build_report_panels(src):
     base = src + REPORT_POD_STAGE
-    names = ("Project names from Rancher." if PROJECT_NAMES else
+    names = (f"Project names from the lookup index `{LOOKUP_INDEX[0]}`." if LOOKUP_INDEX[0] else
+             "Project names from Rancher." if PROJECT_NAMES else
              "Projects show their ID; regenerate with `--rancher-projects` for names and System projects.")
     panel("markdown", "About", None, (0, 0, 48, 4), markdown=(
         "**Cluster resource report**: the in-cluster dashboard of the cluster-resource-report chart, on the "
@@ -751,12 +775,9 @@ def default_out(no_project=False):
 
 # ---- check mode ----
 
-def run_checks(url, window, end=None, only=None):
-    end = datetime.datetime.fromisoformat(end) if end else datetime.datetime.now(datetime.timezone.utc)
-    unit = {"m": "minutes", "h": "hours", "d": "days"}[window[-1]]
-    start = end - datetime.timedelta(**{unit: int(window[:-1])})
-    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    headers = {"Content-Type": "application/json"}
+def es_auth(content_type="application/json"):
+    """Request headers and TLS context from $ES_API_KEY, or $ES_USER / $ES_PASSWORD; $ES_INSECURE skips TLS checks."""
+    headers = {"Content-Type": content_type}
     if os.environ.get("ES_API_KEY"):
         headers["Authorization"] = "ApiKey " + os.environ["ES_API_KEY"]
     elif os.environ.get("ES_USER"):
@@ -765,6 +786,15 @@ def run_checks(url, window, end=None, only=None):
     ctx = ssl.create_default_context()
     if os.environ.get("ES_INSECURE"):
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    return headers, ctx
+
+
+def run_checks(url, window, end=None, only=None):
+    end = datetime.datetime.fromisoformat(end) if end else datetime.datetime.now(datetime.timezone.utc)
+    unit = {"m": "minutes", "h": "hours", "d": "days"}[window[-1]]
+    start = end - datetime.timedelta(**{unit: int(window[:-1])})
+    iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    headers, ctx = es_auth()
     ok = True
     for p in PANELS + REPORT_PANELS:
         if not p["esql"]:
@@ -804,7 +834,19 @@ def main():
     ap.add_argument("--rancher-projects", metavar="FILE",
                     help="output of `kubectl get projects.management.cattle.io -A -o json` on the Rancher local "
                          "cluster: Project names and System projects in the report")
+    ap.add_argument("--project-lookup-index", metavar="INDEX",
+                    help="Project names from this lookup index in Elasticsearch (LOOKUP JOIN, Elasticsearch 9.1+), "
+                         "e.g. rancher-projects; fill it with publish_project_names.py. Every report panel fails "
+                         "while the index does not exist")
     args = ap.parse_args()
+    if sum(map(bool, (args.no_project, args.rancher_projects, args.project_lookup_index))) > 1:
+        ap.error("--no-project, --rancher-projects and --project-lookup-index exclude each other")
+    if args.project_lookup_index:
+        if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
+            ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")
+        if not args.out and not args.check:
+            ap.error("--project-lookup-index needs --out (the committed files are generated without it)")
+        LOOKUP_INDEX[0] = args.project_lookup_index
     if args.no_project:
         F["project"] = None
     if args.rancher_projects:

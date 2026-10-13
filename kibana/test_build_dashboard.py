@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 import build_dashboard as bd
+import publish_project_names as ppn
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "discovery"))
 
@@ -25,6 +26,7 @@ class BuildDashboardTest(unittest.TestCase):
     def tearDown(self):
         bd.F["project"] = PROJECT_FIELD
         bd.PROJECT_NAMES.clear()
+        bd.LOOKUP_INDEX[0] = None
 
     def generated(self):
         return "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in bd.saved_objects(bd.DEFAULT_INDEX))
@@ -116,6 +118,71 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
         self.rebuild()
         self.assertIn('"payments"', bd.REPORT_PANELS[-1]["esql"])
+
+    def test_project_lookup_index(self):
+        bd.LOOKUP_INDEX[0] = "rancher-projects"
+        self.rebuild()
+        self.assertEqual(bd.pname_stage(), "| LOOKUP JOIN rancher-projects ON project\n"
+                                           "| EVAL pname = COALESCE(project_name, project)")
+        self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
+        queries = [p["esql"] for p in bd.REPORT_PANELS if p["esql"]]
+        self.assertTrue(all(q.count("LOOKUP JOIN") == 1 for q in queries))
+        self.assertNotIn("LOOKUP JOIN", "".join(p["esql"] or "" for p in bd.PANELS))
+        for q in queries:  # the join comes after the Project ID column exists and before the name is used
+            self.assertLess(q.index("project = COALESCE("), q.index("LOOKUP JOIN"))
+            self.assertLess(q.index("LOOKUP JOIN"), q.index("EVAL category"))
+        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
+        self.without_project()
+        self.assertNotIn("LOOKUP JOIN", self.generated())
+
+
+class FakeElastic:
+    def __init__(self, mode="missing"):
+        self.mode, self.calls = mode, []
+
+    def request(self, method, path, body=None, content_type="application/json"):
+        self.calls.append((method, path, body, content_type))
+        if method == "GET":
+            if self.mode == "missing":
+                raise ppn.urllib.error.HTTPError(path, 404, "Not Found", None, None)
+            return {"rancher-projects": {"settings": {"index": {"mode": self.mode} if self.mode else {}}}}
+        if path.endswith("/_bulk?refresh=true"):
+            return {"errors": False, "items": []}
+        return {"deleted": 2} if "_delete_by_query" in path else {}
+
+
+class PublishProjectNamesTest(unittest.TestCase):
+    DOCS = ppn.documents({"p-bbjk7": "payments", "p-9z9dv": "System"})
+
+    def test_documents_use_the_dashboard_columns(self):
+        self.assertEqual(self.DOCS, [{"project": "p-9z9dv", "project_name": "System"},
+                                     {"project": "p-bbjk7", "project_name": "payments"}])
+        self.assertEqual(set(ppn.INDEX_BODY["mappings"]["properties"]), {bd.LOOKUP_KEY, bd.LOOKUP_NAME})
+        self.assertEqual(ppn.INDEX_BODY["settings"]["index"]["mode"], "lookup")
+
+    def test_publish_creates_writes_and_removes(self):
+        es = FakeElastic()
+        self.assertEqual(ppn.publish(es, "rancher-projects", self.DOCS), (2, 2))
+        self.assertEqual([(m, p) for m, p, _, _ in es.calls], [
+            ("GET", "/rancher-projects/_settings"), ("PUT", "/rancher-projects"),
+            ("POST", "/rancher-projects/_bulk?refresh=true"),
+            ("POST", "/rancher-projects/_delete_by_query?refresh=true")])
+        lines = [json.loads(l) for l in es.calls[2][2].splitlines()]
+        self.assertEqual(lines[0], {"index": {"_index": "rancher-projects", "_id": "p-9z9dv"}})
+        self.assertEqual(lines[1], self.DOCS[0])
+        self.assertEqual(es.calls[2][3], "application/x-ndjson")
+        self.assertEqual(es.calls[3][2]["query"]["bool"]["must_not"]["ids"]["values"], ["p-9z9dv", "p-bbjk7"])
+
+    def test_publish_keeps_an_existing_lookup_index(self):
+        es = FakeElastic("lookup")
+        ppn.publish(es, "rancher-projects", self.DOCS)
+        self.assertNotIn("PUT", [m for m, _, _, _ in es.calls])
+
+    def test_publish_refuses_an_ordinary_index(self):
+        es = FakeElastic(None)
+        with self.assertRaises(SystemExit):
+            ppn.publish(es, "rancher-projects", self.DOCS)
+        self.assertEqual(len(es.calls), 1)
 
 
 if __name__ == "__main__":

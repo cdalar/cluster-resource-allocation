@@ -11,6 +11,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 | [`kibana/cluster-resources-as-is-no-project.ndjson`](../kibana/cluster-resources-as-is-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
+| [`kibana/publish_project_names.py`](../kibana/publish_project_names.py) | Writes the Rancher Project names to a lookup index in Elasticsearch, for a report generated with `--project-lookup-index` ([Project names](#project-names-from-a-lookup-index)) |
 | [`kibana/otel-collector-fragment.yaml`](../kibana/otel-collector-fragment.yaml) | Collector settings the dashboard needs (receivers, `k8sattributes`, cluster name) |
 | [`kibana/otel-kube-stack-values.yaml`](../kibana/otel-kube-stack-values.yaml) | Values overlay (`-f`) for the `opentelemetry-kube-stack` Helm chart (0.20.1) that adds `rancher.project.id`; the chart's presets already cover the other settings |
 
@@ -76,9 +77,35 @@ Definitions, where they differ from the as-is dashboard:
   ```
 
   The names are written into the queries, so regenerate after adding or renaming Projects. Without the file the
-  report shows IDs, and System projects are only recognised by their namespace names.
+  report shows IDs, and System projects are only recognised by their namespace names. To keep the names in
+  Elasticsearch instead, see [Project names from a lookup index](#project-names-from-a-lookup-index).
 - With `--no-project` the report has no Projects table and no *Unassigned* tile; namespaces are *System* or
   *Workload*.
+
+### Project names from a lookup index
+
+The alternative to names written into the queries: a small index in Elasticsearch holds one document per Project
+(`project` = ID, `project_name`), and the report joins it with ES|QL `LOOKUP JOIN`. Renaming or adding a Project
+then needs only a new run of the publisher, not a new dashboard file. Needs Elasticsearch 9.1 or later.
+
+```bash
+# 1. Fill the index (creates it with index.mode: lookup); Projects are read with kubectl from the Rancher local cluster
+ES_API_KEY=... ./kibana/publish_project_names.py https://elastic.example:9200 --context <rancher-local-context>
+# 2. Generate the report that joins it, check it, and import that file instead of the committed one
+./kibana/build_dashboard.py --project-lookup-index rancher-projects --out cluster-resources-lookup.ndjson
+ES_API_KEY=... ./kibana/build_dashboard.py --project-lookup-index rancher-projects --check https://elastic.example:9200
+```
+
+| Point | Detail |
+|---|---|
+| Order | Publish first: ES\|QL rejects a query that names a missing index, so every report panel fails until the index exists |
+| Updates | Run `publish_project_names.py` again (by hand or from a scheduler); it overwrites the names and removes Projects that no longer exist. `--rancher-projects projects.json` reads a file instead of running kubectl, `--dry-run` prints the documents |
+| Permissions | The publisher's API key: `create_index`, `index`, `delete`, `view_index_metadata` on the lookup index only. Everyone who opens the dashboard needs `read` on it |
+| Scope | Names appear in the *Cluster resource report*. The as-is dashboard and the Project filter control keep the ID |
+| Unknown Projects | A Project the index does not have shows its ID |
+| Join key | The Project ID alone. Two clusters that happen to have the same ID with different names get one name (the publisher prints a warning) |
+| Remote clusters | With cross-cluster search the join needs Elasticsearch 9.2 or later |
+| Tested | Unit tests on the generated queries and on the publisher's requests; not yet run against Elasticsearch. Run the `--check` above before importing |
 
 **Link in Rancher**: a NavLink on the cluster that runs Kibana puts the dashboard in Rancher's cluster menu
 (Kibana's `server.basePath` must be the Rancher service proxy path):
@@ -169,7 +196,7 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 
 | Limit | Effect | Compared with `discover.py` |
 |---|---|---|
-| Rancher Project **ID**, not the display name | The as-is tables show `p-xxxxx`; the report shows names only when generated with `--rancher-projects` (a snapshot) | discover.py reads names from Rancher. Possible later: a lookup index (`project_id → name`) filled from the Rancher local cluster, joined with ES\|QL `LOOKUP JOIN` |
+| Rancher Project **ID**, not the display name | The as-is tables show `p-xxxxx`; the report shows names only when generated with `--rancher-projects` (a snapshot) | discover.py reads names from Rancher. Or names from a lookup index in Elasticsearch ([above](#project-names-from-a-lookup-index)) |
 | Init containers and pod overhead are not reported by `k8s_cluster` | Requests can be lower than the *effective* requests the scheduler uses | discover.py counts both |
 | As-is: requests include Pending pods (and pods of finished Jobs while they exist) | *CPU requested %* can exceed 100 % when big pods are Pending | discover.py and the report dashboard count pending separately |
 | Report: all nodes count as allocatable | Cordoned nodes are not excluded (the metrics don't say which nodes are unschedulable) | discover.py counts schedulable nodes only |

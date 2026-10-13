@@ -30,7 +30,7 @@ import urllib.request
 
 import build_dashboard as bd
 
-DEFAULT_LOOKUP_INDEX = "rancher-projects"
+DEFAULT_LOOKUP_INDEX = bd.DEFAULT_LOOKUP_INDEX
 INDEX_BODY = {
     "settings": {"index": {"mode": "lookup"}},
     "mappings": {"properties": {bd.LOOKUP_KEY: {"type": "keyword"}, bd.LOOKUP_NAME: {"type": "keyword"}}},

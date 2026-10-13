@@ -14,7 +14,7 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --rancher-projects projects.json
       # Project names and System projects from `kubectl get projects.management.cattle.io -A -o json`
       # on the Rancher local cluster (without it the report shows Project IDs)
-  ./build_dashboard.py --project-lookup-index rancher-projects
+  ./build_dashboard.py --project-lookup-index rancher-projects   # writes cluster-resources-as-is-project-names.ndjson
       # Project names from a lookup index in Elasticsearch instead (ES|QL LOOKUP JOIN, Elasticsearch 9.1+);
       # publish_project_names.py fills it
   ./build_dashboard.py --check http://localhost:9200 --window 1h
@@ -318,6 +318,7 @@ PROJECT_NAMES = {}  # Project ID -> display name, from --rancher-projects
 # Lookup index (index.mode: lookup) with one document per Project, from --project-lookup-index:
 # LOOKUP_KEY = Project ID, LOOKUP_NAME = display name. publish_project_names.py writes it.
 LOOKUP_INDEX = [None]
+DEFAULT_LOOKUP_INDEX = "rancher-projects"
 LOOKUP_KEY = "project"  # the queries' column of the Project ID; LOOKUP JOIN needs the same name on both sides
 LOOKUP_NAME = "project_name"
 INDEX_NAME_RE = r"[a-z0-9][a-z0-9._-]*"
@@ -768,8 +769,9 @@ def dashboard_object(dashboard_id, title, description, panels, index):
         "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "10.3.0"}
 
 
-def default_out(no_project=False):
-    name = "cluster-resources-as-is-no-project.ndjson" if no_project else "cluster-resources-as-is.ndjson"
+def default_out(no_project=False, lookup=False):
+    name = ("cluster-resources-as-is-no-project.ndjson" if no_project else
+            "cluster-resources-as-is-project-names.ndjson" if lookup else "cluster-resources-as-is.ndjson")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
 
 
@@ -844,14 +846,15 @@ def main():
     if args.project_lookup_index:
         if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
             ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")
-        if not args.out and not args.check:
-            ap.error("--project-lookup-index needs --out (the committed files are generated without it)")
+        if not args.out and not args.check and args.project_lookup_index != DEFAULT_LOOKUP_INDEX:
+            ap.error(f"--project-lookup-index: an index other than {DEFAULT_LOOKUP_INDEX} needs --out "
+                     "(the committed file is generated for that name)")
         LOOKUP_INDEX[0] = args.project_lookup_index
     if args.no_project:
         F["project"] = None
     if args.rancher_projects:
         PROJECT_NAMES.update(load_rancher_projects(args.rancher_projects))
-    out = args.out or default_out(args.no_project)
+    out = args.out or default_out(args.no_project, bool(args.project_lookup_index))
     build_panels(args.index)
     build_report_panels(args.index)
     if args.check:

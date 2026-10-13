@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 
+import add_project_names as apn
 import build_dashboard as bd
 import publish_project_names as ppn
 
@@ -125,6 +126,41 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
         self.rebuild()
         self.assertIn('"payments"', bd.REPORT_PANELS[-1]["esql"])
+
+    def test_add_project_names_matches_the_generator(self):
+        projects = {"items": [
+            {"metadata": {"name": "p-bbjk7"}, "spec": {"displayName": "payments"}},
+            {"metadata": {"name": "p-9z9dv"}, "spec": {"displayName": 'Sys "tem" \\ $1'}},
+            {"metadata": {"name": "p-noname"}}]}
+        names = apn.project_names(projects)
+        self.assertEqual(names, bd.rancher_project_names(projects))
+        with open(bd.default_out()) as f:
+            ids_only = f.readlines()
+        patched, changed = apn.add_names(ids_only, names)
+        bd.PROJECT_NAMES.update(names)
+        self.rebuild()
+        self.assertEqual("".join(patched), self.generated())
+        self.assertEqual(changed, 2 * len([p for p in bd.REPORT_PANELS if p["esql"]]))
+        # again, with other names and on a file that already has names: replaced, not nested
+        again, _ = apn.add_names(patched, {"p-bbjk7": "billing"})
+        bd.PROJECT_NAMES.clear()
+        bd.PROJECT_NAMES["p-bbjk7"] = "billing"
+        self.rebuild()
+        self.assertEqual("".join(again), self.generated())
+        with open(bd.default_out(no_project=True)) as f:
+            self.assertEqual(apn.add_names(f.readlines(), names)[1], 0)
+
+    def test_add_project_names_on_a_kibana_export(self):
+        path = os.path.join(os.path.dirname(bd.default_out()), "cluster-resources-cra-elastic.ndjson")
+        with open(path) as f:
+            exported = f.readlines()
+        patched, changed = apn.add_names(exported, {"p-bbjk7": "billing"})
+        self.assertEqual(changed, 30)
+        text = "".join(patched)
+        self.assertIn("billing", text)
+        self.assertNotIn("platform-tools", text)
+        self.assertEqual(len(patched), len(exported))
+        self.assertEqual(text.count("TO_LOWER(pname) RLIKE"), "".join(exported).count("TO_LOWER(pname) RLIKE"))
 
     def test_project_lookup_index(self):
         bd.LOOKUP_INDEX[0] = "rancher-projects"

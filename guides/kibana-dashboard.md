@@ -12,6 +12,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 | [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
+| [`kibana/add_project_names.py`](../kibana/add_project_names.py) | Writes the Rancher Project names into a dashboard `.ndjson` you already have (a file from here or a Kibana export), without regenerating it |
 | [`kibana/publish_project_names.py`](../kibana/publish_project_names.py) | Writes the Rancher Project names to a lookup index in Elasticsearch, for a report generated with `--project-lookup-index` ([Project names](#project-names-from-a-lookup-index)) |
 | [`kibana/otel-collector-fragment.yaml`](../kibana/otel-collector-fragment.yaml) | Collector settings the dashboard needs (receivers, `k8sattributes`, cluster name) |
 | [`kibana/otel-kube-stack-values.yaml`](../kibana/otel-kube-stack-values.yaml) | Values overlay (`-f`) for the `opentelemetry-kube-stack` Helm chart (0.20.1) that adds `rancher.project.id`; the chart's presets already cover the other settings |
@@ -77,7 +78,14 @@ Definitions, where they differ from the as-is dashboard:
   ./kibana/build_dashboard.py --rancher-projects projects.json --out cluster-resources-with-names.ndjson
   ```
 
-  The names are written into the queries, so regenerate after adding or renaming Projects. Without the file the
+  With a dashboard file you already have (one of the committed files, or an export from Kibana with your own
+  changes), `add_project_names.py` does the same without the generator:
+
+  ```bash
+  ./kibana/add_project_names.py kibana/cluster-resources-as-is.ndjson projects.json --out cluster-resources-with-names.ndjson
+  ```
+
+  The names are written into the queries, so regenerate (or run `add_project_names.py` again) after adding or renaming Projects. Without the file the
   report shows IDs, and System projects are only recognised by their namespace names. To keep the names in
   Elasticsearch instead, see [Project names from a lookup index](#project-names-from-a-lookup-index).
 - With `--no-project` the report has no Projects table and no *Unassigned* tile; namespaces are *System* or

@@ -12,6 +12,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
 | [`kibana/otel-collector-fragment.yaml`](../kibana/otel-collector-fragment.yaml) | Collector settings the dashboard needs (receivers, `k8sattributes`, cluster name) |
+| [`kibana/otel-kube-stack-values.yaml`](../kibana/otel-kube-stack-values.yaml) | Values overlay (`-f`) for the `opentelemetry-kube-stack` Helm chart (0.20.1) that adds `rancher.project.id`; the chart's presets already cover the other settings |
 
 Tested with Elasticsearch and Kibana 9.1.5 and `opentelemetry-collector-contrib` 0.135.0 (Elasticsearch exporter,
 mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.

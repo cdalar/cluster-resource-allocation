@@ -1,0 +1,33 @@
+# Values overlay for the opentelemetry-kube-stack Helm chart (tested with 0.20.1, collector 0.154.0): adds the
+# Rancher Project of each namespace to the metrics, as resource.attributes.rancher.project.id in Elasticsearch.
+# The Kibana dashboards group and filter by that field (guides/kibana-dashboard.md).
+#
+#   helm template otel opentelemetry-kube-stack --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+#     --version 0.20.1 -n otel -f <your values>.yaml -f otel-kube-stack-values.yaml
+#
+# The value is the Project ID (p-xxxxx): Rancher writes only the ID on the namespace (label
+# field.cattle.io/projectId), not the display name. The names come from Rancher when the dashboard is generated
+# (build_dashboard.py --rancher-projects).
+#
+# Assumes the chart's default collector "daemon" with the kubernetesAttributes preset on (the default). With
+# other or more collectors, repeat the block under each collector whose metrics pipeline has k8s_cluster or
+# kubelet_stats. Namespaces outside any Project get no attribute; the dashboards show them as "(no project)".
+
+collectors:
+  daemon:
+    config:
+      processors:
+        k8s_attributes:
+          extract:
+            labels:
+              # The chart merges this list over its preset by replacing it, so the two preset rules are repeated.
+              - tag_name: k8s.app.instance
+                key: app.kubernetes.io/instance
+                from: pod
+              - tag_name: k8s.app.component
+                key: app.kubernetes.io/component
+                from: pod
+              # Rancher Project of the namespace
+              - tag_name: rancher.project.id
+                key: field.cattle.io/projectId
+                from: namespace

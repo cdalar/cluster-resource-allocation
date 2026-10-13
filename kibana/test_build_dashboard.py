@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 import add_project_names as apn
+import build_collector_values as bcv
 import build_dashboard as bd
 import publish_project_names as ppn
 
@@ -28,6 +29,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.F["project"] = PROJECT_FIELD
         bd.PROJECT_NAMES.clear()
         bd.LOOKUP_INDEX[0] = None
+        bd.NAME_FIELD[0] = None
 
     def generated(self):
         return "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in bd.saved_objects(bd.DEFAULT_INDEX))
@@ -161,6 +163,43 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertNotIn("platform-tools", text)
         self.assertEqual(len(patched), len(exported))
         self.assertEqual(text.count("TO_LOWER(pname) RLIKE"), "".join(exported).count("TO_LOWER(pname) RLIKE"))
+
+    def test_project_name_field(self):
+        bd.NAME_FIELD[0] = bd.DEFAULT_NAME_FIELD
+        self.rebuild()
+        field = "resource.attributes.rancher.project.name"
+        report = [p["esql"] for p in bd.REPORT_PANELS if p["esql"]]
+        for q in report:  # the name is carried through both aggregations, then used
+            self.assertIn(f"project_name = MAX({field})", q)
+            self.assertIn("project_name = MAX(project_name)", q)
+            self.assertIn("| EVAL pname = COALESCE(project_name, project)", q)
+            self.assertNotIn("LOOKUP JOIN", q)
+        self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
+        as_is = "".join(p["esql"] or "" for p in bd.PANELS)
+        self.assertIn(f'project = COALESCE({field}, resource.attributes.rancher.project.id, "(no project)")', as_is)
+        for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+            control = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])["ctrl-project"]
+            self.assertEqual(control["explicitInput"]["fieldName"], field)
+            self.assertEqual(control["explicitInput"]["title"], "Rancher Project")
+        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
+        self.without_project()
+        self.assertNotIn("rancher.project", self.generated())
+
+    def test_collector_values(self):
+        names = {"p-bbjk7": "payments", "p-9z9dv": 'Sys "tem" $x'}
+        self.assertEqual(bcv.statements(names), [
+            'set(attributes["rancher.project.name"], "Sys \\"tem\\" $$x") where attributes["rancher.project.id"] == "p-9z9dv"',
+            'set(attributes["rancher.project.name"], "payments") where attributes["rancher.project.id"] == "p-bbjk7"'])
+        self.assertTrue(bd.DEFAULT_NAME_FIELD.endswith("." + bcv.NAME_ATTR))
+        self.assertTrue(bd.F["project"].endswith("." + bcv.ID_ATTR))
+        text = bcv.render(names, "metrics")
+        self.assertIn("Add transform/rancher_project_names to service.pipelines.metrics.processors", text)
+        config = json.loads(text[text.index("{"):])["collectors"]["metrics"]["config"]
+        self.assertNotIn("service", config)
+        self.assertEqual(config["processors"][bcv.PROCESSOR]["metric_statements"][0]["context"], "resource")
+        pipeline = ["k8s_attributes", bcv.PROCESSOR, "batch"]
+        config = bcv.values(names, pipeline=pipeline)["collectors"]["daemon"]["config"]
+        self.assertEqual(config["service"]["pipelines"]["metrics"]["processors"], pipeline)
 
     def test_project_lookup_index(self):
         bd.LOOKUP_INDEX[0] = "rancher-projects"

@@ -12,6 +12,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 | [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
+| [`kibana/build_collector_values.py`](../kibana/build_collector_values.py) | Values overlay for the `opentelemetry-kube-stack` chart that puts the Project **name** on the metrics (`rancher.project.name`), so the Project filter control lists names ([Project names on the metrics](#project-names-on-the-metrics)) |
 | [`kibana/add_project_names.py`](../kibana/add_project_names.py) | Writes the Rancher Project names into a dashboard `.ndjson` you already have (a file from here or a Kibana export), without regenerating it |
 | [`kibana/publish_project_names.py`](../kibana/publish_project_names.py) | Writes the Rancher Project names to a lookup index in Elasticsearch, for a report generated with `--project-lookup-index` ([Project names](#project-names-from-a-lookup-index)) |
 | [`kibana/otel-collector-fragment.yaml`](../kibana/otel-collector-fragment.yaml) | Collector settings the dashboard needs (receivers, `k8sattributes`, cluster name) |
@@ -117,6 +118,28 @@ another index name, pass it to both scripts (`publish_project_names.py --index`)
 | Join key | The Project ID alone. Two clusters that happen to have the same ID with different names get one name (the publisher prints a warning) |
 | Remote clusters | With cross-cluster search the join needs Elasticsearch 9.2 or later |
 | Tested | Unit tests on the generated queries and on the publisher's requests; not yet run against Elasticsearch. Run the `--check` above before importing |
+
+### Project names on the metrics
+
+The filter controls list the values of a field in Elasticsearch, so a *Rancher Project* control by name needs
+the name as a field. The collector adds it: a `transform` processor with one rule per Project (ID → name),
+generated from the Rancher Project list, sets `rancher.project.name` next to `rancher.project.id`.
+
+```bash
+kubectl get projects.management.cattle.io -A -o json > projects.json      # on the Rancher local cluster
+./kibana/build_collector_values.py projects.json --out otel-kube-stack-project-names.yaml
+helm upgrade <release> <chart> -n <namespace> -f <your values>.yaml -f kibana/otel-kube-stack-values.yaml -f otel-kube-stack-project-names.yaml
+./kibana/build_dashboard.py --project-name-field --out cluster-resources-name-field.ndjson   # then import this file
+```
+
+| Point | Detail |
+|---|---|
+| Pipeline | `transform/rancher_project_names` must be in the metrics pipeline after `k8s_attributes`. Helm replaces lists, so add it to the pipeline in your own values, or pass the complete list: `--pipeline k8s_attributes,transform/rancher_project_names,resource_detection/env,resource/hostname,batch` (the chart's default order) |
+| Collector | `--collector <name>` when the metrics collector is not the chart's `daemon` |
+| Dashboard | The control is *Rancher Project* on `resource.attributes.rancher.project.name`; the report shows names (and the ID in its own column), the as-is tables show the name instead of the ID. Import it only once the field exists: ES\|QL rejects a field no index has |
+| Old data | Only metrics collected after the rollout carry the name. Over a time range that spans the rollout a Project shows twice (ID before, name after), and selecting a name leaves out the time before |
+| Updates | After adding or renaming Projects: regenerate the overlay and redeploy the collectors. A Project missing from the list keeps its ID and is not in the control |
+| Tested | 2026-10-13 with chart 0.20.1 (`otel/opentelemetry-collector-contrib` 0.154.0) on a single-node k3s cluster into Elasticsearch and Kibana 9.1.5: field present on cluster and kubelet metrics, all 31 panel queries pass `--check`, the control's value request returns the names, a name filter narrows the report and as-is tables. The control was not clicked in a browser; a multi-node cluster was not tested |
 
 **Link in Rancher**: a NavLink on the cluster that runs Kibana puts the dashboard in Rancher's cluster menu
 (Kibana's `server.basePath` must be the Rancher service proxy path):

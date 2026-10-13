@@ -17,6 +17,9 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --project-lookup-index rancher-projects   # writes cluster-resources-as-is-project-names.ndjson
       # Project names from a lookup index in Elasticsearch instead (ES|QL LOOKUP JOIN, Elasticsearch 9.1+);
       # publish_project_names.py fills it
+  ./build_dashboard.py --project-name-field --out with-names.ndjson
+      # Project names from the metrics themselves (resource.attributes.rancher.project.name, set by the collector:
+      # build_collector_values.py); the Project filter control then lists names
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -79,11 +82,27 @@ def project_expr():
     return NO_PROJECT if F["project"] is None else f"COALESCE({F['project']}, {NO_PROJECT})"
 
 
+def project_label_expr():
+    """Project column of the as-is dashboard: the name when the metrics carry it (--project-name-field), else the ID."""
+    if NAME_FIELD[0] and F["project"] is not None:
+        return f"COALESCE({NAME_FIELD[0]}, {F['project']}, {NO_PROJECT})"
+    return project_expr()
+
+
+def name_agg(raw):
+    """Extra STATS column of the report stages that carries the Project name through the aggregations."""
+    if not NAME_FIELD[0] or F["project"] is None:
+        return ""
+    return f", {LOOKUP_NAME} = MAX({NAME_FIELD[0] if raw else LOOKUP_NAME})"
+
+
 def q(text):
     """Substitute {field} placeholders and tidy whitespace."""
     lines = [line.rstrip() for line in text.strip().splitlines()]
     return "\n".join(lines).format(**{**F, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
-                                    category=category_expr(), pname_stage=pname_stage())
+                                    category=category_expr(), pname_stage=pname_stage(),
+                                    project_label=project_label_expr(), name_agg_raw=name_agg(True),
+                                    name_agg=name_agg(False))
 
 
 # Common first stage: one row per time bucket and entity (container, pod or node), holding that entity's
@@ -91,7 +110,7 @@ def q(text):
 # before they are summed; summing raw documents would count every scrape.
 ENTITY_STAGE = """
 | EVAL cluster = COALESCE({cluster}, "(unknown)"),
-       project = {project},
+       project = {project_label},
        namespace = {namespace},
        entity = COALESCE({pod_uid}, {node}),
        container = COALESCE({container}, "")
@@ -250,7 +269,7 @@ def build_panels(index):
 | EVAL any_set = COALESCE({req_cpu}, {req_mem}, {lim_cpu}, {lim_mem})
 | STATS req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem}), lim_cpu = MAX({lim_cpu}), lim_mem = MAX({lim_mem}),
         any_set = MAX(any_set)
-  BY cluster = {cluster}, project = {project}, namespace = {namespace},
+  BY cluster = {cluster}, project = {project_label}, namespace = {namespace},
      pod = {pod_uid}, container = {container}
 | EVAL no_cpu_req = CASE(req_cpu IS NULL, 1, 0), no_mem_req = CASE(req_mem IS NULL, 1, 0),
        no_mem_lim = CASE(lim_mem IS NULL, 1, 0), cpu_lim = CASE(lim_cpu IS NULL, 0, 1),
@@ -322,6 +341,11 @@ DEFAULT_LOOKUP_INDEX = "rancher-projects"
 LOOKUP_KEY = "project"  # the queries' column of the Project ID; LOOKUP JOIN needs the same name on both sides
 LOOKUP_NAME = "project_name"
 INDEX_NAME_RE = r"[a-z0-9][a-z0-9._-]*"
+# Field with the Project display name on the metrics themselves, from --project-name-field. The collector sets it
+# (build_collector_values.py). With it the Project filter control lists names instead of IDs.
+NAME_FIELD = [None]
+DEFAULT_NAME_FIELD = "resource.attributes.rancher.project.name"
+FIELD_NAME_RE = r"[A-Za-z_@][A-Za-z0-9_@]*(\.[A-Za-z_@][A-Za-z0-9_@]*)*"
 NOW_WINDOW = "10 minutes"  # "now" values (pods, pending, standards) = the last 10 minutes of the time range
 
 
@@ -360,6 +384,8 @@ def pname_expr():
 def pname_stage():
     """Stage that adds pname. With a lookup index the name is joined in Elasticsearch; a Project the index does
     not have (and "(no project)") keeps its ID."""
+    if NAME_FIELD[0] and F["project"] is not None:
+        return f"| EVAL pname = COALESCE({LOOKUP_NAME}, project)"
     if LOOKUP_INDEX[0] and F["project"] is not None:
         return (f"| LOOKUP JOIN {LOOKUP_INDEX[0]} ON {LOOKUP_KEY}\n"
                 f"| EVAL pname = COALESCE({LOOKUP_NAME}, project)")
@@ -383,7 +409,7 @@ def category_expr():
     sys_ns = system_ns_expr()
     if F["project"] is None:
         return f'CASE({sys_ns}, "System", "Workload")'
-    if PROJECT_NAMES or LOOKUP_INDEX[0]:
+    if PROJECT_NAMES or LOOKUP_INDEX[0] or NAME_FIELD[0]:
         sys_ns += f' OR TO_LOWER(pname) RLIKE "{SYSTEM_PROJECT_LUCENE}"'
     return f'CASE({sys_ns}, "System", project == {NO_PROJECT}, "Unassigned", "Tenant")'
 
@@ -405,7 +431,7 @@ REPORT_POD_STAGE = """
 | STATS alloc_cpu = MAX({alloc_cpu}), alloc_mem = MAX({alloc_mem}),
         req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem}), lim_cpu = MAX({lim_cpu}), lim_mem = MAX({lim_mem}),
         use_cpu = AVG({use_cpu}), use_mem = AVG({use_mem}), phase = MAX({phase}), phase_now = MAX(phase_now),
-        c_now = MAX(c_now), rq_now = MAX(rq_now), hpa_now = MAX(hpa_now), ns_now = MAX(ns_now)
+        c_now = MAX(c_now), rq_now = MAX(rq_now), hpa_now = MAX(hpa_now), ns_now = MAX(ns_now){name_agg_raw}
   BY t = BUCKET(@timestamp, {BUCKETS}, ?_tstart, ?_tend), cluster, project, namespace, entity, container
 | EVAL is_c = CASE(c_now == 1 AND container != "", 1, 0),
        no_cpu = CASE(c_now == 1 AND container != "" AND req_cpu IS NULL, 1, 0),
@@ -414,7 +440,7 @@ REPORT_POD_STAGE = """
 | STATS alloc_cpu = MAX(alloc_cpu), alloc_mem = MAX(alloc_mem), req_cpu = SUM(req_cpu), req_mem = SUM(req_mem),
         lim_mem = SUM(lim_mem), use_cpu = SUM(use_cpu), use_mem = SUM(use_mem), phase = MAX(phase),
         phase_now = MAX(phase_now), containers = SUM(is_c), no_cpu = SUM(no_cpu), no_mem_lim = SUM(no_mem_lim),
-        any_set = MAX(any_set), rq = MAX(rq_now), hpa = MAX(hpa_now), ns_now = MAX(ns_now)
+        any_set = MAX(any_set), rq = MAX(rq_now), hpa = MAX(hpa_now), ns_now = MAX(ns_now){name_agg}
   BY t, cluster, project, namespace, entity
 | EVAL req_cpu = TO_DOUBLE(req_cpu), req_mem = TO_DOUBLE(req_mem), lim_mem = TO_DOUBLE(lim_mem),
        run = CASE(phase == 1 OR phase >= 3, 0.0, 1.0)
@@ -493,7 +519,8 @@ def build_report_panels(index):
 
 def _build_report_panels(src):
     base = src + REPORT_POD_STAGE
-    names = (f"Project names from the lookup index `{LOOKUP_INDEX[0]}`." if LOOKUP_INDEX[0] else
+    names = ("Project names from the metrics (set by the collector)." if NAME_FIELD[0] else
+             f"Project names from the lookup index `{LOOKUP_INDEX[0]}`." if LOOKUP_INDEX[0] else
              "Project names from Rancher." if PROJECT_NAMES else
              "Projects show their ID; regenerate with `--rancher-projects` for names and System projects.")
     panel("markdown", "About", None, (0, 0, 48, 4), markdown=(
@@ -723,12 +750,15 @@ def control_fields():
 
 def control_group():
     titles = {"cluster": "Cluster", "project": "Rancher Project ID", "namespace": "Namespace"}
+    fields = dict(F)
+    if NAME_FIELD[0] and F["project"] is not None:  # select Projects by name
+        titles["project"], fields["project"] = "Rancher Project", NAME_FIELD[0]
     controls = [(f, titles[f]) for f in control_fields()]
     panels = {}
     for i, (field, title) in enumerate(controls):
         cid = f"ctrl-{field}"
         panels[cid] = {"order": i, "width": "medium", "grow": True, "type": "optionsListControl",
-                       "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": F[field],
+                       "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": fields[field],
                                          "title": title, "searchTechnique": "prefix", "selectedOptions": [],
                                          "sort": {"by": "_key", "direction": "asc"}}}
     return {"chainingSystem": "HIERARCHICAL", "controlStyle": "oneLine", "showApplySelections": False,
@@ -840,9 +870,21 @@ def main():
                     help="Project names from this lookup index in Elasticsearch (LOOKUP JOIN, Elasticsearch 9.1+), "
                          "e.g. rancher-projects; fill it with publish_project_names.py. Every report panel fails "
                          "while the index does not exist")
+    ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
+                    help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
+                         "collector sets (build_collector_values.py). The Project filter control then lists names. "
+                         "Every panel fails while no index has the field. Needs --out")
     args = ap.parse_args()
-    if sum(map(bool, (args.no_project, args.rancher_projects, args.project_lookup_index))) > 1:
-        ap.error("--no-project, --rancher-projects and --project-lookup-index exclude each other")
+    if sum(map(bool, (args.no_project, args.rancher_projects, args.project_lookup_index,
+                      args.project_name_field))) > 1:
+        ap.error("--no-project, --rancher-projects, --project-lookup-index and --project-name-field "
+                 "exclude each other")
+    if args.project_name_field:
+        if not re.fullmatch(FIELD_NAME_RE, args.project_name_field):
+            ap.error(f"--project-name-field: not a field name: {args.project_name_field}")
+        if not args.out and not args.check:
+            ap.error("--project-name-field needs --out (the committed files are generated without it)")
+        NAME_FIELD[0] = args.project_name_field
     if args.project_lookup_index:
         if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
             ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")

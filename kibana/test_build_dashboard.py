@@ -69,11 +69,21 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual(len([r for r in dashboard["references"] if r["name"].startswith("controlGroup_")]), 2)
 
     def test_saved_objects(self):
-        data_view, as_is, report = bd.saved_objects(bd.DEFAULT_INDEX)
+        data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
         self.assertEqual(data_view["type"], "index-pattern")
-        self.assertEqual([as_is["id"], report["id"]], [bd.DASHBOARD_ID, bd.REPORT_ID])
-        for dashboard, source in ((as_is, bd.PANELS), (report, bd.REPORT_PANELS)):
-            self.check_dashboard(dashboard, source)
+        self.assertEqual([d["id"] for d in dashboards],
+                         [bd.DASHBOARD_ID, bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID])
+        self.check_dashboards()
+        ids = [d["id"] for d in dashboards]
+        for d in dashboards:  # every About links the other dashboards
+            about = next(p for p in json.loads(d["attributes"]["panelsJSON"]) if p["type"] == "visualization")
+            text = about["embeddableConfig"]["savedVis"]["params"]["markdown"]
+            self.assertEqual(sorted(re.findall(r"\(#/view/([a-z-]+)\)", text)), sorted(set(ids) - {d["id"]}))
+
+    def check_dashboards(self):
+        boards = {did: board for board, did, *_ in [bd.AS_IS_BOARD] + bd.REPORT_BOARDS}
+        for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+            self.check_dashboard(d, bd.board_panels(boards[d["id"]]))
 
     def check_dashboard(self, dashboard, source):
         self.assertEqual(dashboard["typeMigrationVersion"], "10.3.0")
@@ -176,7 +186,7 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertNotIn(word, text)
         self.assertIn("NULL IS NOT NULL", text)
         self.assertNotIn("None", "".join(p["esql"] or "" for p in bd.PANELS + bd.REPORT_PANELS))
-        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
+        self.check_dashboards()
 
     def test_project_name_field(self):
         bd.NAME_FIELD[0] = bd.DEFAULT_NAME_FIELD
@@ -195,7 +205,7 @@ class BuildDashboardTest(unittest.TestCase):
             control = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])["ctrl-project"]
             self.assertEqual(control["explicitInput"]["fieldName"], field)
             self.assertEqual(control["explicitInput"]["title"], "Rancher Project")
-        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
+        self.check_dashboards()
         self.without_project()
         self.assertNotIn("rancher.project", self.generated())
 
@@ -230,6 +240,16 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertIn("| EVAL pname = project", q)  # names patched in like the other report tables
         self.assertIn("@timestamp >= TO_DATETIME(?_tend) - 10 minutes", q)
 
+    def test_split_files_stay_small(self):
+        # one dashboard per file stays under the 1 MiB request limit of a default ingress-nginx with 200 named
+        # Projects (--rancher-projects adds ~2 KiB per Project to the capacity dashboard)
+        bd.PROJECT_NAMES.update({f"p-{i:05d}": f"project-name-number-{i}" for i in range(200)})
+        self.rebuild()
+        data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
+        for d in dashboards:
+            size = len(json.dumps(data_view)) + len(json.dumps(d, separators=(",", ":")))
+            self.assertLess(size, 900 * 1024, d["attributes"]["title"])
+
     def test_collector_values(self):
         names = {"p-bbjk7": "payments", "p-9z9dv": 'Sys "tem" $x'}
         self.assertEqual(bcv.statements(names), [
@@ -258,7 +278,7 @@ class BuildDashboardTest(unittest.TestCase):
         for q in queries:  # the join comes after the Project ID column exists and before the name is used
             self.assertLess(q.index("project = COALESCE("), q.index("LOOKUP JOIN"))
             self.assertLess(q.index("LOOKUP JOIN"), q.index("EVAL category"))
-        self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
+        self.check_dashboards()
         self.without_project()
         self.assertNotIn("LOOKUP JOIN", self.generated())
 

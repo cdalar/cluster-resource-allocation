@@ -45,6 +45,8 @@ import urllib.request
 
 DASHBOARD_ID = "cra-cluster-resources-as-is"
 REPORT_ID = "cra-cluster-resource-report"
+PROJECTS_ID = "cra-cluster-resource-projects"
+LIMITS_ID = "cra-workload-limits"
 DATA_VIEW_ID = "cra-otel-metrics"
 ADHOC_ID = "cra-otel-metrics-esql"
 DEFAULT_INDEX = "metrics-*.otel-*"
@@ -176,12 +178,38 @@ def group_table(key_cols):
 
 
 PANELS = []  # "Cluster resources (as-is)", filled by panel() below, in layout order
-REPORT_PANELS = []  # "Cluster resource report"
+REPORT_PANELS = []  # the report dashboards; each panel's "board" says which (REPORT_BOARDS)
 _TARGET = [PANELS]
+_BOARD = ["as-is"]
+
+# The report is three dashboards, so each file stays small enough for proxies in front of Kibana (--split):
+# (board, saved-object ID, title, description); the board is also the file suffix with --split
+AS_IS_BOARD = ("as-is", DASHBOARD_ID, "Cluster resources (as-is)",
+               "Allocatable, requested, limited and used CPU/memory per cluster, Rancher Project and namespace from "
+               "OpenTelemetry metrics.")
+REPORT_BOARDS = [
+    ("capacity", REPORT_ID, "Cluster resource report: capacity",
+     "Tiles, capacity by requests with N+1, per cluster, from OpenTelemetry metrics."),
+    ("projects", PROJECTS_ID, "Cluster resource report: projects",
+     "CPU and memory by project, Projects and Namespaces tables, from OpenTelemetry metrics."),
+    ("limits", LIMITS_ID, "Workload limits: limit ≤ 2× request",
+     "Every workload checked against a LimitRange maxLimitRequestRatio of 2, from OpenTelemetry metrics."),
+]
 
 
 def panel(kind, title, esql, grid, **opts):
-    _TARGET[0].append({"kind": kind, "title": title, "esql": esql, "grid": grid, **opts})
+    _TARGET[0].append({"kind": kind, "title": title, "esql": esql, "grid": grid, "board": _BOARD[0], **opts})
+
+
+def board_panels(board):
+    return [p for p in PANELS + REPORT_PANELS if p["board"] == board]
+
+
+def nav_links(current):
+    """Links between the dashboards (relative to Kibana's dashboards app, so they work under a base path)."""
+    links = [f"[{title}](#/view/{did})" if board != current else f"**{title}**"
+             for board, did, title, _ in [AS_IS_BOARD] + [b[:4] for b in REPORT_BOARDS]]
+    return "Dashboards: " + " · ".join(links)
 
 
 def build_panels(index):
@@ -196,7 +224,7 @@ def build_panels(index):
         "Averages and peaks are over the selected time range (in ~60 buckets). *Efficiency* = P95 usage / "
         "average requests. *(no project)* = namespace without the `field.cattle.io/projectId` label "
         f"(system or unassigned).{cp_note} Filter with the controls above. "
-        "Docs: `guides/kibana-dashboard.md` in cluster-resource-allocation."))
+        "Docs: `guides/kibana-dashboard.md` in cluster-resource-allocation.\n\n" + nav_links("as-is")))
 
     # The value column name is shown under the tile title.
     tiles = [
@@ -537,7 +565,7 @@ def build_report_panels(index):
     try:
         _build_report_panels(f"FROM {index}")
     finally:
-        _TARGET[0] = PANELS
+        _TARGET[0], _BOARD[0] = PANELS, "as-is"
 
 
 # LimitRange maxLimitRequestRatio planned for the "limit <= 2x request" rule (docs/10-implementation-plan.md, 2.1/5.4).
@@ -584,14 +612,15 @@ def _build_report_panels(src):
              f"Project names from the lookup index `{LOOKUP_INDEX[0]}`." if LOOKUP_INDEX[0] else
              "Project names from Rancher." if PROJECT_NAMES else
              "Projects show their ID; regenerate with `--rancher-projects` for names and System projects.")
+    cp_note = ("Control-plane nodes and the pods on them are left out (the filter above the panels). "
+               if CP_FIELD[0] else "")
+    _BOARD[0] = "capacity"
     panel("markdown", "About", None, (0, 0, 48, 4), markdown=(
-        "**Cluster resource report**: the in-cluster dashboard of the cluster-resource-report chart, on the "
-        "OpenTelemetry metrics. *Requested* = requests of running pods (averaged over the time range); *used* = "
-        f"P95 over the time range; tiles marked *now* and the pod and standards columns = the last {NOW_WINDOW} "
-        "of the range. *N+1*: allocatable − largest node − platform (System) requests = room for projects. "
-        + ("Control-plane nodes and the pods on them are left out (the filter above the panels). "
-           if CP_FIELD[0] else "")
-        + f"{names} Docs: `guides/kibana-dashboard.md`."))
+        "**Cluster resource report: capacity**, as in the in-cluster dashboard of the cluster-resource-report chart, "
+        "on the OpenTelemetry metrics. *Requested* = requests of running pods (averaged over the time range); "
+        f"*used* = P95 over the time range; tiles marked *now* = the last {NOW_WINDOW} of the range. *N+1*: "
+        "allocatable − largest node − platform (System) requests = room for projects. "
+        + cp_note + f"{names} Docs: `guides/kibana-dashboard.md`.\n\n" + nav_links("capacity")))
 
     summary = base + REPORT_CLUSTER
     # (label, value, bar): one value per tile; the label names it, so the panel title is hidden. % tiles get a bar
@@ -646,6 +675,11 @@ def _build_report_panels(src):
 | KEEP Cluster, Resource, Nodes, Allocatable, `Largest node`, Platform, `For projects`, `Projects request`,
        `Left (N+1)`, Fits"""), (26, TOP, 22, 10))
 
+    _BOARD[0] = "projects"
+    panel("markdown", "About", None, (0, 0, 48, 3), markdown=(
+        "**Cluster resource report: projects**: requests and P95 usage per Rancher Project and namespace "
+        f"(averages over the time range; pods, pending and standards columns = the last {NOW_WINDOW}). "
+        + cp_note + f"{names}\n\n" + nav_links("projects")))
     for i, (res, unit) in enumerate([("cpu", "vCPU"), ("mem", "GiB")]):
         label = "CPU" if res == "cpu" else "Memory"
         r, u = ("rc", "use_cpu") if res == "cpu" else ("rm", "use_mem")
@@ -657,7 +691,7 @@ def _build_report_panels(src):
 | EVAL Project = CONCAT(cluster, " / ", pname)
 | SORT Requested DESC NULLS LAST
 | LIMIT 15
-| KEEP Project, Requested, `Used (P95)`"""), (i * 24, TOP + 10, 24, 13), x="Project", y=["Requested", "Used (P95)"])
+| KEEP Project, Requested, `Used (P95)`"""), (i * 24, 3, 24, 13), x="Project", y=["Requested", "Used (P95)"])
 
     if F["project"] is not None:
         panel("table", "Projects", q(base + """
@@ -667,7 +701,7 @@ def _build_report_panels(src):
        Category = category
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 500
-| KEEP Cluster, Project, Category, NS, """ + REPORT_COLUMNS + ", `Project ID`"), (0, TOP + 23, 48, 12))
+| KEEP Cluster, Project, Category, NS, """ + REPORT_COLUMNS + ", `Project ID`"), (0, 16, 48, 12))
 
     panel("table", "Namespaces", q(base + """
 | WHERE namespace != ""
@@ -675,8 +709,17 @@ def _build_report_panels(src):
 | EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 1000
-| KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, TOP + 35, 48, 16))
+| KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, 28, 48, 16))
 
+    _BOARD[0] = "limits"
+    panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
+        f"**Workload limits: limit ≤ {LIMIT_RATIO}× request.** Every Deployment, StatefulSet, DaemonSet, CronJob, "
+        f"Job and bare Pod of the last {NOW_WINDOW} of the range, checked against a LimitRange "
+        f"`maxLimitRequestRatio: {LIMIT_RATIO}`. Kubernetes would reject its next pod (restart, rollout, scale-up, "
+        f"drain) when a container has a limit above {LIMIT_RATIO}× its request, or a request without a limit "
+        "(unless the LimitRange sets a default limit); a limit without a request passes (the request becomes the "
+        "limit). Problems first; *CPU* only matters if the ratio is set for CPU too. "
+        + cp_note + f"{names}\n\n" + nav_links("limits")))
     panel("table", f"Workloads vs. limit ≤ {LIMIT_RATIO}× request (LimitRange maxLimitRequestRatio: {LIMIT_RATIO}; now)",
           q(src + WORKLOAD_RATIO + f"""
 | EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category, Kind = kind,
@@ -690,7 +733,7 @@ def _build_report_panels(src):
 | LIMIT 2000
 | KEEP Cluster, Namespace, Project, Category, Kind, Workload, Status, `Memory: max limit/request`,
        `Memory problems`, `CPU: max limit/request`, `CPU problems`, `Containers affected`, Pods, Containers,
-       `CPU req`, `Mem req GiB`"""), (0, TOP + 51, 48, 16))
+       `CPU req`, `Mem req GiB`"""), (0, 5, 48, 22))
 
 
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----
@@ -850,14 +893,8 @@ def saved_objects(index):
     data_view = {"type": "index-pattern", "id": DATA_VIEW_ID, "attributes": {
         "title": index, "name": "OTel metrics (cluster resources)", "timeFieldName": "@timestamp"},
         "references": [], "managed": False, "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "8.0.0"}
-    dashboards = [dashboard_object(DASHBOARD_ID, "Cluster resources (as-is)",
-                                   "Allocatable, requested, limited and used CPU/memory per cluster, Rancher Project "
-                                   "and namespace from OpenTelemetry metrics.", PANELS, index)]
-    if REPORT_PANELS:
-        dashboards.append(dashboard_object(
-            REPORT_ID, "Cluster resource report",
-            "The in-cluster resource report (tiles, capacity by requests with N+1, CPU and memory by project, "
-            "Projects and Namespaces) from OpenTelemetry metrics.", REPORT_PANELS, index))
+    dashboards = [dashboard_object(did, title, description, board_panels(board), index)
+                  for board, did, title, description in [AS_IS_BOARD] + REPORT_BOARDS if board_panels(board)]
     return [data_view] + dashboards
 
 
@@ -973,6 +1010,9 @@ def main():
     ap.add_argument("--include-control-plane", action="store_true",
                     help=f"without the dashboard filter that leaves out nodes where {CP_FIELD[0]} is \"true\" "
                          "and the metrics of their pods (also for --check). Needs --out")
+    ap.add_argument("--split", action="store_true",
+                    help="one file per dashboard (<out>-as-is.ndjson, -capacity, -projects, -limits), each with the "
+                         "data view: smaller uploads, e.g. behind a proxy that limits the request size")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
                          "collector sets (build_collector_values.py). The Project filter control then lists names. "
@@ -1016,10 +1056,26 @@ def main():
     build_report_panels(args.index)
     if args.check:
         sys.exit(0 if run_checks(args.check, args.window, args.end, args.only) else 1)
-    with open(out, "w") as f:
-        for obj in saved_objects(args.index):
-            f.write(json.dumps(obj, separators=(",", ":")) + "\n")
-    print(f"wrote {out} ({len(PANELS)} + {len(REPORT_PANELS)} panels)")
+    data_view, *dashboards = saved_objects(args.index)
+    if not args.split:
+        write_objects(out, [data_view] + dashboards)
+        return
+    stem = out[:-len(".ndjson")] if out.endswith(".ndjson") else out
+    boards = {did: board for board, did, _, _ in [AS_IS_BOARD] + REPORT_BOARDS}
+    for d in dashboards:
+        write_objects(f"{stem}-{boards[d['id']]}.ndjson", [data_view, d])
+
+
+def write_objects(path, objects):
+    text = "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in objects)
+    with open(path, "w") as f:
+        f.write(text)
+    titles = ", ".join(o["attributes"]["title"] for o in objects if o["type"] == "dashboard")
+    print(f"wrote {path} ({len(text.encode()) // 1024} KiB: {titles})")
+    if len(text.encode()) > 900 * 1024:
+        print(f"warning: {path} is near or above 1 MiB, the default request limit of ingress-nginx; with many "
+              "Projects use --project-name-field instead of --rancher-projects (names on the metrics, not in "
+              "every query)", file=sys.stderr)
 
 
 if __name__ == "__main__":

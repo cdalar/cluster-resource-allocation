@@ -7,7 +7,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 
 | File | Content |
 |---|---|
-| [`kibana/cluster-resources-as-is.ndjson`](../kibana/cluster-resources-as-is.ndjson) | Saved objects to import: two dashboards, *Cluster resources (as-is)* and *Cluster resource report* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
+| [`kibana/cluster-resources-as-is.ndjson`](../kibana/cluster-resources-as-is.ndjson) | Saved objects to import: four linked dashboards, *Cluster resources (as-is)*, and the report as *Cluster resource report: capacity*, *: projects* and *Workload limits* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resources-as-is-no-project.ndjson`](../kibana/cluster-resources-as-is-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
 | [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
@@ -53,8 +53,12 @@ Definitions, as in the discovery tools:
 
 ## Cluster resource report
 
-The second dashboard in the same file, *Cluster resource report*, follows the in-cluster dashboard of the
-[chart](../charts/cluster-resource-report/README.md) on the same OTel metrics, for all clusters at once:
+The report, in the same file, follows the in-cluster dashboard of the
+[chart](../charts/cluster-resource-report/README.md) on the same OTel metrics, for all clusters at once. It is three
+dashboards, and every About box links all four: *capacity* (tiles, capacity chart, N+1 table), *projects* (by
+project charts, Projects and Namespaces tables) and *Workload limits* (the 2× table). Same filters and controls on each;
+the selections do not carry over when following a link.
+
 
 | Panel | Content | As in the in-cluster report |
 |---|---|---|
@@ -226,8 +230,19 @@ Which file:
   the collector sets the attribute, import the full file; it has the same IDs and replaces this one.
 
 **Kibana UI**: *Stack Management → Saved objects → Import*, select the `.ndjson` file,
-*Check for existing objects → Automatically overwrite*. Open *Dashboards → Cluster resources (as-is)* or
-*Cluster resource report*.
+*Check for existing objects → Automatically overwrite*. Open *Dashboards → Cluster resources (as-is)*; the About
+box links the others.
+
+**Upload too large** (`Request Entity Too Large`, e.g. ingress-nginx's 1 MiB default): write one file per dashboard
+and import them one by one; each holds the data view, so the order does not matter:
+
+```bash
+./kibana/build_dashboard.py <options> --split --out cluster-resources.ndjson
+# cluster-resources-as-is.ndjson, -capacity, -projects, -limits; the sizes are printed
+```
+
+`--rancher-projects` adds about 2 KiB per Project to the capacity file (about 270 KiB without names); with several
+hundred Projects use `--project-name-field` instead.
 Import into the Kibana space where the platform team works.
 
 **API**:

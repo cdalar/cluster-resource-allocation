@@ -310,14 +310,30 @@ class FakeElastic:
         return {"deleted": 2} if "_delete_by_query" in path else {}
 
 
+PROJECTS = {"items": [{"metadata": {"name": "p-bbjk7", "namespace": "c-m-1"}, "spec": {"displayName": "payments"}},
+                      {"metadata": {"name": "p-9z9dv", "namespace": "local"}, "spec": {"displayName": "System"}}]}
+
+
 class PublishProjectNamesTest(unittest.TestCase):
-    DOCS = ppn.documents({"p-bbjk7": "payments", "p-9z9dv": "System"})
+    DOCS = ppn.documents(PROJECTS)
 
     def test_documents_use_the_dashboard_columns(self):
-        self.assertEqual(self.DOCS, [{"project": "p-9z9dv", "project_name": "System"},
-                                     {"project": "p-bbjk7", "project_name": "payments"}])
-        self.assertEqual(set(ppn.INDEX_BODY["mappings"]["properties"]), {bd.LOOKUP_KEY, bd.LOOKUP_NAME})
+        self.assertEqual(self.DOCS[0], {"project": "p-9z9dv", "project_name": "System", "cluster_id": "local",
+                                        "resource.attributes.rancher.project.id": "p-9z9dv"})
+        self.assertEqual([d["project"] for d in self.DOCS], ["p-9z9dv", "p-bbjk7"])
+        # the report's join columns, the metrics field, and the same names as the generator reads
+        self.assertEqual((ppn.KEY, ppn.NAME, ppn.METRICS_KEY), (bd.LOOKUP_KEY, bd.LOOKUP_NAME, bd.F["project"]))
+        self.assertEqual(ppn.DEFAULT_LOOKUP_INDEX, bd.DEFAULT_LOOKUP_INDEX)
+        self.assertEqual({d["project"]: d["project_name"] for d in self.DOCS}, bd.rancher_project_names(PROJECTS))
+        self.assertEqual(set(ppn.INDEX_BODY["mappings"]["properties"]), set(ppn.FIELDS))
         self.assertEqual(ppn.INDEX_BODY["settings"]["index"]["mode"], "lookup")
+
+    def test_kibana_proxy(self):
+        es = ppn.Elastic("https://kibana.example/", kibana=True)
+        method, url = es.target("GET", "/rancher-projects/_settings")
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "https://kibana.example/api/console/proxy?path=%2Francher-projects%2F_settings&method=GET")
+        self.assertEqual(ppn.Elastic("https://es:9200").target("PUT", "/x"), ("PUT", "https://es:9200/x"))
 
     def test_publish_creates_writes_and_removes(self):
         es = FakeElastic()
@@ -335,7 +351,7 @@ class PublishProjectNamesTest(unittest.TestCase):
     def test_publish_keeps_an_existing_lookup_index(self):
         es = FakeElastic("lookup")
         ppn.publish(es, "rancher-projects", self.DOCS)
-        self.assertNotIn("PUT", [m for m, _, _, _ in es.calls])
+        self.assertEqual([(m, p) for m, p, _, _ in es.calls if m == "PUT"], [("PUT", "/rancher-projects/_mapping")])
 
     def test_publish_refuses_an_ordinary_index(self):
         es = FakeElastic(None)

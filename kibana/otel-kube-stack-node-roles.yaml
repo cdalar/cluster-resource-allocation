@@ -1,0 +1,45 @@
+# Values overlay for the opentelemetry-kube-stack Helm chart (rendered with 0.20.1): RKE2 node role labels on the
+# metrics, so the dashboards can leave out nodes that take no workloads (control-plane/etcd-only nodes).
+# No extra component: a second k8s_attributes processor reads three node labels.
+#
+#   helm upgrade ... -f <your values>.yaml -f otel-kube-stack-values.yaml -f otel-kube-stack-node-roles.yaml
+#
+# Result on node and pod metrics (value "true" when the node has the role):
+#   resource.attributes.k8s.node.role.control_plane / .etcd / .worker
+#
+# Why a second processor: on the daemon collector the preset's k8s_attributes only knows its own node
+# (filter.node_from_env_var), but the k8s.node.* metrics of all nodes come from one elected pod (k8s_cluster).
+# This one has no node filter, so it sees all nodes; filter.namespace keeps its pod cache to the collector's
+# own namespace. In a Terraform template write $${env:OTEL_K8S_NAMESPACE}.
+#
+# Helm replaces lists: the processors list below is the chart default plus k8s_attributes/nodes. If your
+# metrics pipeline lists other processors, copy your list and insert k8s_attributes/nodes after k8s_attributes.
+
+collectors:
+  daemon:
+    config:
+      processors:
+        k8s_attributes/nodes:
+          filter:
+            namespace: ${env:OTEL_K8S_NAMESPACE}
+          extract:
+            metadata: []
+            labels:
+              - tag_name: k8s.node.role.control_plane
+                key: node-role.kubernetes.io/control-plane
+                from: node
+              - tag_name: k8s.node.role.etcd
+                key: node-role.kubernetes.io/etcd
+                from: node
+              - tag_name: k8s.node.role.worker
+                key: node-role.kubernetes.io/worker
+                from: node
+      service:
+        pipelines:
+          metrics:
+            processors:
+              - k8s_attributes
+              - k8s_attributes/nodes
+              - resource_detection/env
+              - resource/hostname
+              - batch

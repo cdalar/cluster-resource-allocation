@@ -105,8 +105,7 @@ another index name, pass it to both scripts (`publish_project_names.py --index`)
 | Remote clusters | With cross-cluster search the join needs Elasticsearch 9.2 or later |
 | Standalone | `publish_project_names.py` is one file with no imports from the repository; copy it alone |
 | Other dashboards | Only ES\|QL can join; classic Lens and visualizations on a data view cannot. The join adds `project_name` and `cluster_id` columns |
-| Tested | Unit tests with a fake Elasticsearch; the publisher and `--kibana` have not run against a real Elasticsearch or Kibana yet |
-| Tested | Unit tests on the generated queries and on the publisher's requests; not yet run against Elasticsearch. Run the `--check` above before importing |
+| Tested | Unit tests on the generated queries and, with a fake Elasticsearch, on the publisher's requests; neither the join nor the publisher (or `--kibana`) has run against a real Elasticsearch or Kibana yet. Run the `--check` above before importing |
 
 ### Project names on the metrics
 

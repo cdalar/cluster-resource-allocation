@@ -809,7 +809,7 @@ def saved_filters():
     """Dashboard filter "NOT <role field>: true" (a negated phrase filter, as Kibana saves one)."""
     if not CP_FIELD[0]:
         return []
-    return [{"meta": {"alias": "Control-plane nodes excluded", "negate": True, "disabled": False, "type": "phrase",
+    return [{"meta": {"alias": "Control-plane nodes", "negate": True, "disabled": False, "type": "phrase",
                       "key": CP_FIELD[0], "params": {"query": "true"}, "indexRefName": CP_FILTER_REF},
              "query": {"match_phrase": {CP_FIELD[0]: "true"}}, "$state": {"store": "appState"}}]
 

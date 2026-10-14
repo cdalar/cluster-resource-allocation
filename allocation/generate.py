@@ -24,10 +24,11 @@ Checks (exit status 1 on any error, so CI can run it on every pull request):
 Capacity from the clusters (read-only, kubectl get nodes / pods): --discover CONTEXT=ENV rewrites the clusters:
 section of settings.yaml (commit it like any other change). Per cluster:
 
-  capacity = (allocatable of the counted nodes - the nodeFailures largest nodes - platform requests)
-             x maxQuotaPercent / 100
+  capacity = (allocatable of the counted nodes - the nodeFailures largest nodes - platform requests
+              - platformOverheadPercent of the allocatable) x maxQuotaPercent / 100
 
-nodeFailures and maxQuotaPercent come from the environment in settings.yaml; which nodes count and which
+nodeFailures, platformOverheadPercent and maxQuotaPercent come from the environment in settings.yaml (the block
+written for each cluster shows the calculation with its numbers); which nodes count and which
 namespaces are platform from its discovery: section (defaults: cordoned and NoSchedule/NoExecute-tainted nodes,
 e.g. control-plane, don't count; platform = the dashboards' system-namespace regex).
 
@@ -593,7 +594,7 @@ def cluster_capacity(nodes, pods, env, d):
             alloc = (n.get("status") or {}).get("allocatable") or {}
             counted.append((n["metadata"]["name"], quantity(alloc.get("cpu")), quantity(alloc.get("memory"))))
     names = {n for n, _, _ in counted}
-    platform = [0.0, 0.0]
+    platform, platform_pods = [0.0, 0.0], 0
     for p in pods.get("items", []):
         spec, status = p.get("spec") or {}, p.get("status") or {}
         if status.get("phase") in ("Succeeded", "Failed") or spec.get("nodeName") not in names:
@@ -601,27 +602,50 @@ def cluster_capacity(nodes, pods, env, d):
         if d["systemRe"].match(p["metadata"].get("namespace", "")):
             platform[0] += pod_request(spec, "cpu")
             platform[1] += pod_request(spec, "memory")
-    failures, pct = env["nodeFailures"], env["maxQuotaPercent"]
-    out = {"nodes": len(counted), "skipped": skipped, "failures": failures, "pct": pct,
+            platform_pods += 1
+    failures, overhead, pct = env["nodeFailures"], env["platformOverheadPercent"], env["maxQuotaPercent"]
+    out = {"counted": counted, "nodes": len(counted), "skipped": skipped, "failures": failures, "pct": pct,
+           "overheadPct": overhead, "platformPods": platform_pods,
            "alloc": [sum(c for _, c, _ in counted), sum(m for _, _, m in counted)], "platform": platform}
     out["largest"] = [sum(sorted((c for _, c, _ in counted), reverse=True)[:failures]),
                       sum(sorted((m for _, _, m in counted), reverse=True)[:failures])]
-    room = [max(out["alloc"][i] - out["largest"][i] - platform[i], 0.0) for i in (0, 1)]
-    out["cpu"] = int(room[0] * pct / 100 * 10) / 10  # down to 0.1 vCPU
-    out["memory"] = int(room[1] * pct / 100 // 2 ** 30)  # down to whole GiB
+    out["overhead"] = [out["alloc"][i] * overhead / 100 for i in (0, 1)]
+    out["room"] = [max(out["alloc"][i] - out["largest"][i] - platform[i] - out["overhead"][i], 0.0) for i in (0, 1)]
+    out["cpu"] = int(round(out["room"][0] * pct / 100, 6) * 10) / 10  # down to 0.1 vCPU
+    out["memory"] = int(round(out["room"][1] * pct / 100 / 2 ** 30, 6))  # down to whole GiB
     return out
 
 
-def cluster_block(name, envname, cap, context, today):
+def calculation(cap, envname):
+    """The comment lines that show how the capacity was computed, with the numbers."""
     gib = lambda b: f"{b / 2 ** 30:.1f}"
-    skipped = ", ".join(f"{n} ({r})" for n, r in cap["skipped"]) or "none"
+    sizes = {}
+    for _, c, m in cap["counted"]:
+        sizes[(c, m)] = sizes.get((c, m), 0) + 1
+    by_size = ", ".join(f"{n} x {c:g} vCPU / {gib(m)} GiB" for (c, m), n in sorted(sizes.items(), reverse=True))
+    lines = [f"environment {envname}: nodeFailures {cap['failures']}, platformOverheadPercent "
+             f"{cap['overheadPct']:g}, maxQuotaPercent {cap['pct']:g}",
+             f"nodes counted ({cap['nodes']}): {by_size or 'none'}",
+             "nodes left out ({}): {}".format(len(cap["skipped"]),
+                                              ", ".join(f"{n} ({r})" for n, r in cap["skipped"]) or "none"),
+             f"platform requests: {cap['platformPods']} pod(s) in platform namespaces on counted nodes"]
+    for i, (name, unit, fmt) in enumerate((("CPU", "vCPU", lambda v: f"{v:.2f}"), ("memory", "GiB", gib))):
+        result = f"{cap['cpu']:g} vCPU" if i == 0 else f"{cap['memory']} GiB"
+        lines.append(f"{name}: allocatable {fmt(cap['alloc'][i])}"
+                     f" - largest {cap['failures']} node(s) {fmt(cap['largest'][i])}"
+                     f" - platform requests {fmt(cap['platform'][i])}"
+                     f" - overhead ({cap['overheadPct']:g} % of {fmt(cap['alloc'][i])}) {fmt(cap['overhead'][i])}"
+                     f" = {fmt(cap['room'][i])} {unit}; x {cap['pct']:g} % = {fmt(cap['room'][i] * cap['pct'] / 100)}"
+                     f" {unit}, rounded down -> {result}")
+    return lines
+
+
+def cluster_block(name, envname, cap, context, today):
+    comment = "".join(f"    #   {line}\n" for line in calculation(cap, envname))
     return (f"  {name}:\n"
             f"    env: {envname}\n"
-            f"    # discovered {today} from context {context}: {cap['nodes']} node(s) counted, left out: {skipped}\n"
-            f"    # allocatable {cap['alloc'][0]:.1f} vCPU / {gib(cap['alloc'][1])} GiB"
-            f" - {cap['failures']} largest node(s) {cap['largest'][0]:.1f} vCPU / {gib(cap['largest'][1])} GiB"
-            f" - platform requests {cap['platform'][0]:.1f} vCPU / {gib(cap['platform'][1])} GiB,"
-            f" x {cap['pct']:g} %\n"
+            f"    # capacity discovered {today} from context {context}:\n"
+            + comment +
             f"    capacity:\n"
             f"      cpu: {cap['cpu']:g}\n"
             f"      memory: {cap['memory']}Gi\n")
@@ -677,11 +701,15 @@ def discover(path, targets, ck, get=kubectl_json, today=None):
             ck.error(f"--discover {context}={envname}: no environment {envname} in settings.yaml")
             continue
         e = envs[envname] or {}
-        env = {"nodeFailures": e.get("nodeFailures", 0), "maxQuotaPercent": e.get("maxQuotaPercent", 100)}
+        env = {"nodeFailures": e.get("nodeFailures", 0), "maxQuotaPercent": e.get("maxQuotaPercent", 100),
+               "platformOverheadPercent": e.get("platformOverheadPercent", 0)}
         if not isinstance(env["nodeFailures"], int) or env["nodeFailures"] < 0:
             ck.error(f"settings.yaml: environments.{envname}.nodeFailures must be a whole number >= 0")
         if not isinstance(env["maxQuotaPercent"], (int, float)) or not 0 < env["maxQuotaPercent"] <= 500:
             ck.error(f"settings.yaml: environments.{envname}.maxQuotaPercent must be a number from 1 to 500")
+        po = env["platformOverheadPercent"]
+        if isinstance(po, bool) or not isinstance(po, (int, float)) or not 0 <= po < 100:
+            ck.error(f"settings.yaml: environments.{envname}.platformOverheadPercent must be a number from 0 to 99")
         if ck.errors:
             continue
         try:

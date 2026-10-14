@@ -200,17 +200,25 @@ class DiscoverTest(unittest.TestCase):
     def test_capacity(self):
         ck = g.Checker()
         d = g.discovery_settings({}, ck)
-        cap = g.cluster_capacity(NODES, PODS, {"nodeFailures": 1, "maxQuotaPercent": 80}, d)
+        cap = g.cluster_capacity(NODES, PODS, {"nodeFailures": 1, "maxQuotaPercent": 80, "platformOverheadPercent": 5}, d)
         self.assertEqual(cap["nodes"], 3)
         self.assertEqual(cap["skipped"], [("cp-1", "taint node-role.kubernetes.io/control-plane:NoSchedule"),
                                           ("w-4", "cordoned")])
         self.assertEqual(cap["alloc"], [40.0, 160 * 2 ** 30])
         self.assertEqual(cap["largest"], [16.0, 64 * 2 ** 30])
         self.assertEqual(cap["platform"], [2.0, 3.5 * 2 ** 30])
-        # (40 - 16 - 2) x 80 % = 17.6 vCPU; (160 - 64 - 3.5) GiB x 80 % = 74 GiB
-        self.assertEqual((cap["cpu"], cap["memory"]), (17.6, 74))
+        self.assertEqual(cap["overhead"], [2.0, 8 * 2 ** 30])
+        # (40 - 16 - 2 - 2) x 80 % = 16 vCPU; (160 - 64 - 3.5 - 8) GiB x 80 % = 67.6 -> 67 GiB
+        self.assertEqual((cap["cpu"], cap["memory"]), (16.0, 67))
+        lines = g.calculation(cap, "prod")
+        self.assertEqual(lines[1], "nodes counted (3): 2 x 16 vCPU / 64.0 GiB, 1 x 8 vCPU / 32.0 GiB")
+        self.assertEqual(lines[4], "CPU: allocatable 40.00 - largest 1 node(s) 16.00 - platform requests 2.00 - overhead "
+                                   "(5 % of 40.00) 2.00 = 20.00 vCPU; x 80 % = 16.00 vCPU, rounded down -> 16 vCPU")
+        self.assertEqual(lines[5], "memory: allocatable 160.0 - largest 1 node(s) 64.0 - platform requests 3.5 - overhead "
+                                   "(5 % of 160.0) 8.0 = 84.5 GiB; x 80 % = 67.6 GiB, rounded down -> 67 GiB")
         d = g.discovery_settings({"discovery": {"skipTaintEffects": [], "skipCordoned": False}}, ck)
-        self.assertEqual(g.cluster_capacity(NODES, PODS, {"nodeFailures": 0, "maxQuotaPercent": 100}, d)["nodes"], 5)
+        self.assertEqual(g.cluster_capacity(NODES, PODS, {"nodeFailures": 0, "maxQuotaPercent": 100,
+                                                          "platformOverheadPercent": 0}, d)["nodes"], 5)
 
     def test_same_rules_as_discover(self):
         sys.path.insert(0, os.path.join(HERE, "..", "discovery"))
@@ -233,15 +241,16 @@ class DiscoverTest(unittest.TestCase):
         with open(self.settings) as f:
             after = f.read()
         [settings] = g.load_yaml(after)
-        self.assertEqual(settings["clusters"]["prod-01"], {"env": "prod", "capacity": {"cpu": 17.6, "memory": "74Gi"}})
+        self.assertEqual(settings["clusters"]["prod-01"], {"env": "prod", "capacity": {"cpu": 16, "memory": "67Gi"}})
         self.assertEqual(settings["clusters"]["test-01"], {"env": "test", "capacity": {"cpu": 60, "memory": "240Gi"}})
         self.assertEqual(settings["clusters"]["new-01"]["env"], "dev")
         self.assertEqual(list(settings["clusters"]), ["prod-01", "test-01", "new-01"])
-        self.assertIn("# discovered 2026-10-14 from context prod-01: 3 node(s) counted", after)
+        self.assertIn("    # capacity discovered 2026-10-14 from context prod-01:\n    #   environment prod: nodeFailures 1, "
+                      "platformOverheadPercent 5, maxQuotaPercent 80\n", after)
         self.assertEqual(after.split("clusters:")[0], before.split("clusters:")[0])  # the rest is untouched
         code, _, err = run(self.tmp, "--check")  # the examples ask more than the small test cluster has
         self.assertEqual(code, 1)
-        self.assertIn("prod-01: the namespaces get 64 cpu in total, above its capacity of 17.6", err)
+        self.assertIn("prod-01: the namespaces get 64 cpu in total, above its capacity of 16", err)
 
     def test_errors_leave_settings_alone(self):
         with open(self.settings) as f:
@@ -251,6 +260,13 @@ class DiscoverTest(unittest.TestCase):
         self.assertIn("--discover x=nope: no environment nope in settings.yaml", ck.errors)
         with open(self.settings) as f:
             self.assertEqual(f.read(), before)
+        ck = g.Checker()
+        with open(self.settings, "w") as f:
+            f.write(before.replace("platformOverheadPercent: 5   #", "platformOverheadPercent: 100   #"))
+        g.discover(self.tmp, [("prod-01", "prod")], ck, lambda c, a: NODES if a[1] == "nodes" else PODS)
+        self.assertIn("settings.yaml: environments.prod.platformOverheadPercent must be a number from 0 to 99", ck.errors)
+        with open(self.settings) as f:
+            self.assertNotIn("discovered", f.read())
 
     def test_kubeconfig_is_passed_to_kubectl(self):
         kubeconfig = os.path.join(self.tmp, "kc.yaml")
@@ -264,7 +280,7 @@ class DiscoverTest(unittest.TestCase):
             code, out, err = run(self.tmp, "--kubeconfig", kubeconfig, "--discover", "prod-01=prod")
         self.assertEqual(code, 0, err)
         self.assertEqual(calls[0][:5], ["kubectl", "--kubeconfig", kubeconfig, "--context", "prod-01"])
-        self.assertIn("prod-01 (prod): 3 node(s), capacity 17.6 vCPU / 74 GiB", out)
+        self.assertIn("prod-01 (prod): 3 node(s), capacity 16 vCPU / 67 GiB", out)
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             run(self.tmp, "--kubeconfig", kubeconfig)  # only with --discover
 

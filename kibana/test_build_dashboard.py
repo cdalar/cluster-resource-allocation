@@ -198,20 +198,25 @@ class BuildDashboardTest(unittest.TestCase):
         self.without_project()
         self.assertNotIn("rancher.project", self.generated())
 
-    def test_exclude_control_plane(self):
+    def test_control_plane_filter(self):
         bd.CP_FIELD[0] = bd.DEFAULT_CP_FIELD
         self.rebuild()
         field = bd.DEFAULT_CP_FIELD
-        drop = f'| WHERE {field} IS NULL OR {field} != "true"'
         nodes = next(p for p in bd.PANELS if p["title"].startswith("Nodes"))
-        for p in bd.PANELS + bd.REPORT_PANELS:
+        for p in bd.PANELS + bd.REPORT_PANELS:  # a dashboard filter, not a query change
             if p["esql"] and p is not nodes:
-                self.assertEqual(p["esql"].splitlines()[1], drop, p["title"])
-        self.assertNotIn(drop, nodes["esql"])  # every node, with its role
+                self.assertNotIn(field, p["esql"], p["title"])
         self.assertEqual(bd.table_columns(nodes["esql"])[:3], ["Cluster", "Node", "Role"])
         self.assertIn('Role = CASE(cp == "true", "control plane", "worker")', nodes["esql"])
         for dashboard, source in zip(bd.saved_objects(bd.DEFAULT_INDEX)[1:], (bd.PANELS, bd.REPORT_PANELS)):
             self.check_dashboard(dashboard, source)
+            controls = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
+            cp = controls[bd.CP_CONTROL]
+            self.assertEqual(cp["order"], len(controls) - 1)
+            self.assertEqual(cp["explicitInput"]["fieldName"], field)
+            self.assertEqual((cp["explicitInput"]["selectedOptions"], cp["explicitInput"]["exclude"]), (["true"], True))
+            self.assertIn(f"controlGroup_{bd.CP_CONTROL}:optionsListDataView",
+                          [r["name"] for r in dashboard["references"]])
         self.assertIn("Control-plane nodes", bd.REPORT_PANELS[0]["markdown"])
 
     def test_collector_values(self):

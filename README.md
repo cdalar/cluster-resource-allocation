@@ -116,6 +116,7 @@ flowchart LR
 |---|---|
 | [Installation](guides/installation.md) | Step by step: dashboard on every cluster, planners and name publisher on the Rancher local cluster, verification, upgrade, troubleshooting |
 | [Allocation planner](guides/allocation-planner.md) | Using the allocation and capacity planners, every parameter explained |
+| [Allocation as code](guides/allocation-as-code.md) | YAML format for vCPU and memory per project and cluster, checks, and the generated Rancher Project quotas / ResourceQuotas |
 
 ## Tools
 
@@ -125,6 +126,7 @@ flowchart LR
 | [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster; chart `cluster-resource-report-chart` on Docker Hub (`cdalar/cluster-resource-report-chart`) and GHCR (`oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`), image `cdalar/cluster-resource-report` on both |
 | [Allocation planner](discovery/README.md#allocation-planner) ([user guide](guides/allocation-planner.md)) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing); with a what-if calculator for a new application (fits, or nodes and Rancher licences to add, with N+1 and platform overhead) |
 | [Capacity planner](guides/allocation-planner.md#capacity-planner-without-money) | The allocation planner without money: a CPU and memory envelope per project, split into quota per cluster, with the same cluster checks |
+| [allocation/generate.py](guides/allocation-as-code.md) | Checks the allocation files in Git (vCPU and memory per project and cluster, against cluster capacity) and generates Rancher Project quotas, or ResourceQuota + LimitRange for clusters outside Rancher (writes files, applies nothing) |
 | [publish_rancher_names.py](discovery/README.md#project-names-on-downstream-clusters-without-a-token) | Publishes Rancher Project names from the local cluster to downstream clusters (Fleet Bundle with a ConfigMap), so their dashboards show names without a Rancher token |
 
 ## Repository layout
@@ -133,6 +135,7 @@ flowchart LR
 docs/        design and process docs, ADRs, screenshots (docs/images/)
 guides/      user guides for the tools
 discovery/   discover.py (CLI), server.py + static/ (dashboard, planners), publish_rancher_names.py, tests
+allocation/  generate.py (allocation files -> quotas), examples/, tests
 charts/      Helm chart cluster-resource-report
 ```
 
@@ -140,6 +143,7 @@ charts/      Helm chart cluster-resource-report
 
 ```bash
 cd discovery && python3 -m unittest -v test_discover test_server test_planner
+cd allocation && python3 -m unittest -v test_generate
 helm lint charts/cluster-resource-report
 ```
 

@@ -1,0 +1,21 @@
+# allocations/projects/data-platform.yaml
+project: data-platform
+owners: [data-lead@corp.example, data-ops@corp.example]
+allocations:
+  - cluster: onprem-prod-01
+    cpu: 24
+    memory: 96Gi
+    namespaceDefault:
+      cpu: 8
+      memory: 32Gi
+  - cluster: aks-prod-weu     # managedBy: kubernetes, so the namespaces are listed here
+    cpu: 8
+    memory: 32Gi
+    namespaces:
+      - name: data-ingest
+        cpu: 6
+        memory: 24Gi
+      - name: data-api        # without cpu/memory: namespaceDefault
+    namespaceDefault:
+      cpu: 2
+      memory: 8Gi

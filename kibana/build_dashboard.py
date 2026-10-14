@@ -88,7 +88,7 @@ F = {
 # Metrics the k8s_cluster receiver only sends while such objects exist. When no cluster has any, no index has the
 # field and ES|QL rejects every query that names it ("Unknown column"): --no-quota / --no-hpa leave them out.
 OPTIONAL_FIELDS = {"quota": ("rq_uid", "rq_hard"), "hpa": ("hpa_uid", "hpa_max")}
-TIME_FROM = ["now-1d"]  # time range the dashboards open with (to now); --time-from
+TIME_FROM = ["now-1h"]  # time range the dashboards open with (to now); --time-from
 GIB = "1073741824.0"  # a double, so byte sums (longs) are not integer-divided
 NO_PROJECT = '"(no project)"'
 

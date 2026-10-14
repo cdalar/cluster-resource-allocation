@@ -29,7 +29,7 @@ OTel metrics, for all clusters at once. It is three dashboards, and every About 
 (tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and Namespaces tables) and *Workload
 limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
 leaves out control-plane nodes ([below](#control-plane-nodes)); the selections do not carry over when following a
-link. Every panel is an ES|QL panel over the dashboard's time range (default: last 1 day; `--time-from now-7d` for
+link. Every panel is an ES|QL panel over the dashboard's time range (default: last 1 hour; `--time-from now-1d` for
 another). With Project names (any of the ways below), every Project column and chart shows the name.
 
 

@@ -535,6 +535,10 @@ def build_report_panels(index):
         _TARGET[0] = PANELS
 
 
+TILE_H = 5  # height of the report's tile rows
+TOP = 4 + 2 * TILE_H  # first row below the About text and the two tile rows
+
+
 def _build_report_panels(src):
     base = src + REPORT_POD_STAGE
     names = ("Project names from the metrics (set by the collector)." if NAME_FIELD[0] else
@@ -551,34 +555,40 @@ def _build_report_panels(src):
         + f"{names} Docs: `guides/kibana-dashboard.md`."))
 
     summary = base + REPORT_CLUSTER
-    # (label, value, secondary label, secondary value, bar): the label names the value, so the panel title is
-    # hidden; % tiles get a bar to 100 % coloured by the allocation rule (80 % prod ceiling, over 100 % overcommitted).
-    tiles = [
-        ("Nodes", "SUM(nodes)", "clusters", "COUNT(*)", False),
-        ("Allocatable vCPU", "ROUND(SUM(alloc_cpu), 1)", "GiB memory", "ROUND(SUM(alloc_mem) / {GIB}, 1)", False),
-        ("CPU requested (% of allocatable)", "ROUND(SUM(rc) / SUM(alloc_cpu) * 100, 0)", "vCPU",
-         "ROUND(SUM(rc), 1)", True),
-        ("Memory requested (% of allocatable)", "ROUND(SUM(rm) / SUM(alloc_mem) * 100, 0)", "GiB",
-         "ROUND(SUM(rm) / {GIB}, 1)", True),
-        ("Room for projects (N+1), vCPU", "ROUND(SUM(room_cpu), 1)", "left after project requests",
-         "ROUND(SUM(room_cpu - rc_t), 1)", False),
-        ("Used (P95), vCPU", "ROUND(SUM(uc), 2)", "GiB memory", "ROUND(SUM(um) / {GIB}, 1)", False),
-        ("Containers without CPU request (now)", "SUM(no_cpu)", "without memory limit", "SUM(no_mem_lim)", False),
-        ("Pending requests (now), vCPU", "ROUND(SUM(pend_cpu), 2)", "GiB", "ROUND(SUM(pend_mem) / {GIB}, 2)", False),
-    ]
+    # (label, value, bar): one value per tile; the label names it, so the panel title is hidden. % tiles get a bar
+    # to 100 % coloured by the allocation rule (80 % prod ceiling, over 100 % overcommitted). Two rows: capacity and
+    # requests, then N+1 room, usage and the "now" checks.
+    rows = [[
+        ("Clusters", "COUNT(*)", False),
+        ("Nodes", "SUM(nodes)", False),
+        ("Allocatable vCPU", "ROUND(SUM(alloc_cpu), 1)", False),
+        ("Allocatable memory (GiB)", "ROUND(SUM(alloc_mem) / {GIB}, 1)", False),
+        ("CPU requested (% of allocatable)", "ROUND(SUM(rc) / SUM(alloc_cpu) * 100, 0)", True),
+        ("Memory requested (% of allocatable)", "ROUND(SUM(rm) / SUM(alloc_mem) * 100, 0)", True),
+        ("CPU requested (vCPU)", "ROUND(SUM(rc), 1)", False),
+        ("Memory requested (GiB)", "ROUND(SUM(rm) / {GIB}, 1)", False),
+    ], [
+        ("Room for projects, N+1 (vCPU)", "ROUND(SUM(room_cpu), 1)", False),
+        ("Left after project requests (vCPU)", "ROUND(SUM(room_cpu - rc_t), 1)", False),
+        ("CPU used, P95 (vCPU)", "ROUND(SUM(uc), 2)", False),
+        ("Memory used, P95 (GiB)", "ROUND(SUM(um) / {GIB}, 1)", False),
+        ("Containers without CPU request (now)", "SUM(no_cpu)", False),
+        ("Containers without memory limit (now)", "SUM(no_mem_lim)", False),
+        ("Pending requests (now, vCPU)", "ROUND(SUM(pend_cpu), 2)", False),
+        ("Pending requests (now, GiB)", "ROUND(SUM(pend_mem) / {GIB}, 2)", False),
+    ]]
     if F["project"] is not None:
-        tiles.append(("Unassigned namespaces (now)", "SUM(ns_u)", "not in any Rancher Project", "0", False))
-    widths = [5, 5, 6, 6, 5, 5, 6, 5, 5][:len(tiles)]
-    widths[-1] += 48 - sum(widths)
-    x = 0
-    for (label, expr, sec_name, sec_expr, bar), w in zip(tiles, widths):
-        stats = f"`{label}` = {expr}, `{sec_name}` = {sec_expr}" + ("\n| EVAL max = 100" if bar else "")
-        if sec_expr == "0":  # label only
-            stats = f"`{label}` = {expr}"
-        panel("metric", label, q(summary + f"\n| STATS {stats}"), (x, 4, w, 6), value=label,
-              secondary=None if sec_expr == "0" else sec_name, bar=bar, hide_title=True,
-              subtitle=sec_name if sec_expr == "0" else None)
-        x += w
+        rows[1].append(("Unassigned namespaces (now)", "SUM(ns_u)", False))
+    for r, tiles in enumerate(rows):
+        widths = [48 // len(tiles)] * len(tiles)
+        for i in range(48 - sum(widths)):  # spread the rest over the last tiles
+            widths[-1 - i] += 1
+        x = 0
+        for (label, expr, bar), w in zip(tiles, widths):
+            stats = f"`{label}` = {expr}" + ("\n| EVAL max = 100" if bar else "")
+            panel("metric", label, q(summary + f"\n| STATS {stats}"), (x, 4 + r * TILE_H, w, TILE_H), value=label,
+                  bar=bar, hide_title=True)
+            x += w
 
     panel("bar_stacked", "Cluster capacity by requests (% of allocatable)", q(summary + REPORT_BY_RESOURCE + """
 | EVAL used = tn + sy + un,
@@ -586,7 +596,7 @@ def _build_report_panels(src):
        Unassigned = ROUND(un / a * 100, 1), `Free (N+1)` = ROUND(GREATEST(a - lg - used, 0) / a * 100, 1),
        `N+1 reserve` = ROUND(GREATEST(a - GREATEST(a - lg, used), 0) / a * 100, 1)
 | SORT cluster, res
-| KEEP Label, Tenant, System, Unassigned, `Free (N+1)`, `N+1 reserve`"""), (0, 10, 26, 10), x="Label",
+| KEEP Label, Tenant, System, Unassigned, `Free (N+1)`, `N+1 reserve`"""), (0, TOP, 26, 10), x="Label",
           y=["Tenant", "System", "Unassigned", "Free (N+1)", "N+1 reserve"])
 
     panel("table", "N+1: room for projects if the largest node fails (vCPU / GiB)", q(summary + REPORT_BY_RESOURCE + """
@@ -595,7 +605,7 @@ def _build_report_panels(src):
        `Left (N+1)` = ROUND(room - tn - un, 1), Fits = CASE(room >= tn + un, "yes", "NO")
 | SORT Cluster, Resource
 | KEEP Cluster, Resource, Nodes, Allocatable, `Largest node`, Platform, `For projects`, `Projects request`,
-       `Left (N+1)`, Fits"""), (26, 10, 22, 10))
+       `Left (N+1)`, Fits"""), (26, TOP, 22, 10))
 
     for i, (res, unit) in enumerate([("cpu", "vCPU"), ("mem", "GiB")]):
         label = "CPU" if res == "cpu" else "Memory"
@@ -608,7 +618,7 @@ def _build_report_panels(src):
 | EVAL Project = CONCAT(cluster, " / ", pname)
 | SORT Requested DESC NULLS LAST
 | LIMIT 15
-| KEEP Project, Requested, `Used (P95)`"""), (i * 24, 20, 24, 13), x="Project", y=["Requested", "Used (P95)"])
+| KEEP Project, Requested, `Used (P95)`"""), (i * 24, TOP + 10, 24, 13), x="Project", y=["Requested", "Used (P95)"])
 
     if F["project"] is not None:
         panel("table", "Projects", q(base + """
@@ -618,7 +628,7 @@ def _build_report_panels(src):
        Category = category
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 500
-| KEEP Cluster, Project, Category, NS, """ + REPORT_COLUMNS + ", `Project ID`"), (0, 33, 48, 12))
+| KEEP Cluster, Project, Category, NS, """ + REPORT_COLUMNS + ", `Project ID`"), (0, TOP + 23, 48, 12))
 
     panel("table", "Namespaces", q(base + """
 | WHERE namespace != ""
@@ -626,7 +636,7 @@ def _build_report_panels(src):
 | EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 1000
-| KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, 45, 48, 16))
+| KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, TOP + 35, 48, 16))
 
 
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----
@@ -658,11 +668,6 @@ def lens_attributes(p, index):
         columns = [col("value", p["value"], "number")]
         vis_type = "lnsMetric"
         vis = {"layerId": "layer_0", "layerType": "data", "metricAccessor": "value", "showBar": False}
-        if p.get("secondary"):
-            columns.append(col("secondary", p["secondary"], "number"))
-            vis["secondaryMetricAccessor"] = "secondary"
-        if p.get("subtitle"):
-            vis["subtitle"] = p["subtitle"]
         if p.get("bar"):
             columns.append(col("max", "max", "number"))
             vis.update(maxAccessor="max", showBar=True, progressDirection="horizontal", palette=ALLOCATION_PALETTE)

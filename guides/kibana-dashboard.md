@@ -58,7 +58,7 @@ The second dashboard in the same file, *Cluster resource report*, follows the in
 
 | Panel | Content | As in the in-cluster report |
 |---|---|---|
-| Tiles | Nodes (and clusters), allocatable, CPU and memory requested as % of allocatable with a bar (green to 80 %, amber to 100 %, red above), room for projects (N+1) and what is left after project requests, used (P95), containers without CPU request / memory limit (now), pending requests (now), unassigned namespaces (now) | Same tiles, plus nodes |
+| Tiles | One value per tile, in two rows. Capacity and requests: clusters, nodes, allocatable vCPU and GiB, CPU and memory requested as % of allocatable with a bar (green to 80 %, amber to 100 %, red above), and in vCPU / GiB. Then: room for projects (N+1) and what is left after project requests, used (P95) vCPU and GiB, containers without CPU request and without memory limit (now), pending requests vCPU and GiB (now), unassigned namespaces (now). Every tile adds up all clusters in the selection | Same tiles, plus nodes |
 | Cluster capacity by requests | Per cluster and resource (with its node count), % of allocatable: Tenant, System (platform), Unassigned, free up to N+1, N+1 reserve (largest node) | The capacity bar with the N+1 line |
 | N+1 table | Nodes; allocatable − largest node − platform = for projects; projects request; left; fits | The N+1 note |
 | CPU / Memory by project | Top 15 projects by requests (without System), requested vs used (P95) | Same charts |

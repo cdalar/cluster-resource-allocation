@@ -113,6 +113,22 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(limits["spec"]["limits"][0]["defaultRequest"], {"cpu": "50m", "memory": "128Mi"})
         self.assertEqual(self.read("test-01/payments-e2e.yaml")[0]["spec"]["hard"]["limits.memory"], "12Gi")
 
+    def test_per_project(self):
+        code, _, err = run(self.alloc, "--out", self.out, "--per-project")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.files(), ["prod-01/data-platform.yaml", "prod-01/payments.yaml", "test-01/payments.yaml"])
+        objs = self.read("test-01/payments.yaml")
+        self.assertEqual([(o["kind"], o["metadata"]["namespace"]) for o in objs], [
+            ("ResourceQuota", "payments-api"), ("LimitRange", "payments-api"),
+            ("ResourceQuota", "payments-worker"), ("LimitRange", "payments-worker"),
+            ("ResourceQuota", "payments-e2e"), ("LimitRange", "payments-e2e")])
+        with open(os.path.join(self.out, "test-01/payments.yaml")) as f:
+            self.assertIn("# project payments on test-01: payments-api, payments-worker, payments-e2e\n", f.read())
+        # switching back replaces the per-project files
+        self.assertEqual(run(self.alloc, "--out", self.out)[0], 0)
+        self.assertNotIn("test-01/payments.yaml", self.files())
+        self.assertIn("test-01/payments-e2e.yaml", self.files())
+
     def test_second_run_replaces_only_generated_files(self):
         self.assertEqual(run(self.alloc, "--out", self.out)[0], 0)
         with open(os.path.join(self.out, "keep.yaml"), "w") as f:

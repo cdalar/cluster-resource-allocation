@@ -102,6 +102,7 @@ cluster fails, for example because `kubectl` can't reach it, `settings.yaml` is 
 ```bash
 ./allocation/generate.py allocations --check              # pull request: checks only
 ./allocation/generate.py allocations --out build          # after merge: build/<cluster>/<namespace>.yaml
+./allocation/generate.py allocations --out build --per-project   # or one file per project: build/<cluster>/<project>.yaml
 kubectl --context prod-01 apply --server-side --field-manager=allocations -f build/prod-01/
 ```
 
@@ -117,7 +118,8 @@ It exits with 1 and writes nothing when any check fails.
 
 ## Output
 
-`build/<cluster>/<namespace>.yaml`, for each namespace:
+`build/<cluster>/<namespace>.yaml`, or with `--per-project` `build/<cluster>/<project>.yaml` holding all the project's
+namespaces on that cluster. For each namespace:
 
 | Object | Content |
 |---|---|

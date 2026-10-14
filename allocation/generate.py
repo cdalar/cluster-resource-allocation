@@ -745,8 +745,8 @@ def discover(path, targets, ck, get=kubectl_json, today=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("allocations", help="directory with settings.yaml and projects/*.yaml")
-    ap.add_argument("--out", default="build", help="output directory (default build); the generated YAML files in "
-                                                    "it are replaced")
+    ap.add_argument("--out", help="output directory (default build); the generated YAML files in it are replaced. "
+                                  "With --discover: generate after updating settings.yaml")
     ap.add_argument("--check", action="store_true", help="validate only, write nothing (for pull requests)")
     ap.add_argument("--per-project", action="store_true",
                     help="one file per project and cluster (<cluster>/<project>.yaml) instead of one per namespace")
@@ -783,7 +783,10 @@ def main(argv=None):
             print("settings.yaml not changed", file=sys.stderr)
             return 1
         print(f"updated {os.path.join(args.allocations, 'settings.yaml')}: review and commit it")
-        return 0
+        if not args.out and not args.check:
+            return 0
+        print()
+        ck = Checker()
     settings, projects = load_dir(args.allocations, ck)
     clusters, allocs, usage = build_model(settings, projects, ck) if not ck.errors else ({}, [], {})
     if allocs:
@@ -798,6 +801,7 @@ def main(argv=None):
     if args.check:
         print("\nall checks passed")
         return 0
+    args.out = args.out or "build"
     files = manifests(allocs, args.per_project)
     if os.path.isdir(args.out):  # remove what an earlier run wrote: generated YAML only
         for dirpath, _, names in os.walk(args.out, topdown=False):

@@ -22,6 +22,7 @@ allocations/                       (sample: allocation/examples/)
 |---|---|
 | `environments.<env>.memoryLimitFactor` | `limits.memory` = `requests.memory` × factor: 1 in prod (S3), up to 2 elsewhere |
 | `environments.<env>.nodeFailures` | `--discover`: the N largest nodes are left out of capacity (prod: 1 = N+1; default 0) |
+| `environments.<env>.platformOverheadPercent` | `--discover`: % of the counted nodes' allocatable kept for the platform **on top of** its measured requests: growth, platform pods using more than they request, upgrades (example: 5; default 0) |
 | `environments.<env>.maxQuotaPercent` | `--discover`: share of what is left that may be allocated (prod 80, test 100, dev 150; default 100) |
 | `discovery.skipCordoned`, `.skipTaintEffects`, `.skipNodeLabels` | `--discover`: nodes that don't count as capacity. Default: cordoned nodes and nodes with a `NoSchedule` or `NoExecute` taint (control-plane), no labels |
 | `discovery.systemNamespaces` | `--discover`: platform namespaces (regex); their pods' requests are subtracted. Default: the dashboards' system-namespace regex |
@@ -64,8 +65,9 @@ its block under `clusters:` in `settings.yaml`. The cluster is named after the c
 the other sections are kept, so you commit the change like any other.
 
 ```
-capacity = (allocatable of the counted nodes − the nodeFailures largest nodes − platform requests)
-           × maxQuotaPercent / 100            (CPU down to 0.1 vCPU, memory down to whole GiB)
+capacity = (allocatable of the counted nodes − the nodeFailures largest nodes − platform requests
+            − platformOverheadPercent of the allocatable) × maxQuotaPercent / 100
+           (CPU rounded down to 0.1 vCPU, memory to whole GiB)
 ```
 
 ```bash
@@ -73,16 +75,22 @@ capacity = (allocatable of the counted nodes − the nodeFailures largest nodes 
 ./allocation/generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod
 ```
 
-Each block gets a comment with the inputs, so a pull request shows why the number changed:
+Each block gets the full calculation with the real numbers as comments, so a pull request shows how every value came
+about and why it changed:
 
 ```yaml
   prod-01:
     env: prod
-    # discovered 2026-10-14 from context prod-01: 3 node(s) counted, left out: cp-1 (taint node-role.kubernetes.io/control-plane:NoSchedule)
-    # allocatable 40.0 vCPU / 160.0 GiB - 1 largest node(s) 16.0 vCPU / 64.0 GiB - platform requests 2.0 vCPU / 3.5 GiB, x 80 %
+    # capacity discovered 2026-10-14 from context prod-01:
+    #   environment prod: nodeFailures 1, platformOverheadPercent 5, maxQuotaPercent 80
+    #   nodes counted (3): 2 x 16 vCPU / 64.0 GiB, 1 x 8 vCPU / 32.0 GiB
+    #   nodes left out (2): cp-1 (taint node-role.kubernetes.io/control-plane:NoSchedule), w-4 (cordoned)
+    #   platform requests: 3 pod(s) in platform namespaces on counted nodes
+    #   CPU: allocatable 40.00 - largest 1 node(s) 16.00 - platform requests 2.00 - overhead (5 % of 40.00) 2.00 = 20.00 vCPU; x 80 % = 16.00 vCPU, rounded down -> 16 vCPU
+    #   memory: allocatable 160.0 - largest 1 node(s) 64.0 - platform requests 3.5 - overhead (5 % of 160.0) 8.0 = 84.5 GiB; x 80 % = 67.6 GiB, rounded down -> 67 GiB
     capacity:
-      cpu: 17.6
-      memory: 74Gi
+      cpu: 16
+      memory: 67Gi
 ```
 
 Platform requests are the effective requests (with init containers, sidecars and overhead, as the scheduler counts

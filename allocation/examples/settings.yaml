@@ -5,14 +5,17 @@ environments:
   prod:
     memoryLimitFactor: 1      # limits.memory = requests.memory (S3, docs/02)
     nodeFailures: 1           # --discover: capacity leaves out the N largest nodes (N+1)
+    platformOverheadPercent: 5   # --discover: % of allocatable kept for the platform on top of its requests
     maxQuotaPercent: 80       # --discover: share of what is left that may be allocated (rollouts, peaks)
   test:
     memoryLimitFactor: 2      # limits.memory up to 2x requests.memory
     nodeFailures: 0
+    platformOverheadPercent: 5
     maxQuotaPercent: 100
   dev:
     memoryLimitFactor: 2
     nodeFailures: 0
+    platformOverheadPercent: 5
     maxQuotaPercent: 150      # overcommit: capacity not guaranteed
 
 # --discover: which nodes count as capacity and which namespaces are platform (their requests are subtracted).

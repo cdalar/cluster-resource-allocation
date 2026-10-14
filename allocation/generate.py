@@ -21,14 +21,29 @@ Checks (exit status 1 on any error, so CI can run it on every pull request):
   ./generate.py examples --out build             # writes build/<cluster>/<namespace>.yaml
   kubectl --context <cluster> apply --server-side --field-manager=allocations -f build/<cluster>/
 
+Capacity from the clusters (read-only, kubectl get nodes / pods): --discover CONTEXT=ENV rewrites the clusters:
+section of settings.yaml (commit it like any other change). Per cluster:
+
+  capacity = (allocatable of the counted nodes - the nodeFailures largest nodes - platform requests)
+             x maxQuotaPercent / 100
+
+nodeFailures and maxQuotaPercent come from the environment in settings.yaml; which nodes count and which
+namespaces are platform from its discovery: section (defaults: cordoned and NoSchedule/NoExecute-tainted nodes,
+e.g. control-plane, don't count; platform = the dashboards' system-namespace regex).
+
+  ./generate.py allocations --discover prod-01=prod --discover test-01=test
+  ./generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod   # other clusters stay as they are
+
 Reads YAML in the block style of the examples (maps, lists, [a, b] lists, comments, quoted strings); standard
 library only, like the other tools in this repository. Writes nothing to any cluster.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 
 # ---- YAML (the subset the allocation files use) ----
@@ -500,14 +515,235 @@ def summary(clusters, allocs, usage):
     return "\n".join(lines)
 
 
+# ---- capacity discovery ----
+
+# Same as DEFAULT_SYSTEM_NS_REGEX in discovery/discover.py and the chart (test_generate checks it)
+DEFAULT_SYSTEM_NS_REGEX = (
+    r"^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|"
+    r"local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|"
+    r"rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|"
+    r".*storage.*|.*system.*|.*ingress.*)$"
+)
+DEFAULT_DISCOVERY = {"skipCordoned": True, "skipTaintEffects": ["NoSchedule", "NoExecute"], "skipNodeLabels": [],
+                     "systemNamespaces": DEFAULT_SYSTEM_NS_REGEX}
+_SUFFIXES = [("Ki", 2 ** 10), ("Mi", 2 ** 20), ("Gi", 2 ** 30), ("Ti", 2 ** 40), ("Pi", 2 ** 50), ("Ei", 2 ** 60),
+             ("n", 1e-9), ("u", 1e-6), ("m", 1e-3), ("k", 1e3), ("M", 1e6), ("G", 1e9), ("T", 1e12), ("P", 1e15),
+             ("E", 1e18)]
+
+
+def quantity(q):
+    """A Kubernetes quantity from the API ("100m", "15950820Ki", "1e3") -> float base units."""
+    if q is None:
+        return 0.0
+    s = str(q).strip()
+    for suffix, mult in _SUFFIXES:
+        if s.endswith(suffix):
+            return float(s[:-len(suffix)]) * mult
+    return float(s)
+
+
+def pod_request(spec, resource):
+    """Effective pod request as the scheduler computes it (as discover.pod_effective): max(app containers +
+    sidecars, init peak) + overhead."""
+    req = lambda c: quantity(((c.get("resources") or {}).get("requests") or {}).get(resource))
+    inits = spec.get("initContainers") or []
+    total = sum(req(c) for c in spec.get("containers") or []) + sum(
+        req(c) for c in inits if c.get("restartPolicy") == "Always")
+    peak = running = 0.0
+    for c in inits:
+        if c.get("restartPolicy") == "Always":
+            running += req(c)
+            peak = max(peak, running)
+        else:
+            peak = max(peak, req(c) + running)
+    return max(total, peak) + quantity((spec.get("overhead") or {}).get(resource))
+
+
+def discovery_settings(settings, ck):
+    d = dict(DEFAULT_DISCOVERY)
+    d.update(settings.get("discovery") or {})
+    try:
+        d["systemRe"] = re.compile(d["systemNamespaces"])
+    except (re.error, TypeError) as e:
+        ck.error(f"settings.yaml: discovery.systemNamespaces: {e}")
+    return d
+
+
+def node_skip_reason(node, d):
+    spec, labels = node.get("spec") or {}, (node.get("metadata") or {}).get("labels") or {}
+    if d["skipCordoned"] and spec.get("unschedulable"):
+        return "cordoned"
+    for t in spec.get("taints") or []:
+        if t.get("effect") in (d["skipTaintEffects"] or []):
+            return f"taint {t.get('key')}:{t.get('effect')}"
+    for label in d["skipNodeLabels"] or []:
+        if label in labels:
+            return f"label {label}"
+    return None
+
+
+def cluster_capacity(nodes, pods, env, d):
+    """Capacity and the numbers behind it, from `kubectl get nodes` and `kubectl get pods -A` (parsed JSON)."""
+    counted, skipped = [], []
+    for n in nodes.get("items", []):
+        reason = node_skip_reason(n, d)
+        if reason:
+            skipped.append((n["metadata"]["name"], reason))
+        else:
+            alloc = (n.get("status") or {}).get("allocatable") or {}
+            counted.append((n["metadata"]["name"], quantity(alloc.get("cpu")), quantity(alloc.get("memory"))))
+    names = {n for n, _, _ in counted}
+    platform = [0.0, 0.0]
+    for p in pods.get("items", []):
+        spec, status = p.get("spec") or {}, p.get("status") or {}
+        if status.get("phase") in ("Succeeded", "Failed") or spec.get("nodeName") not in names:
+            continue
+        if d["systemRe"].match(p["metadata"].get("namespace", "")):
+            platform[0] += pod_request(spec, "cpu")
+            platform[1] += pod_request(spec, "memory")
+    failures, pct = env["nodeFailures"], env["maxQuotaPercent"]
+    out = {"nodes": len(counted), "skipped": skipped, "failures": failures, "pct": pct,
+           "alloc": [sum(c for _, c, _ in counted), sum(m for _, _, m in counted)], "platform": platform}
+    out["largest"] = [sum(sorted((c for _, c, _ in counted), reverse=True)[:failures]),
+                      sum(sorted((m for _, _, m in counted), reverse=True)[:failures])]
+    room = [max(out["alloc"][i] - out["largest"][i] - platform[i], 0.0) for i in (0, 1)]
+    out["cpu"] = int(room[0] * pct / 100 * 10) / 10  # down to 0.1 vCPU
+    out["memory"] = int(room[1] * pct / 100 // 2 ** 30)  # down to whole GiB
+    return out
+
+
+def cluster_block(name, envname, cap, context, today):
+    gib = lambda b: f"{b / 2 ** 30:.1f}"
+    skipped = ", ".join(f"{n} ({r})" for n, r in cap["skipped"]) or "none"
+    return (f"  {name}:\n"
+            f"    env: {envname}\n"
+            f"    # discovered {today} from context {context}: {cap['nodes']} node(s) counted, left out: {skipped}\n"
+            f"    # allocatable {cap['alloc'][0]:.1f} vCPU / {gib(cap['alloc'][1])} GiB"
+            f" - {cap['failures']} largest node(s) {cap['largest'][0]:.1f} vCPU / {gib(cap['largest'][1])} GiB"
+            f" - platform requests {cap['platform'][0]:.1f} vCPU / {gib(cap['platform'][1])} GiB,"
+            f" x {cap['pct']:g} %\n"
+            f"    capacity:\n"
+            f"      cpu: {cap['cpu']:g}\n"
+            f"      memory: {cap['memory']}Gi\n")
+
+
+def replace_clusters(text, blocks):
+    """settings.yaml with the given clusters' blocks replaced (or added) under clusters:, the rest untouched."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, l in enumerate(lines) if re.match(r"clusters:\s*(#.*)?$", l)), None)
+    if start is None:
+        return text + ("" if text.endswith("\n") or not text else "\n") + "clusters:\n" + "".join(blocks.values())
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"[^\s#]", lines[i])), len(lines))
+    head, chunks, cur = [], [], None
+    for line in lines[start + 1:end]:
+        m = re.match(r"  ([^\s#][^:]*):\s*(#.*)?$", line)
+        if m:
+            cur = [m.group(1), [line]]
+            chunks.append(cur)
+        elif cur is None:
+            head.append(line)
+        else:
+            cur[1].append(line)
+    out, done = [], set()
+    for name, body in chunks:
+        if name in blocks:
+            out.append(blocks[name])
+            done.add(name)
+        else:
+            out.append("".join(body))
+    out += [b for n, b in blocks.items() if n not in done]
+    tail = lines[end:]
+    sep = "\n" if tail and out and not out[-1].endswith("\n\n") else ""
+    return "".join(lines[:start + 1] + head) + "".join(out) + sep + "".join(tail)
+
+
+def kubectl_json(context, args, kubeconfig=None):
+    cmd = ["kubectl"] + (["--kubeconfig", kubeconfig] if kubeconfig else []) + ["--context", context] + args + [
+        "-o", "json"]
+    return json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+
+
+def discover(path, targets, ck, get=kubectl_json, today=None):
+    """--discover: read the clusters, rewrite clusters: in settings.yaml. targets: [(context, env)]."""
+    settings_path = os.path.join(path, "settings.yaml")
+    with open(settings_path) as f:
+        text = f.read()
+    settings = (load_yaml(text, "settings.yaml") or [{}])[0] or {}
+    envs = settings.get("environments") or {}
+    d = discovery_settings(settings, ck)
+    blocks, results = {}, []
+    for context, envname in targets:
+        if envname not in envs:
+            ck.error(f"--discover {context}={envname}: no environment {envname} in settings.yaml")
+            continue
+        e = envs[envname] or {}
+        env = {"nodeFailures": e.get("nodeFailures", 0), "maxQuotaPercent": e.get("maxQuotaPercent", 100)}
+        if not isinstance(env["nodeFailures"], int) or env["nodeFailures"] < 0:
+            ck.error(f"settings.yaml: environments.{envname}.nodeFailures must be a whole number >= 0")
+        if not isinstance(env["maxQuotaPercent"], (int, float)) or not 0 < env["maxQuotaPercent"] <= 500:
+            ck.error(f"settings.yaml: environments.{envname}.maxQuotaPercent must be a number from 1 to 500")
+        if ck.errors:
+            continue
+        try:
+            nodes = get(context, ["get", "nodes"])
+            pods = get(context, ["get", "pods", "-A", "--field-selector=status.phase!=Succeeded,status.phase!=Failed"])
+        except (subprocess.CalledProcessError, OSError, ValueError) as e:
+            msg = (getattr(e, "stderr", "") or str(e)).strip().splitlines()
+            ck.error(f"{context}: kubectl failed: {msg[-1] if msg else e}")
+            continue
+        cap = cluster_capacity(nodes, pods, env, d)
+        if cap["nodes"] <= env["nodeFailures"]:
+            ck.warn(f"{context}: {cap['nodes']} counted node(s) can't take {env['nodeFailures']} node failure(s); "
+                    "capacity 0")
+        blocks[context] = cluster_block(context, envname, cap, context, today or datetime.date.today().isoformat())
+        results.append((context, envname, cap))
+    if ck.errors:
+        return results
+    with open(settings_path, "w") as f:
+        f.write(replace_clusters(text, blocks))
+    return results
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("allocations", help="directory with settings.yaml and projects/*.yaml")
     ap.add_argument("--out", default="build", help="output directory (default build); the generated YAML files in "
                                                     "it are replaced")
     ap.add_argument("--check", action="store_true", help="validate only, write nothing (for pull requests)")
+    ap.add_argument("--discover", metavar="CONTEXT=ENV", action="append",
+                    help="read this kubeconfig context's nodes and pods (read-only) and write the cluster's capacity "
+                         "to settings.yaml as cluster CONTEXT in environment ENV; repeatable")
+    ap.add_argument("--kubeconfig", metavar="FILE",
+                    help="kubeconfig file for --discover (default: $KUBECONFIG or ~/.kube/config)")
     args = ap.parse_args(argv)
     ck = Checker()
+    if args.kubeconfig and not args.discover:
+        ap.error("--kubeconfig is only used with --discover")
+    if args.kubeconfig and not os.path.isfile(os.path.expanduser(args.kubeconfig)):
+        ap.error(f"--kubeconfig: no such file: {args.kubeconfig}")
+    if args.discover:
+        targets = []
+        for t in args.discover:
+            if not re.fullmatch(r"[^=\s]+=[^=\s]+", t):
+                ap.error(f"--discover: expected CONTEXT=ENV, got {t}")
+            targets.append(tuple(t.split("=")))
+        try:
+            get = lambda context, a: kubectl_json(context, a, args.kubeconfig)
+            results = discover(args.allocations, targets, ck, get)
+        except (OSError, YamlError) as e:
+            ck.error(str(e))
+            results = []
+        for context, envname, cap in results:
+            print(f"{context} ({envname}): {cap['nodes']} node(s), capacity {cap['cpu']:g} vCPU / {cap['memory']} GiB")
+        for w in ck.warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        for e in ck.errors:
+            print(f"ERROR: {e}", file=sys.stderr)
+        if ck.errors:
+            print("settings.yaml not changed", file=sys.stderr)
+            return 1
+        print(f"updated {os.path.join(args.allocations, 'settings.yaml')}: review and commit it")
+        return 0
     settings, projects = load_dir(args.allocations, ck)
     clusters, allocs, usage = build_model(settings, projects, ck) if not ck.errors else ({}, [], {})
     if allocs:

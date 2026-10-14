@@ -4,7 +4,9 @@ import json
 import os
 import shutil
 import tempfile
+import sys
 import unittest
+from unittest import mock
 
 import generate as g
 
@@ -158,6 +160,117 @@ class GenerateTest(unittest.TestCase):
         self.assert_error("project payments is also defined in projects/")
         self.write("projects/z.yaml", "project: z\nallocations:\n  - cluster: prod-01\n    cpu: 1\n    memory: 1Gi\n")
         self.assert_error("z on prod-01: list its namespaces")
+
+
+def node(name, cpu, mem, taints=None, cordoned=False, labels=None):
+    spec = {"taints": taints or []}
+    if cordoned:
+        spec["unschedulable"] = True
+    return {"metadata": {"name": name, "labels": labels or {}}, "spec": spec,
+            "status": {"allocatable": {"cpu": cpu, "memory": mem}}}
+
+
+def pod(ns, node_name, cpu, mem, phase="Running", init=None):
+    spec = {"nodeName": node_name, "containers": [{"resources": {"requests": {"cpu": cpu, "memory": mem}}}]}
+    if init:
+        spec["initContainers"] = init
+    return {"metadata": {"namespace": ns}, "spec": spec, "status": {"phase": phase}}
+
+
+NODES = {"items": [
+    node("cp-1", "4", "16Gi", taints=[{"key": "node-role.kubernetes.io/control-plane", "effect": "NoSchedule"}]),
+    node("w-1", "16", "64Gi"), node("w-2", "16", "64Gi"), node("w-3", "8", "32Gi"),
+    node("w-4", "16", "64Gi", cordoned=True)]}
+PODS = {"items": [
+    pod("kube-system", "w-1", "500m", "1Gi"), pod("cattle-system", "w-2", "1", "2Gi"),
+    pod("kube-system", "cp-1", "2", "4Gi"),          # on a node that doesn't count
+    pod("payments", "w-1", "4", "8Gi"),              # tenant: not platform
+    pod("ingress-nginx", "w-3", "500m", "512Mi")]}
+
+
+class DiscoverTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        shutil.copytree(EXAMPLES, self.tmp, dirs_exist_ok=True)
+        self.settings = os.path.join(self.tmp, "settings.yaml")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_capacity(self):
+        ck = g.Checker()
+        d = g.discovery_settings({}, ck)
+        cap = g.cluster_capacity(NODES, PODS, {"nodeFailures": 1, "maxQuotaPercent": 80}, d)
+        self.assertEqual(cap["nodes"], 3)
+        self.assertEqual(cap["skipped"], [("cp-1", "taint node-role.kubernetes.io/control-plane:NoSchedule"),
+                                          ("w-4", "cordoned")])
+        self.assertEqual(cap["alloc"], [40.0, 160 * 2 ** 30])
+        self.assertEqual(cap["largest"], [16.0, 64 * 2 ** 30])
+        self.assertEqual(cap["platform"], [2.0, 3.5 * 2 ** 30])
+        # (40 - 16 - 2) x 80 % = 17.6 vCPU; (160 - 64 - 3.5) GiB x 80 % = 74 GiB
+        self.assertEqual((cap["cpu"], cap["memory"]), (17.6, 74))
+        d = g.discovery_settings({"discovery": {"skipTaintEffects": [], "skipCordoned": False}}, ck)
+        self.assertEqual(g.cluster_capacity(NODES, PODS, {"nodeFailures": 0, "maxQuotaPercent": 100}, d)["nodes"], 5)
+
+    def test_same_rules_as_discover(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "discovery"))
+        import discover
+        self.assertEqual(g.DEFAULT_SYSTEM_NS_REGEX, discover.DEFAULT_SYSTEM_NS_REGEX)
+        spec = {"containers": [{"resources": {"requests": {"cpu": "250m"}}}],
+                "initContainers": [{"resources": {"requests": {"cpu": "1"}}},
+                                   {"restartPolicy": "Always", "resources": {"requests": {"cpu": "100m"}}}],
+                "overhead": {"cpu": "50m"}}
+        self.assertAlmostEqual(g.pod_request(spec, "cpu"), discover.pod_effective(spec, "requests", "cpu"))
+
+    def test_discover_rewrites_only_these_clusters(self):
+        with open(self.settings) as f:
+            before = f.read()
+        ck = g.Checker()
+        get = lambda context, args: NODES if args[1] == "nodes" else PODS
+        results = g.discover(self.tmp, [("prod-01", "prod"), ("new-01", "dev")], ck, get, today="2026-10-14")
+        self.assertEqual(ck.errors, [])
+        self.assertEqual([r[0] for r in results], ["prod-01", "new-01"])
+        with open(self.settings) as f:
+            after = f.read()
+        [settings] = g.load_yaml(after)
+        self.assertEqual(settings["clusters"]["prod-01"], {"env": "prod", "capacity": {"cpu": 17.6, "memory": "74Gi"}})
+        self.assertEqual(settings["clusters"]["test-01"], {"env": "test", "capacity": {"cpu": 60, "memory": "240Gi"}})
+        self.assertEqual(settings["clusters"]["new-01"]["env"], "dev")
+        self.assertEqual(list(settings["clusters"]), ["prod-01", "test-01", "new-01"])
+        self.assertIn("# discovered 2026-10-14 from context prod-01: 3 node(s) counted", after)
+        self.assertEqual(after.split("clusters:")[0], before.split("clusters:")[0])  # the rest is untouched
+        code, _, err = run(self.tmp, "--check")  # the examples ask more than the small test cluster has
+        self.assertEqual(code, 1)
+        self.assertIn("prod-01: the namespaces get 64 cpu in total, above its capacity of 17.6", err)
+
+    def test_errors_leave_settings_alone(self):
+        with open(self.settings) as f:
+            before = f.read()
+        ck = g.Checker()
+        g.discover(self.tmp, [("prod-01", "prod"), ("x", "nope")], ck, lambda c, a: NODES if a[1] == "nodes" else PODS)
+        self.assertIn("--discover x=nope: no environment nope in settings.yaml", ck.errors)
+        with open(self.settings) as f:
+            self.assertEqual(f.read(), before)
+
+    def test_kubeconfig_is_passed_to_kubectl(self):
+        kubeconfig = os.path.join(self.tmp, "kc.yaml")
+        open(kubeconfig, "w").close()
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return mock.Mock(stdout=json.dumps(NODES if "nodes" in cmd else PODS))
+        with mock.patch.object(g.subprocess, "run", fake_run):
+            code, out, err = run(self.tmp, "--kubeconfig", kubeconfig, "--discover", "prod-01=prod")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(calls[0][:5], ["kubectl", "--kubeconfig", kubeconfig, "--context", "prod-01"])
+        self.assertIn("prod-01 (prod): 3 node(s), capacity 17.6 vCPU / 74 GiB", out)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            run(self.tmp, "--kubeconfig", kubeconfig)  # only with --discover
+
+    def test_replace_clusters_without_a_section(self):
+        self.assertEqual(g.replace_clusters("environments: {}\n", {"a": "  a:\n    env: x\n"}),
+                         "environments: {}\nclusters:\n  a:\n    env: x\n")
 
 
 if __name__ == "__main__":

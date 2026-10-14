@@ -77,12 +77,16 @@ Definitions:
 ### Project names from a lookup index
 
 The alternative to names written into the queries: a small index in Elasticsearch holds one document per Project
-(`project` = ID, `project_name`), and the report joins it with ES|QL `LOOKUP JOIN`. Renaming or adding a Project
+(`project` = ID, `project_name`, `cluster_id`, and the ID again as `resource.attributes.rancher.project.id`), and
+the report joins it with ES|QL `LOOKUP JOIN`. Other ES|QL panels and Discover can use it too, joining on the metrics
+field directly: `FROM metrics-*.otel-* | LOOKUP JOIN rancher-projects ON resource.attributes.rancher.project.id`. Renaming or adding a Project
 then needs only a new run of the publisher, not a new dashboard file. Needs Elasticsearch 9.1 or later.
 
 ```bash
 # 1. Fill the index (creates it with index.mode: lookup); Projects are read with kubectl from the Rancher local cluster
 ES_API_KEY=... ./kibana/publish_project_names.py https://elastic.example:9200 --context <rancher-local-context>
+#    or from a file, and through Kibana when Elasticsearch itself is not reachable (Dev Tools proxy):
+ES_USER=... ES_PASSWORD=... ./kibana/publish_project_names.py https://kibana.example --kibana --rancher-projects projects.json
 # 2. Check the queries, then import kibana/cluster-resource-report-project-names.ndjson (same object IDs as the other files)
 ES_API_KEY=... ./kibana/build_dashboard.py --project-lookup-index rancher-projects --check https://elastic.example:9200
 ```
@@ -94,11 +98,14 @@ another index name, pass it to both scripts (`publish_project_names.py --index`)
 |---|---|
 | Order | Publish first: ES\|QL rejects a query that names a missing index, so every report panel fails until the index exists |
 | Updates | Run `publish_project_names.py` again (by hand or from a scheduler); it overwrites the names and removes Projects that no longer exist. `--rancher-projects projects.json` reads a file instead of running kubectl, `--dry-run` prints the documents |
-| Permissions | The publisher's API key: `create_index`, `index`, `delete`, `view_index_metadata` on the lookup index only. Everyone who opens the dashboard needs `read` on it |
+| Permissions | The publisher's API key: `create_index`, `index`, `delete`, `view_index_metadata` and `manage` (it adds new fields to an index from an older version) on the lookup index only; with `--kibana` the Kibana user also needs Dev Tools. Everyone who opens the dashboard needs `read` on it |
 | Scope | Names appear in every Project column and chart. The Project filter control keeps the ID |
 | Unknown Projects | A Project the index does not have shows its ID |
 | Join key | The Project ID alone. Two clusters that happen to have the same ID with different names get one name (the publisher prints a warning) |
 | Remote clusters | With cross-cluster search the join needs Elasticsearch 9.2 or later |
+| Standalone | `publish_project_names.py` is one file with no imports from the repository; copy it alone |
+| Other dashboards | Only ES\|QL can join; classic Lens and visualizations on a data view cannot. The join adds `project_name` and `cluster_id` columns |
+| Tested | Unit tests with a fake Elasticsearch; the publisher and `--kibana` have not run against a real Elasticsearch or Kibana yet |
 | Tested | Unit tests on the generated queries and on the publisher's requests; not yet run against Elasticsearch. Run the `--check` above before importing |
 
 ### Project names on the metrics

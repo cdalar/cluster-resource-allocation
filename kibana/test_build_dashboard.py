@@ -348,6 +348,15 @@ class PublishProjectNamesTest(unittest.TestCase):
         self.assertEqual(es.calls[2][3], "application/x-ndjson")
         self.assertEqual(es.calls[3][2]["query"]["bool"]["must_not"]["ids"]["values"], ["p-9z9dv", "p-bbjk7"])
 
+    def test_devtools_text(self):
+        text = ppn.devtools("rancher-projects", self.DOCS)
+        requests = [l for l in text.splitlines() if re.match(r"(GET|PUT|POST) ", l)]
+        self.assertEqual(requests, ["PUT rancher-projects", "PUT rancher-projects/_mapping",
+                                    "POST rancher-projects/_bulk?refresh=true",
+                                    "POST rancher-projects/_delete_by_query?refresh=true", "GET rancher-projects/_count"])
+        bulk = text.split("POST rancher-projects/_bulk?refresh=true\n")[1].split("\n\n")[0].splitlines()
+        self.assertEqual([json.loads(l) for l in bulk[1::2]], self.DOCS)
+
     def test_publish_keeps_an_existing_lookup_index(self):
         es = FakeElastic("lookup")
         ppn.publish(es, "rancher-projects", self.DOCS)

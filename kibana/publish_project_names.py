@@ -21,6 +21,8 @@ Projects that no longer exist.
   ./publish_project_names.py https://kibana.example --kibana --rancher-projects projects.json
       # only Kibana is reachable: through Kibana's Dev Tools proxy (the user needs Dev Tools access)
   ./publish_project_names.py https://elastic.example:9200 --rancher-projects projects.json --dry-run
+  ./publish_project_names.py --devtools --rancher-projects projects.json > rancher-projects.devtools
+      # no login in the script (e.g. Kibana behind AD single sign-on): paste the output into Kibana Dev Tools
 
 Login: $ES_API_KEY, or $ES_USER / $ES_PASSWORD (also for --kibana); $ES_INSECURE=1 for a self-signed certificate.
 The key needs create_index, index, delete, view_index_metadata and manage (mapping updates) on this one index. Reads
@@ -86,6 +88,19 @@ def stale_query(docs):
     return {"query": {"bool": {"must_not": {"ids": {"values": [d[KEY] for d in docs]}}}}}
 
 
+def devtools(index, docs):
+    """The same writes as Kibana Dev Tools console text, run with the browser's login. Dev Tools runs every request
+    even if one fails, so the index is created only if missing and the mapping update covers an existing one."""
+    out = [f"# Rancher Projects -> lookup index {index}: select all, run (Ctrl/Cmd+Enter). An error on the first",
+           "# request only means the index exists already.",
+           f"PUT {index}", json.dumps(INDEX_BODY, indent=2), "",
+           f"PUT {index}/_mapping", json.dumps(INDEX_BODY["mappings"], indent=2), "",
+           f"POST {index}/_bulk?refresh=true", bulk_body(index, docs).rstrip("\n"), "",
+           f"POST {index}/_delete_by_query?refresh=true", json.dumps(stale_query(docs)), "",
+           f"GET {index}/_count"]
+    return "\n".join(out) + "\n"
+
+
 def auth(content_type):
     """Request headers and TLS context from $ES_API_KEY, or $ES_USER / $ES_PASSWORD; $ES_INSECURE skips TLS checks."""
     headers = {"Content-Type": content_type}
@@ -149,7 +164,8 @@ def publish(es, index, docs):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("url", metavar="URL", help="Elasticsearch, e.g. https://elastic.example:9200 (Kibana with --kibana)")
+    ap.add_argument("url", metavar="URL", nargs="?",
+                    help="Elasticsearch, e.g. https://elastic.example:9200 (Kibana with --kibana); not with --devtools")
     ap.add_argument("--kibana", action="store_true",
                     help="URL is Kibana: send the requests through its Dev Tools proxy (/api/console/proxy)")
     ap.add_argument("--index", default=DEFAULT_LOOKUP_INDEX, help=f"lookup index (default {DEFAULT_LOOKUP_INDEX})")
@@ -157,8 +173,13 @@ def main():
                     help="output of `kubectl get projects.management.cattle.io -A -o json` on the Rancher local "
                          "cluster; without it the script runs that command itself")
     ap.add_argument("--context", help="kubeconfig context of the Rancher local cluster (default: the current one)")
+    ap.add_argument("--devtools", action="store_true",
+                    help="print the requests as Kibana Dev Tools console text instead of sending them (to run "
+                         "with your own browser login, e.g. AD single sign-on)")
     ap.add_argument("--dry-run", action="store_true", help="print the documents, write nothing")
     args = ap.parse_args()
+    if not args.url and not (args.devtools or args.dry_run):
+        ap.error("URL is required (or use --devtools / --dry-run)")
     if not re.fullmatch(INDEX_NAME_RE, args.index):
         ap.error(f"--index: not an index name: {args.index}")
     if args.rancher_projects:
@@ -172,6 +193,10 @@ def main():
     docs = documents(projects)
     if not docs:
         sys.exit("no Rancher Projects found; is this the Rancher local cluster? Nothing written.")
+    if args.devtools:
+        sys.stdout.write(devtools(args.index, docs))
+        print(f"{len(docs)} Projects; paste the output into Kibana Dev Tools", file=sys.stderr)
+        return
     if args.dry_run:
         for doc in docs:
             print(json.dumps(doc))

@@ -87,6 +87,8 @@ then needs only a new run of the publisher, not a new dashboard file. Needs Elas
 ES_API_KEY=... ./kibana/publish_project_names.py https://elastic.example:9200 --context <rancher-local-context>
 #    or from a file, and through Kibana when Elasticsearch itself is not reachable (Dev Tools proxy):
 ES_USER=... ES_PASSWORD=... ./kibana/publish_project_names.py https://kibana.example --kibana --rancher-projects projects.json
+#    or with your own browser login (e.g. Kibana behind AD single sign-on): print Dev Tools text, paste it, run it
+./kibana/publish_project_names.py --devtools --rancher-projects projects.json > rancher-projects.devtools
 # 2. Check the queries, then import kibana/cluster-resource-report-project-names.ndjson (same object IDs as the other files)
 ES_API_KEY=... ./kibana/build_dashboard.py --project-lookup-index rancher-projects --check https://elastic.example:9200
 ```

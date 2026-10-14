@@ -58,6 +58,38 @@ allocations:
       - name: payments-worker
 ```
 
+## Starting project files from Rancher
+
+Writing a file per project by hand is slow when there are many. `--import-projects CONTEXT` reads one cluster
+(read-only: `kubectl get namespaces`, `kubectl get pods -A`) and writes the starting files:
+
+- **Which namespaces belong to which Project:** each namespace's `field.cattle.io/projectId` annotation (as the
+  dashboards read it).
+- **Project names:** `--rancher-projects projects.json`, exported on the Rancher local cluster. `projects.json`
+  holds the names only. The namespaces live on the downstream cluster, so both are needed.
+- **Starting numbers:** each namespace's current requests (effective, with init containers and sidecars), plus
+  `--margin` %, rounded up to 0.1 vCPU and whole GiB (at least 0.1 vCPU / 1 GiB). A comment shows the current requests
+  and memory limits, and flags namespaces whose memory limits are above what the quota will allow.
+- **Left out:** namespaces outside any Project, the System project (and `…platform…` projects), and platform
+  namespaces (`discovery.systemNamespaces`). They are listed in the output.
+
+```bash
+kubectl --context <rancher-local> get projects.management.cattle.io -A -o json > projects.json
+./allocation/generate.py allocations --kubeconfig prod-01.yaml --discover prod-01=prod \
+    --import-projects prod-01 --rancher-projects projects.json --margin 10 --check
+```
+
+| Situation | What it does |
+|---|---|
+| Project has no file | Writes `projects/<name>.yaml` (`owners: []` to fill in) |
+| File exists, no entry for this cluster | Adds the cluster at the end of `allocations:` |
+| File exists with this cluster | Changes nothing; lists namespaces in Rancher but not in the file and the other way round (`CHECK`) |
+| File allocates on this cluster, Rancher has no such Project there | Lists it (`CHECK`) |
+
+Git stays the source of truth: the import never changes an allocation that is already there. Run it again to pick up
+new Projects and namespaces. With `--discover` in the same command, discovery runs first, so a new cluster is
+already in `settings.yaml`.
+
 ## Capacity from the clusters
 
 `--discover CONTEXT=ENV` reads a cluster with `kubectl get nodes` and `kubectl get pods -A` (read-only) and writes
@@ -137,4 +169,4 @@ Both are labelled `allocation.cluster-resource-allocation/managed: "true"` and `
 | Removed allocations | A second run removes their files from `build/` (only files it generated), but not the objects in the cluster. Delete them with `kubectl delete resourcequota,limitrange -l allocation.cluster-resource-allocation/project=<project> -n <namespace>` |
 | Rancher | On clusters managed by Rancher, a namespace in a Rancher Project with a Project quota gets Rancher's own ResourceQuota as well. Don't use both on the same namespace |
 | YAML | Standard library only: block maps and lists, `[a, b]` lists, comments and quoted strings. `{a: 1}` maps are rejected with a message |
-| Tested | Unit tests on the checks, the generated objects and `--discover` with a fake `kubectl` (`cd allocation && python3 -m unittest -v test_generate`). Not yet run against a cluster |
+| Tested | Unit tests on the checks, the generated objects, `--discover` and `--import-projects` with a fake `kubectl` (`cd allocation && python3 -m unittest -v test_generate`). Not yet run against a cluster |

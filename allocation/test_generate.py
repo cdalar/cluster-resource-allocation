@@ -323,5 +323,96 @@ class DiscoverTest(unittest.TestCase):
                          "environments: {}\nclusters:\n  a:\n    env: x\n")
 
 
+def namespace(name, project_ref=None):
+    meta = {"name": name}
+    if project_ref:
+        meta["annotations"] = {"field.cattle.io/projectId": project_ref}
+        meta["labels"] = {"field.cattle.io/projectId": project_ref.split(":")[-1]}
+    return {"metadata": meta}
+
+
+RANCHER = {"items": [
+    {"metadata": {"name": "p-pay01", "namespace": "c-m-1"}, "spec": {"clusterName": "c-m-1", "displayName": "payments"}},
+    {"metadata": {"name": "p-new01", "namespace": "c-m-1"}, "spec": {"clusterName": "c-m-1", "displayName": "Web Shop"}},
+    {"metadata": {"name": "p-sys01", "namespace": "c-m-1"}, "spec": {"clusterName": "c-m-1", "displayName": "System"}}]}
+CLUSTER_NAMESPACES = {"items": [
+    namespace("payments-api", "c-m-1:p-pay01"), namespace("payments-worker", "c-m-1:p-pay01"),
+    namespace("payments-new", "c-m-1:p-pay01"),
+    namespace("shop", "c-m-1:p-new01"), namespace("shop-cache", "c-m-1:p-new01"),
+    namespace("cattle-system", "c-m-1:p-sys01"), namespace("kube-system"), namespace("loose")]}
+CLUSTER_PODS = {"items": [
+    pod("shop", "w-1", "1250m", "3Gi"), pod("shop", "w-2", "500m", "1Gi"),
+    {"metadata": {"namespace": "shop-cache"}, "status": {"phase": "Running"},
+     "spec": {"nodeName": "w-1", "containers": [{"resources": {"requests": {"cpu": "100m", "memory": "512Mi"},
+                                                               "limits": {"memory": "2Gi"}}}]}},
+    pod("cattle-system", "w-1", "1", "1Gi")]}
+
+
+class ImportProjectsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        shutil.copytree(EXAMPLES, self.tmp, dirs_exist_ok=True)
+        self.names = g.rancher_project_names(RANCHER)
+        self.get = lambda context, a: CLUSTER_NAMESPACES if a[1] == "namespaces" else CLUSTER_PODS
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_numbers(self):
+        self.assertEqual(g.start_numbers(1.75, 4 * 2 ** 30, 0), (1.8, 4))
+        self.assertEqual(g.start_numbers(1.75, 4 * 2 ** 30, 20), (2.1, 5))
+        self.assertEqual(g.start_numbers(0, 0, 50), (0.1, 1))
+
+    def test_import(self):
+        ck = g.Checker()
+        report = g.import_projects(self.tmp, ["prod-01"], self.names, 20, ck, self.get, today="2026-10-14")
+        self.assertEqual(ck.errors, [])
+        text = "\n".join(report)
+        self.assertIn("prod-01: 2 project(s), 5 namespace(s); left out 3: cattle-system (Project System (platform)), "
+                      "kube-system (not in a Rancher Project), loose (not in a Rancher Project)", text)
+        self.assertIn("new      Web Shop: shop, shop-cache", text)
+        # payments exists in Git: nothing written, differences listed
+        self.assertIn("CHECK    payments on prod-01: namespaces in Rancher but not in payments.yaml: payments-new", text)
+        self.assertIn("CHECK    data-platform: allocated on prod-01 in data-platform.yaml, but Rancher has no such", text)
+        with open(os.path.join(self.tmp, "projects", "web-shop.yaml")) as f:
+            new = f.read()
+        [doc] = g.load_yaml(new)
+        self.assertEqual(doc["project"], "Web Shop")
+        self.assertEqual(doc["allocations"][0]["namespaces"], [
+            {"name": "shop", "cpu": 2.1, "memory": "5Gi"},        # (1.25 + 0.5) x 1.2 = 2.1; 4 GiB x 1.2 -> 5
+            {"name": "shop-cache", "cpu": 0.2, "memory": "1Gi"}])  # 0.12 -> 0.2; 0.6 GiB -> 1
+        self.assertIn("now: requests 0.10 vCPU / 0.50 GiB, memory limits 2.00 GiB (above the 1 GiB limit quota)", new)
+        with open(os.path.join(EXAMPLES, "projects", "payments.yaml")) as f, \
+                open(os.path.join(self.tmp, "projects", "payments.yaml")) as g2:
+            self.assertEqual(f.read(), g2.read())
+        self.assertEqual(run(self.tmp, "--check")[0], 0)  # the new file passes the checks
+
+    def test_adds_a_cluster_to_an_existing_file(self):
+        with open(self.tmp + "/settings.yaml") as f:
+            text = f.read()
+        with open(self.tmp + "/settings.yaml", "w") as f:
+            f.write(text.replace("  test-01:\n", "  dev-01:\n    env: dev\n  test-01:\n"))
+        ck = g.Checker()
+        report = g.import_projects(self.tmp, ["dev-01"], self.names, 0, ck, self.get, today="2026-10-14")
+        self.assertIn("  added    payments: dev-01 to payments.yaml", report)
+        with open(os.path.join(self.tmp, "projects", "payments.yaml")) as f:
+            [doc] = g.load_yaml(f.read())
+        self.assertEqual([a["cluster"] for a in doc["allocations"]], ["prod-01", "test-01", "dev-01"])
+        self.assertEqual([n["name"] for n in doc["allocations"][2]["namespaces"]],
+                         ["payments-api", "payments-new", "payments-worker"])
+
+    def test_cli(self):
+        rp = os.path.join(self.tmp, "projects.json")
+        with open(rp, "w") as f:
+            json.dump(RANCHER, f)
+        with mock.patch.object(g, "kubectl_json", lambda c, a, k=None: self.get(c, a)):
+            code, out, err = run(self.tmp, "--import-projects", "prod-01", "--rancher-projects", rp, "--margin", "10")
+        self.assertEqual(code, 0, err)
+        self.assertIn("project files written", out)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "projects", "web-shop.yaml")))
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            run(self.tmp, "--import-projects", "prod-01")  # needs --rancher-projects
+
+
 if __name__ == "__main__":
     unittest.main()

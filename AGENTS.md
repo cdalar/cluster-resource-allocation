@@ -20,7 +20,7 @@ several namespaces each), plus some AKS clusters.
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
 | `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `allocation-as-code.md`), separate from the design docs |
 | `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
-| `allocation/` | `generate.py` checks allocation files (`settings.yaml`, `projects/*.yaml`: vCPU and memory per project, cluster and namespace, no money) and writes a ResourceQuota + LimitRange per namespace (plain Kubernetes, no Rancher objects); applies nothing. `--discover` reads nodes and pods (read-only, `kubectl get`) and rewrites the `clusters:` section of `settings.yaml`. `examples/` is the sample allocations directory |
+| `allocation/` | `generate.py` checks allocation files (`settings.yaml`, `projects/*.yaml`: vCPU and memory per project, cluster and namespace, no money) and writes a ResourceQuota + LimitRange per namespace (plain Kubernetes, no Rancher objects); applies nothing. `--discover` reads nodes and pods (read-only, `kubectl get`) and rewrites the `clusters:` section of `settings.yaml`; `--import-projects` writes starting `projects/*.yaml` from Rancher Projects (namespace annotation + `projects.json`) and never changes an existing allocation. `examples/` is the sample allocations directory |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 
 ## Conventions

@@ -37,6 +37,15 @@ e.g. control-plane, don't count; platform = the dashboards' system-namespace reg
   ./generate.py allocations --discover prod-01=prod --discover test-01=test
   ./generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod   # other clusters stay as they are
 
+Starting project files from Rancher (read-only): --import-projects CONTEXT reads the cluster's namespaces and pods;
+a namespace belongs to the Rancher Project in its field.cattle.io/projectId annotation, and --rancher-projects
+(kubectl get projects.management.cattle.io -A -o json on the Rancher local cluster) gives the Project names. Writes
+projects/<name>.yaml for Projects without a file, with each namespace's current requests (rounded up, plus --margin %)
+as its numbers, and adds the cluster to files that don't have it yet. Never changes an existing allocation; differences
+are listed instead. Platform namespaces and the System project are left out.
+
+  ./generate.py allocations --kubeconfig prod-01.yaml --import-projects prod-01 --rancher-projects projects.json
+
 Reads YAML in the block style of the examples (maps, lists, [a, b] lists, comments, quoted strings); standard
 library only, like the other tools in this repository. Writes nothing to any cluster.
 """
@@ -44,6 +53,7 @@ library only, like the other tools in this repository. Writes nothing to any clu
 import argparse
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -742,6 +752,166 @@ def discover(path, targets, ck, get=kubectl_json, today=None):
     return results
 
 
+# ---- starting project files from Rancher ----
+
+RANCHER_PROJECT_ANNOTATION = "field.cattle.io/projectId"  # "<cluster-id>:<project-id>", as discovery/discover.py
+RANCHER_PROJECT_LABEL = "field.cattle.io/projectId"       # "<project-id>"
+SYSTEM_PROJECT_RE = re.compile(r"^(system|.*platform.*)$", re.IGNORECASE)  # as discover.DEFAULT_SYSTEM_PROJECT_REGEX
+
+
+def rancher_project_names(projects):
+    """(cluster ID, Project ID) -> display name, and Project ID -> display name, from projects.json."""
+    by_cluster, by_id = {}, {}
+    for it in (projects or {}).get("items", []):
+        meta, spec = it["metadata"], it.get("spec") or {}
+        name = spec.get("displayName") or meta["name"]
+        by_cluster[(spec.get("clusterName") or meta.get("namespace"), meta["name"])] = name
+        by_id[meta["name"]] = name
+    return by_cluster, by_id
+
+
+def file_slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "project"
+
+
+def project_namespaces(namespaces, pods, names, d, ck):
+    """{project name: [(namespace, cpu cores, memory bytes, memory limit bytes)]} from the cluster's namespaces
+    and pods; plus the namespaces left out, with the reason."""
+    by_cluster, by_id = names
+    usage = {}
+    for p in pods.get("items", []):
+        spec, status = p.get("spec") or {}, p.get("status") or {}
+        if status.get("phase") in ("Succeeded", "Failed"):
+            continue
+        u = usage.setdefault(p["metadata"].get("namespace"), [0.0, 0.0, 0.0])
+        u[0] += pod_request(spec, "cpu")
+        u[1] += pod_request(spec, "memory")
+        u[2] += sum(quantity(((c.get("resources") or {}).get("limits") or {}).get("memory"))
+                    for c in spec.get("containers") or [])
+    projects, skipped = {}, []
+    for ns in namespaces.get("items", []):
+        meta = ns["metadata"]
+        name = meta["name"]
+        ref = (meta.get("annotations") or {}).get(RANCHER_PROJECT_ANNOTATION) or ""
+        cid, _, pid = ref.rpartition(":")
+        pid = pid or (meta.get("labels") or {}).get(RANCHER_PROJECT_LABEL) or ""
+        if not pid:
+            skipped.append((name, "not in a Rancher Project"))
+            continue
+        pname = by_cluster.get((cid, pid)) or by_id.get(pid)
+        if not pname:
+            ck.warn(f"namespace {name}: Project {pid} is not in --rancher-projects; using the ID as name")
+            pname = pid
+        if SYSTEM_PROJECT_RE.match(pname):
+            skipped.append((name, f"Project {pname} (platform)"))
+            continue
+        if d["systemRe"].match(name):
+            skipped.append((name, "platform namespace"))
+            continue
+        cpu, mem, lim = usage.get(name, [0.0, 0.0, 0.0])
+        projects.setdefault(pname, []).append((name, cpu, mem, lim))
+    return projects, skipped
+
+
+def start_numbers(cpu, mem, margin):
+    """Current requests + margin, rounded up: CPU to 0.1 vCPU (at least 0.1), memory to whole GiB (at least 1)."""
+    c = max(math.ceil(round(cpu * (1 + margin / 100) * 10, 6)) / 10, 0.1)
+    m = max(math.ceil(round(mem * (1 + margin / 100) / 2 ** 30, 6)), 1)
+    return c, m
+
+
+def allocation_text(cluster, namespaces, margin, today, factor):
+    gib = lambda b: f"{b / 2 ** 30:.2f}"
+    out = [f"  - cluster: {cluster}\n",
+           f"    # imported {today}: current requests + {margin:g} %, rounded up (review before merging)\n",
+           "    namespaces:\n"]
+    for name, cpu, mem, lim in sorted(namespaces):
+        c, m = start_numbers(cpu, mem, margin)
+        note = f"now: requests {cpu:.2f} vCPU / {gib(mem)} GiB, memory limits {gib(lim)} GiB"
+        if lim > m * 2 ** 30 * factor:
+            note += f" (above the {m * factor:g} GiB limit quota)"
+        out += [f"      - name: {_ystr(name)}\n", f"        cpu: {c:g}      # {note}\n", f"        memory: {m}Gi\n"]
+    return "".join(out)
+
+
+def import_projects(path, targets, names, margin, ck, get=kubectl_json, today=None):
+    """--import-projects: start or extend projects/*.yaml from the clusters. Returns the report lines."""
+    today = today or datetime.date.today().isoformat()
+    with open(os.path.join(path, "settings.yaml")) as f:
+        settings = (load_yaml(f.read(), "settings.yaml") or [{}])[0] or {}
+    envs, clusters = settings.get("environments") or {}, settings.get("clusters") or {}
+    d = discovery_settings(settings, ck)
+    pdir = os.path.join(path, "projects")
+    os.makedirs(pdir, exist_ok=True)
+    existing = {}  # project name -> (file, parsed document)
+    for fname in sorted(os.listdir(pdir)):
+        if fname.endswith((".yaml", ".yml")):
+            with open(os.path.join(pdir, fname)) as f:
+                for doc in load_yaml(f.read(), os.path.join("projects", fname)):
+                    if isinstance(doc, dict) and doc.get("project"):
+                        existing[doc["project"]] = (fname, doc)
+    report, writes = [], {}
+    for context in targets:
+        if context not in clusters:
+            ck.warn(f"{context}: not under clusters: in settings.yaml (run --discover {context}=<env> first); "
+                    "the checks will fail until it is")
+        factor = ((envs.get((clusters.get(context) or {}).get("env")) or {}).get("memoryLimitFactor", 1))
+        try:
+            namespaces = get(context, ["get", "namespaces"])
+            pods = get(context, ["get", "pods", "-A", "--field-selector=status.phase!=Succeeded,status.phase!=Failed"])
+        except (subprocess.CalledProcessError, OSError, ValueError) as e:
+            msg = (getattr(e, "stderr", "") or str(e)).strip().splitlines()
+            ck.error(f"{context}: kubectl failed: {msg[-1] if msg else e}")
+            continue
+        projects, skipped = project_namespaces(namespaces, pods, names, d, ck)
+        report.append(f"{context}: {len(projects)} project(s), {sum(len(v) for v in projects.values())} namespace(s); "
+                      f"left out {len(skipped)}: " + (", ".join(f"{n} ({r})" for n, r in skipped) or "none"))
+        for pname, nss in sorted(projects.items()):
+            block = allocation_text(context, nss, margin, today, factor)
+            if pname not in existing:
+                fname = file_slug(pname) + ".yaml"
+                head = writes.get(fname) or (f"# projects/{fname}: imported {today} from Rancher, review the numbers\n"
+                                            f"project: {_ystr(pname)}\nowners: []\nallocations:\n")
+                writes[fname] = head + block
+                report.append(f"  new      {pname}: {', '.join(n for n, *_ in sorted(nss))}")
+                continue
+            fname, doc = existing[pname]
+            entry = next((a for a in doc.get("allocations") or [] if isinstance(a, dict) and a.get("cluster") == context),
+                         None)
+            if entry is None:
+                with open(os.path.join(pdir, fname)) as f:
+                    text = writes.get(fname) or f.read()
+                tail = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+                if not tail or not (tail[-1].startswith(" ") or tail[-1].startswith("-")) or \
+                        not any(re.match(r"allocations:\s*$", l) for l in text.splitlines()):
+                    report.append(f"  CHECK    {pname}: no entry for {context} in {fname}, and allocations: is not the "
+                                  f"last key, so add it by hand:\n{block}")
+                    continue
+                writes[fname] = text + ("" if text.endswith("\n") else "\n") + block
+                report.append(f"  added    {pname}: {context} to {fname}")
+                continue
+            listed = {ns.get("name") for ns in entry.get("namespaces") or [] if isinstance(ns, dict)}
+            missing = sorted(n for n, *_ in nss if n not in listed)
+            gone = sorted(listed - {n for n, *_ in nss})
+            if missing:
+                report.append(f"  CHECK    {pname} on {context}: namespaces in Rancher but not in {fname}: "
+                              + ", ".join(missing))
+            if gone:
+                report.append(f"  CHECK    {pname} on {context}: namespaces in {fname} but not in the Project in "
+                              "Rancher: " + ", ".join(gone))
+        for pname, (fname, doc) in sorted(existing.items()):
+            if pname not in projects and any(isinstance(a, dict) and a.get("cluster") == context
+                                             for a in doc.get("allocations") or []):
+                report.append(f"  CHECK    {pname}: allocated on {context} in {fname}, but Rancher has no such "
+                              "Project with namespaces there")
+    if ck.errors:
+        return report
+    for fname, text in writes.items():
+        with open(os.path.join(pdir, fname), "w") as f:
+            f.write(text)
+    return report
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("allocations", help="directory with settings.yaml and projects/*.yaml")
@@ -754,39 +924,69 @@ def main(argv=None):
                     help="read this kubeconfig context's nodes and pods (read-only) and write the cluster's capacity "
                          "to settings.yaml as cluster CONTEXT in environment ENV; repeatable")
     ap.add_argument("--kubeconfig", metavar="FILE",
-                    help="kubeconfig file for --discover (default: $KUBECONFIG or ~/.kube/config)")
+                    help="kubeconfig file for --discover / --import-projects (default: $KUBECONFIG or ~/.kube/config)")
+    ap.add_argument("--import-projects", metavar="CONTEXT", action="append",
+                    help="start projects/*.yaml from this cluster's Rancher Projects and namespaces (read-only); "
+                         "needs --rancher-projects; repeatable")
+    ap.add_argument("--rancher-projects", metavar="FILE",
+                    help="kubectl get projects.management.cattle.io -A -o json (Rancher local cluster): Project names")
+    ap.add_argument("--margin", type=float, default=0, metavar="PCT",
+                    help="--import-projects: percent added to the current requests (default 0)")
     args = ap.parse_args(argv)
     ck = Checker()
-    if args.kubeconfig and not args.discover:
-        ap.error("--kubeconfig is only used with --discover")
+    if args.kubeconfig and not (args.discover or args.import_projects):
+        ap.error("--kubeconfig is only used with --discover or --import-projects")
+    if args.import_projects and not args.rancher_projects:
+        ap.error("--import-projects needs --rancher-projects (the Project names)")
+    if args.rancher_projects and not args.import_projects:
+        ap.error("--rancher-projects is only used with --import-projects")
+    if not 0 <= args.margin <= 500:
+        ap.error("--margin: a percentage from 0 to 500")
     if args.kubeconfig and not os.path.isfile(os.path.expanduser(args.kubeconfig)):
         ap.error(f"--kubeconfig: no such file: {args.kubeconfig}")
-    if args.discover:
+    get = lambda context, a: kubectl_json(context, a, args.kubeconfig)
+
+    def flush(failed_text):
+        for w in ck.warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        for e in ck.errors:
+            print(f"ERROR: {e}", file=sys.stderr)
+        if ck.errors:
+            print(failed_text, file=sys.stderr)
+        return not ck.errors
+
+    if args.discover:  # first, so --import-projects finds the clusters in settings.yaml
         targets = []
         for t in args.discover:
             if not re.fullmatch(r"[^=\s]+=[^=\s]+", t):
                 ap.error(f"--discover: expected CONTEXT=ENV, got {t}")
             targets.append(tuple(t.split("=")))
         try:
-            get = lambda context, a: kubectl_json(context, a, args.kubeconfig)
             results = discover(args.allocations, targets, ck, get)
         except (OSError, YamlError) as e:
             ck.error(str(e))
             results = []
         for context, envname, cap in results:
             print(f"{context} ({envname}): {cap['nodes']} node(s), capacity {cap['cpu']:g} vCPU / {cap['memory']} GiB")
-        for w in ck.warnings:
-            print(f"warning: {w}", file=sys.stderr)
-        for e in ck.errors:
-            print(f"ERROR: {e}", file=sys.stderr)
-        if ck.errors:
-            print("settings.yaml not changed", file=sys.stderr)
+        if not flush("settings.yaml not changed"):
             return 1
-        print(f"updated {os.path.join(args.allocations, 'settings.yaml')}: review and commit it")
-        if not args.out and not args.check:
-            return 0
-        print()
+        print(f"updated {os.path.join(args.allocations, 'settings.yaml')}: review and commit it\n")
         ck = Checker()
+    if args.import_projects:
+        try:
+            with open(args.rancher_projects) as f:
+                names = rancher_project_names(json.load(f))
+            report = import_projects(args.allocations, args.import_projects, names, args.margin, ck, get)
+        except (OSError, ValueError) as e:
+            ck.error(str(e))
+            report = []
+        print("\n".join(report))
+        if not flush("no project file written"):
+            return 1
+        print("project files written: review the numbers and owners, then commit\n")
+        ck = Checker()
+    if (args.discover or args.import_projects) and not args.out and not args.check:
+        return 0
     settings, projects = load_dir(args.allocations, ck)
     clusters, allocs, usage = build_model(settings, projects, ck) if not ck.errors else ({}, [], {})
     if allocs:

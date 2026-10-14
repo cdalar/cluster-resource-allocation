@@ -77,6 +77,11 @@ F = {
     "rq_hard": "metrics.k8s.resource_quota.hard_limit",
     "hpa_uid": "resource.attributes.k8s.hpa.uid",
     "hpa_max": "metrics.k8s.hpa.max_replicas",
+    # Owning workload, set by k8sattributes from the pod (a CronJob's Job is named <cronjob>-<schedule time>)
+    "deployment": "resource.attributes.k8s.deployment.name",
+    "statefulset": "resource.attributes.k8s.statefulset.name",
+    "daemonset": "resource.attributes.k8s.daemonset.name",
+    "job": "resource.attributes.k8s.job.name",
 }
 # Metrics the k8s_cluster receiver only sends while such objects exist. When no cluster has any, no index has the
 # field and ES|QL rejects every query that names it ("Unknown column"): --no-quota / --no-hpa leave them out.
@@ -535,6 +540,40 @@ def build_report_panels(index):
         _TARGET[0] = PANELS
 
 
+# LimitRange maxLimitRequestRatio planned for the "limit <= 2x request" rule (docs/10-implementation-plan.md, 2.1/5.4).
+# At admission a container is rejected when limit / request is above it, or when it has a request but no limit (and
+# the LimitRange sets no default limit). Without a request the request defaults to the limit (ratio 1).
+LIMIT_RATIO = 2
+
+# One row per workload (Deployment, StatefulSet, DaemonSet, CronJob, Job, bare Pod) as of the last minutes of the
+# range: its containers' worst limit/request ratio per resource and what would break at LIMIT_RATIO.
+WORKLOAD_RATIO = """
+| WHERE @timestamp >= TO_DATETIME(?_tend) - NOW_WINDOW
+| WHERE {restarts} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
+     OR {lim_cpu} IS NOT NULL OR {lim_mem} IS NOT NULL
+| EVAL kind = CASE({deployment} IS NOT NULL, "Deployment", {statefulset} IS NOT NULL, "StatefulSet",
+                   {daemonset} IS NOT NULL, "DaemonSet", {job} RLIKE ".*-[0-9]{{8,}}", "CronJob",
+                   {job} IS NOT NULL, "Job", "Pod"),
+       workload = COALESCE({deployment}, {statefulset}, {daemonset}, REPLACE({job}, "-[0-9]{{8,}}$", ""), {pod})
+| STATS req_cpu = MAX({req_cpu}), lim_cpu = MAX({lim_cpu}), req_mem = MAX({req_mem}), lim_mem = MAX({lim_mem}),
+        pods = COUNT_DISTINCT({pod_uid}){name_agg_raw}
+  BY cluster = COALESCE({cluster}, "(unknown)"), project = {project}, namespace = {namespace}, kind, workload,
+     container = {container}
+| WHERE container IS NOT NULL
+| EVAL cpu_ratio = TO_DOUBLE(lim_cpu) / req_cpu, mem_ratio = TO_DOUBLE(lim_mem) / req_mem,
+       cpu_issue = CASE(req_cpu IS NULL AND lim_cpu IS NULL, "no request, no limit", lim_cpu IS NULL, "no limit",
+                        cpu_ratio > RATIO, CONCAT("limit ", TO_STRING(ROUND(cpu_ratio, 1)), "x request")),
+       mem_issue = CASE(req_mem IS NULL AND lim_mem IS NULL, "no request, no limit", lim_mem IS NULL, "no limit",
+                        mem_ratio > RATIO, CONCAT("limit ", TO_STRING(ROUND(mem_ratio, 1)), "x request"))
+| EVAL bad = CASE(cpu_issue IS NOT NULL OR mem_issue IS NOT NULL, container)
+| STATS containers = COUNT(*), cpu_bad = COUNT(cpu_issue), mem_bad = COUNT(mem_issue),
+        cpu_ratio = MAX(cpu_ratio), mem_ratio = MAX(mem_ratio), cpu_issues = VALUES(cpu_issue),
+        mem_issues = VALUES(mem_issue), bad = VALUES(bad), pods = MAX(pods),
+        req_cpu = SUM(req_cpu), req_mem = SUM(req_mem){name_agg}
+  BY cluster, project, namespace, kind, workload
+{pname_stage}
+| EVAL category = {category}""".replace("NOW_WINDOW", NOW_WINDOW).replace("RATIO", str(LIMIT_RATIO))
+
 TILE_H = 5  # height of the report's tile rows
 TOP = 4 + 2 * TILE_H  # first row below the About text and the two tile rows
 
@@ -637,6 +676,21 @@ def _build_report_panels(src):
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 1000
 | KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, TOP + 35, 48, 16))
+
+    panel("table", f"Workloads vs. limit ≤ {LIMIT_RATIO}× request (LimitRange maxLimitRequestRatio: {LIMIT_RATIO}; now)",
+          q(src + WORKLOAD_RATIO + f"""
+| EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category, Kind = kind,
+       Workload = workload, Pods = pods, Containers = containers,
+       Status = CASE(mem_bad + cpu_bad == 0, "OK", mem_bad > 0 AND cpu_bad > 0, "breaks: memory + CPU",
+                     mem_bad > 0, "breaks: memory", "breaks: CPU"),
+       `Memory: max limit/request` = ROUND(mem_ratio, 1), `Memory problems` = mem_issues,
+       `CPU: max limit/request` = ROUND(cpu_ratio, 1), `CPU problems` = cpu_issues, `Containers affected` = bad,
+       `CPU req` = ROUND(req_cpu, 2), `Mem req GiB` = ROUND(req_mem / {{GIB}}, 2)
+| SORT mem_bad DESC, cpu_bad DESC, Cluster, Namespace, Workload
+| LIMIT 2000
+| KEEP Cluster, Namespace, Project, Category, Kind, Workload, Status, `Memory: max limit/request`,
+       `Memory problems`, `CPU: max limit/request`, `CPU problems`, `Containers affected`, Pods, Containers,
+       `CPU req`, `Mem req GiB`"""), (0, TOP + 51, 48, 16))
 
 
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----

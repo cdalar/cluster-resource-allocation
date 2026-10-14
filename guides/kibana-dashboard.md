@@ -1,15 +1,15 @@
-# Kibana dashboards: cluster resources (as-is) and cluster resource report
+# Kibana dashboards: cluster resource report
 
-A Kibana dashboard with the current situation of every cluster, built from the OpenTelemetry metrics the
-clusters already send to the central Elastic. It shows the same baseline as [`discover.py`](../discovery/README.md)
-and the in-cluster dashboard, without installing anything in the clusters: allocatable, requested, limited and
-used CPU and memory per cluster, Rancher Project, namespace and node, plus the resource-standards gaps.
+Kibana dashboards with the current situation of every cluster, built from the OpenTelemetry metrics the
+clusters already send to the central Elastic. They show the same report as the in-cluster dashboard, without
+installing anything in the clusters: capacity and N+1 per cluster, requests and usage per Rancher Project and
+namespace, the resource-standards gaps, and the workloads a limit ≤ 2× request rule would reject.
 
 | File | Content |
 |---|---|
-| [`kibana/cluster-resources-as-is.ndjson`](../kibana/cluster-resources-as-is.ndjson) | Saved objects to import: four linked dashboards, *Cluster resources (as-is)*, and the report as *Cluster resource report: capacity*, *: projects* and *Workload limits* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
-| [`kibana/cluster-resources-as-is-no-project.ndjson`](../kibana/cluster-resources-as-is-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
-| [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
+| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: three linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects* and *Workload limits* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
+| [`kibana/cluster-resource-report-no-project.ndjson`](../kibana/cluster-resource-report-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
+| [`kibana/cluster-resource-report-project-names.ndjson`](../kibana/cluster-resource-report-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
 | [`kibana/otel-kube-stack-node-roles.yaml`](../kibana/otel-kube-stack-node-roles.yaml) | Values overlay for the same chart: RKE2 node role labels (`node-role.kubernetes.io/control-plane`, `etcd`) as `k8s.node.role.*` on the metrics, through a second `k8s_attributes` processor that sees all nodes (or in the existing one of a `deployment`-mode collector that runs `k8s_cluster`). Used by the dashboards' *NOT Control-plane nodes* filter ([below](#control-plane-nodes)); rendered with the chart, not run on a cluster |
@@ -22,42 +22,15 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 Tested with Elasticsearch and Kibana 9.1.5 and `opentelemetry-collector-contrib` 0.135.0 (Elasticsearch exporter,
 mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.
 
-## What it shows
-
-Every panel is an ES|QL panel over the dashboard's time range (default: last 1 day; `build_dashboard.py --time-from now-7d` for another).
-
-| Panel | Content |
-|---|---|
-| Tiles | CPU and memory requested as % of allocatable; used as % of requested; pods pending now (last 10 min); containers without a CPU or memory request |
-| CPU / Memory over time | Allocatable, requested, limits and used per time bucket (sum over the selected clusters) |
-| Clusters | Nodes, allocatable, requested, req %, used, and *free N+1* (allocatable minus the largest node minus requests) |
-| Rancher Projects | Per cluster and project: namespaces, requests (avg and peak), limits, usage (avg and P95), efficiency |
-| Top 20 namespaces | Requested vs P95 used, CPU and memory |
-| Namespaces | Same columns as Projects, per namespace |
-| Resource standards | Per namespace: pods, containers, no CPU request, no memory request, no memory limit, CPU limit set, BestEffort pods ([standards](../docs/02-resource-standards.md)) |
-| Pending pods | Pods in phase Pending in the last 10 minutes, with their requests |
-| Nodes | Allocatable, requested and used per node |
-
-Controls at the top filter all panels by cluster, Rancher Project ID and namespace. The filter bar (KQL) works too,
-e.g. `resource.attributes.k8s.cluster.name : "onprem-prod-01"`.
-
-Definitions, as in the discovery tools:
-
-- **Requested / limits**: sum of container requests and limits (`k8s.container.cpu_request` etc.), per time bucket;
-  *avg* is the average over the buckets, *peak* the highest bucket.
-- **Used**: CPU `k8s.pod.cpu.usage` (cores), memory `k8s.pod.memory.working_set`; *P95* is the 95th percentile of the
-  bucket sums.
-- **Efficiency** = P95 used / average requested.
-- **(no project)**: the namespace has no `field.cattle.io/projectId` label. Rancher's *System* project has an ID
-  too (e.g. `p-bk8gt`); look it up in Rancher.
-
 ## Cluster resource report
 
-The report, in the same file, follows the in-cluster dashboard of the
-[chart](../charts/cluster-resource-report/README.md) on the same OTel metrics, for all clusters at once. It is three
-dashboards, and every About box links all four: *capacity* (tiles, capacity chart, N+1 table), *projects* (by
-project charts, Projects and Namespaces tables) and *Workload limits* (the 2× table). Same filters and controls on each;
-the selections do not carry over when following a link.
+The report follows the in-cluster dashboard of the [chart](../charts/cluster-resource-report/README.md) on the
+OTel metrics, for all clusters at once. It is three dashboards, and every About box links the others: *capacity*
+(tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and Namespaces tables) and *Workload
+limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
+leaves out control-plane nodes ([below](#control-plane-nodes)); the selections do not carry over when following a
+link. Every panel is an ES|QL panel over the dashboard's time range (default: last 1 day; `--time-from now-7d` for
+another). With Project names (any of the ways below), every Project column and chart shows the name.
 
 
 | Panel | Content | As in the in-cluster report |
@@ -69,8 +42,11 @@ the selections do not carry over when following a link.
 | Projects, Namespaces | Requests, P95 use, efficiency, peak, memory limits, pods, pending, no CPU request, no memory limit, BestEffort; namespaces also quota and HPA counts | Same columns (LimitRange isn't in the metrics) |
 | Workloads vs. limit ≤ 2× request | Every Deployment, StatefulSet, DaemonSet, CronJob, Job and bare Pod (now), problems first: what a LimitRange `maxLimitRequestRatio: 2` ([10](../docs/10-implementation-plan.md), steps 2.1 and 5.4) would reject at the next pod creation, per resource. A container breaks it with limit > 2× request, or with a request but no limit (unless the LimitRange sets a default limit); without a request Kubernetes sets the request to the limit, so a limit alone passes. Columns: status, worst ratio and problems for memory and CPU, the containers affected, pods, containers, requests. Kind and name come from `k8s.deployment.name`, `k8s.statefulset.name`, `k8s.daemonset.name`, `k8s.job.name` (k8sattributes; a CronJob is its Job's name without the timestamp). The CPU column flags every container without a CPU limit: only relevant if the ratio is set for CPU too ([ADR-0003](../docs/adr/0003-cpu-limits.md) keeps CPU limits optional) | — (new) |
 
-Definitions, where they differ from the as-is dashboard:
+Definitions:
 
+- **Requested / limits**: sum of container requests and limits (`k8s.container.cpu_request` etc.); **used**: CPU
+  `k8s.pod.cpu.usage`, memory `k8s.pod.memory.working_set`, as P95 over the time range; **efficiency** = P95 used /
+  average requested.
 - **Requested** counts running pods only; pending pods are shown apart (*Pending requests*), finished pods not at
   all, as the scheduler and the in-cluster report count them.
 - **Now** (tiles marked *now*, pods, pending and standards columns) = the last 10 minutes of the time range.
@@ -89,7 +65,7 @@ Definitions, where they differ from the as-is dashboard:
   changes), `add_project_names.py` does the same without the generator:
 
   ```bash
-  ./kibana/add_project_names.py kibana/cluster-resources-as-is.ndjson projects.json --out cluster-resources-with-names.ndjson
+  ./kibana/add_project_names.py kibana/cluster-resource-report.ndjson projects.json --out cluster-resources-with-names.ndjson
   ```
 
   The names are written into the queries, so regenerate (or run `add_project_names.py` again) after adding or renaming Projects. Without the file the
@@ -107,7 +83,7 @@ then needs only a new run of the publisher, not a new dashboard file. Needs Elas
 ```bash
 # 1. Fill the index (creates it with index.mode: lookup); Projects are read with kubectl from the Rancher local cluster
 ES_API_KEY=... ./kibana/publish_project_names.py https://elastic.example:9200 --context <rancher-local-context>
-# 2. Check the queries, then import kibana/cluster-resources-as-is-project-names.ndjson (same object IDs as the other files)
+# 2. Check the queries, then import kibana/cluster-resource-report-project-names.ndjson (same object IDs as the other files)
 ES_API_KEY=... ./kibana/build_dashboard.py --project-lookup-index rancher-projects --check https://elastic.example:9200
 ```
 
@@ -119,7 +95,7 @@ another index name, pass it to both scripts (`publish_project_names.py --index`)
 | Order | Publish first: ES\|QL rejects a query that names a missing index, so every report panel fails until the index exists |
 | Updates | Run `publish_project_names.py` again (by hand or from a scheduler); it overwrites the names and removes Projects that no longer exist. `--rancher-projects projects.json` reads a file instead of running kubectl, `--dry-run` prints the documents |
 | Permissions | The publisher's API key: `create_index`, `index`, `delete`, `view_index_metadata` on the lookup index only. Everyone who opens the dashboard needs `read` on it |
-| Scope | Names appear in the *Cluster resource report*. The as-is dashboard and the Project filter control keep the ID |
+| Scope | Names appear in every Project column and chart. The Project filter control keeps the ID |
 | Unknown Projects | A Project the index does not have shows its ID |
 | Join key | The Project ID alone. Two clusters that happen to have the same ID with different names get one name (the publisher prints a warning) |
 | Remote clusters | With cross-cluster search the join needs Elasticsearch 9.2 or later |
@@ -142,10 +118,10 @@ helm upgrade <release> <chart> -n <namespace> -f <your values>.yaml -f kibana/ot
 |---|---|
 | Pipeline | `transform/rancher_project_names` must be in the metrics pipeline after `k8s_attributes`. Helm replaces lists, so add it to the pipeline in your own values, or pass the complete list: `--pipeline k8s_attributes,transform/rancher_project_names,resource_detection/env,resource/hostname,batch` (the chart's default order) |
 | Collector | `--collector <name>` when the metrics collector is not the chart's `daemon` |
-| Dashboard | The control is *Rancher Project* on `resource.attributes.rancher.project.name`; the report shows names (and the ID in its own column), the as-is tables show the name instead of the ID. Import it only once the field exists: ES\|QL rejects a field no index has |
+| Dashboard | The control is *Rancher Project* on `resource.attributes.rancher.project.name`; the report shows names (and the ID in its own column). Import it only once the field exists: ES\|QL rejects a field no index has |
 | Old data | Only metrics collected after the rollout carry the name. Over a time range that spans the rollout a Project shows twice (ID before, name after), and selecting a name leaves out the time before |
 | Updates | After adding or renaming Projects: regenerate the overlay and redeploy the collectors. A Project missing from the list keeps its ID and is not in the control |
-| Tested | 2026-10-13 with chart 0.20.1 (`otel/opentelemetry-collector-contrib` 0.154.0) on a single-node k3s cluster into Elasticsearch and Kibana 9.1.5: field present on cluster and kubelet metrics, all 31 panel queries pass `--check`, the control's value request returns the names, a name filter narrows the report and as-is tables. The control was not clicked in a browser; a multi-node cluster was not tested |
+| Tested | 2026-10-13 with chart 0.20.1 (`otel/opentelemetry-collector-contrib` 0.154.0) on a single-node k3s cluster into Elasticsearch and Kibana 9.1.5: field present on cluster and kubelet metrics, all 31 panel queries pass `--check`, the control's value request returns the names, a name filter narrows the report tables (with the as-is dashboard of that time, since removed). The control was not clicked in a browser; a multi-node cluster was not tested |
 
 **Link in Rancher**: a NavLink on the cluster that runs Kibana puts the dashboard in Rancher's cluster menu
 (Kibana's `server.basePath` must be the Rancher service proxy path):
@@ -220,9 +196,9 @@ The data must be written in OTel-native mode (`mapping: {mode: otel}` in the Ela
 
 Which file:
 
-- `cluster-resources-as-is.ndjson` when the data has `resource.attributes.rancher.project.id` (the `_field_caps`
+- `cluster-resource-report.ndjson` when the data has `resource.attributes.rancher.project.id` (the `_field_caps`
   check above lists it).
-- `cluster-resources-as-is-no-project.ndjson` when it does not. `rancher.project.id` is not a standard OTel
+- `cluster-resource-report-no-project.ndjson` when it does not. `rancher.project.id` is not a standard OTel
   attribute: the collector only sets it with the `k8sattributes` label rule in the
   [fragment](../kibana/otel-collector-fragment.yaml). ES|QL rejects a query that names a field no index has, so
   the full file fails with `Unknown column`. This variant has no *Rancher Projects* table and no project
@@ -230,15 +206,16 @@ Which file:
   the collector sets the attribute, import the full file; it has the same IDs and replaces this one.
 
 **Kibana UI**: *Stack Management → Saved objects → Import*, select the `.ndjson` file,
-*Check for existing objects → Automatically overwrite*. Open *Dashboards → Cluster resources (as-is)*; the About
-box links the others.
+*Check for existing objects → Automatically overwrite*. Open *Dashboards → Cluster resource report: capacity*; the
+About box links the others. The *Cluster resources (as-is)* dashboard of earlier versions is no longer generated;
+delete it in Kibana (*Dashboards*, or saved object `cra-cluster-resources-as-is`) if it is still there.
 
 **Upload too large** (`Request Entity Too Large`, e.g. ingress-nginx's 1 MiB default): write one file per dashboard
 and import them one by one; each holds the data view, so the order does not matter:
 
 ```bash
 ./kibana/build_dashboard.py <options> --split --out cluster-resources.ndjson
-# cluster-resources-as-is.ndjson, -capacity, -projects, -limits; the sizes are printed
+# cluster-resource-report.ndjson, -capacity, -projects, -limits; the sizes are printed
 ```
 
 `--rancher-projects` adds about 2 KiB per Project to the capacity file (about 270 KiB without names); with several
@@ -250,10 +227,10 @@ Import into the Kibana space where the platform team works.
 ```bash
 curl -X POST "https://kibana.example/api/saved_objects/_import?overwrite=true" \
   -H "kbn-xsrf: true" -H "Authorization: ApiKey $KIBANA_API_KEY" \
-  --form file=@kibana/cluster-resources-as-is.ndjson
+  --form file=@kibana/cluster-resource-report.ndjson
 ```
 
-Object IDs are fixed (`cra-cluster-resources-as-is`, `cra-cluster-resource-report`, data view `cra-otel-metrics`),
+Object IDs are fixed (`cra-cluster-resource-report`, `cra-cluster-resource-report`, data view `cra-otel-metrics`),
 so importing again updates the dashboards in place. Changes made in the Kibana UI are overwritten by the next import; make them in
 `build_dashboard.py` instead.
 
@@ -271,7 +248,7 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 ### Adapting
 
 - **Other index pattern** (e.g. a data stream namespace per environment): `./kibana/build_dashboard.py --index 'metrics-*.otel-prod'`.
-- **No Rancher Project attribute**: `--no-project` (with `--check` too); writes `cluster-resources-as-is-no-project.ndjson`.
+- **No Rancher Project attribute**: `--no-project` (with `--check` too); writes `cluster-resource-report-no-project.ndjson`.
 - **Other field names** (other attribute names, ECS mapping): edit the `F` table at the top of
   `build_dashboard.py`, run `--check`, then regenerate the `.ndjson`.
 - Regenerate with `./kibana/build_dashboard.py` and commit both files.
@@ -280,12 +257,11 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 
 | Limit | Effect | Compared with `discover.py` |
 |---|---|---|
-| Rancher Project **ID**, not the display name | The as-is tables show `p-xxxxx`; the report shows names only when generated with `--rancher-projects` (a snapshot) | discover.py reads names from Rancher. Or names from a lookup index in Elasticsearch ([above](#project-names-from-a-lookup-index)) |
+| Rancher Project **ID**, not the display name | The report shows `p-xxxxx` unless generated with names (`--rancher-projects` is a snapshot) | discover.py reads names from Rancher. Or names from a lookup index in Elasticsearch ([above](#project-names-from-a-lookup-index)) |
 | Init containers and pod overhead are not reported by `k8s_cluster` | Requests can be lower than the *effective* requests the scheduler uses | discover.py counts both |
-| As-is: requests include Pending pods (and pods of finished Jobs while they exist) | *CPU requested %* can exceed 100 % when big pods are Pending | discover.py and the report dashboard count pending separately |
 | Report: all nodes count as allocatable | Cordoned nodes are not excluded (the metrics don't say which nodes are unschedulable); control-plane nodes are left out by a saved filter ([above](#control-plane-nodes)) | discover.py counts schedulable nodes only |
 | Report: tested | All queries run against Elasticsearch 9.1.5 with `--check`; panels rendered with Kibana 9.1.5 reporting (PNG) on the test cluster | — |
 | About 60 buckets per time range; a container's value per bucket is its maximum, usage its average | Peaks and P95 are smoothed over long ranges; pods replaced within a bucket count twice for that bucket | discover.py uses Prometheus at a fixed resolution |
 | Query cost grows with containers × buckets | Wide ranges over many clusters are slow; filter by cluster first | — |
-| No budgets or cost | As-is only; the [allocation planner](allocation-planner.md) covers plans and money | — |
+| No budgets or cost | The current situation only; the [allocation planner](allocation-planner.md) covers plans and money | — |
 | Filter controls | Import, migration and dashboard filters were tested. The controls themselves were not clicked through in a browser | — |

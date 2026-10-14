@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Build the Kibana dashboards "Cluster resources (as-is)" and "Cluster resource report" from OpenTelemetry metrics.
+"""Build the Kibana dashboards of the cluster resource report from OpenTelemetry metrics.
 
-Writes an importable saved-objects file (two dashboards + data view for the filter controls). "Cluster resource
-report" follows the in-cluster dashboard of the cluster-resource-report chart (tiles, capacity by requests with
-N+1, CPU and memory by project, Projects and Namespaces tables). Every panel is an
+Writes an importable saved-objects file: three linked dashboards and a data view for the filter controls. They follow
+the in-cluster dashboard of the cluster-resource-report chart: "capacity" (tiles, capacity by requests with N+1),
+"projects" (CPU and memory by project, Projects and Namespaces tables) and "Workload limits" (every workload against
+limit <= 2x request). Control-plane nodes are left out by a filter saved in each dashboard. Every panel is an
 ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch exporter (mapping mode `otel`):
 `metrics-k8sclusterreceiver.otel-*` (requests, limits, allocatable, pod phase) and
 `metrics-kubeletstatsreceiver.otel-*` (usage).
 
-  ./build_dashboard.py                        # writes cluster-resources-as-is.ndjson next to this script
+  ./build_dashboard.py                        # writes cluster-resource-report.ndjson next to this script
   ./build_dashboard.py --index 'metrics-*'    # other index pattern
   ./build_dashboard.py --no-project           # collector without the Rancher Project attribute
   ./build_dashboard.py --rancher-projects projects.json
       # Project names and System projects from `kubectl get projects.management.cattle.io -A -o json`
       # on the Rancher local cluster (without it the report shows Project IDs)
-  ./build_dashboard.py --project-lookup-index rancher-projects   # writes cluster-resources-as-is-project-names.ndjson
+  ./build_dashboard.py --project-lookup-index rancher-projects   # writes cluster-resource-report-project-names.ndjson
       # Project names from a lookup index in Elasticsearch instead (ES|QL LOOKUP JOIN, Elasticsearch 9.1+);
       # publish_project_names.py fills it
   ./build_dashboard.py --project-name-field --out with-names.ndjson
@@ -43,7 +44,6 @@ import sys
 import urllib.error
 import urllib.request
 
-DASHBOARD_ID = "cra-cluster-resources-as-is"
 REPORT_ID = "cra-cluster-resource-report"
 PROJECTS_ID = "cra-cluster-resource-projects"
 LIMITS_ID = "cra-workload-limits"
@@ -99,13 +99,6 @@ def project_expr():
     return NO_PROJECT if F["project"] is None else f"COALESCE({F['project']}, {NO_PROJECT})"
 
 
-def project_label_expr():
-    """Project column of the as-is dashboard: the name when the metrics carry it (--project-name-field), else the ID."""
-    if NAME_FIELD[0] and F["project"] is not None:
-        return f"COALESCE({NAME_FIELD[0]}, {F['project']}, {NO_PROJECT})"
-    return project_expr()
-
-
 def name_agg(raw):
     """Extra STATS column of the report stages that carries the Project name through the aggregations."""
     if not NAME_FIELD[0] or F["project"] is None:
@@ -119,74 +112,15 @@ def q(text):
     fields = {k: "NULL" if v is None else v for k, v in F.items()}  # --no-quota / --no-hpa
     return "\n".join(lines).format(**{**fields, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
                                     category=category_expr(), pname_stage=pname_stage(),
-                                    project_label=project_label_expr(), name_agg_raw=name_agg(True),
+                                    name_agg_raw=name_agg(True),
                                     name_agg=name_agg(False))
 
 
-# Common first stage: one row per time bucket and entity (container, pod or node), holding that entity's
-# value in the bucket. Each OTel metric unit is a separate document, so values are aggregated per entity
-# before they are summed; summing raw documents would count every scrape.
-ENTITY_STAGE = """
-| EVAL cluster = COALESCE({cluster}, "(unknown)"),
-       project = {project_label},
-       namespace = {namespace},
-       entity = COALESCE({pod_uid}, {node}),
-       container = COALESCE({container}, "")
-| STATS alloc_cpu = MAX({alloc_cpu}), alloc_mem = MAX({alloc_mem}),
-        req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem}),
-        lim_cpu = MAX({lim_cpu}), lim_mem = MAX({lim_mem}),
-        use_cpu = AVG({use_cpu}), use_mem = AVG({use_mem})
-  BY t = BUCKET(@timestamp, {BUCKETS}, ?_tstart, ?_tend), cluster, project, namespace, entity, container"""
-
-WHERE_ALL = """
-| WHERE {alloc_cpu} IS NOT NULL OR {alloc_mem} IS NOT NULL
-     OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
-     OR {lim_cpu} IS NOT NULL OR {lim_mem} IS NOT NULL
-     OR {use_cpu} IS NOT NULL OR {use_mem} IS NOT NULL"""
-
-WHERE_WORKLOAD = """
-| WHERE {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
-     OR {lim_cpu} IS NOT NULL OR {lim_mem} IS NOT NULL
-     OR {use_cpu} IS NOT NULL OR {use_mem} IS NOT NULL"""
-
-# Per-bucket sums per cluster, then averaged over the buckets.
-CLUSTER_BUCKETS = """
-| STATS alloc_cpu = SUM(alloc_cpu), alloc_mem = SUM(alloc_mem), largest_cpu = MAX(alloc_cpu),
-        largest_mem = MAX(alloc_mem), nodes = COUNT(alloc_cpu),
-        req_cpu = SUM(req_cpu), req_mem = SUM(req_mem), use_cpu = SUM(use_cpu), use_mem = SUM(use_mem)
-  BY t, cluster"""
-
-
-def group_table(key_cols):
-    """Requests, limits and usage per key (e.g. cluster, project) over the time range."""
-    keys = ", ".join(key_cols)
-    return f"""
-| STATS req_cpu = SUM(req_cpu), req_mem = SUM(req_mem), lim_cpu = SUM(lim_cpu), lim_mem = SUM(lim_mem),
-        use_cpu = SUM(use_cpu), use_mem = SUM(use_mem), namespaces = VALUES(namespace)
-  BY t, {keys}
-| STATS rc = AVG(req_cpu), rc_max = MAX(req_cpu), lc = AVG(lim_cpu), uc = AVG(use_cpu),
-        uc95 = PERCENTILE(use_cpu, 95),
-        rm = AVG(req_mem), rm_max = MAX(req_mem), lm = AVG(lim_mem), um = AVG(use_mem),
-        um95 = PERCENTILE(use_mem, 95), ns = VALUES(namespaces)
-  BY {keys}
-| EVAL `CPU req (avg)` = ROUND(rc, 2), `CPU req (peak)` = ROUND(rc_max, 2), `CPU limits` = ROUND(lc, 2),
-       `CPU used (avg)` = ROUND(uc, 3), `CPU used (P95)` = ROUND(uc95, 3),
-       `CPU efficiency %` = ROUND(uc95 / rc * 100, 0),
-       `Mem req GiB (avg)` = ROUND(rm / {{GIB}}, 2), `Mem req GiB (peak)` = ROUND(rm_max / {{GIB}}, 2),
-       `Mem limits GiB` = ROUND(lm / {{GIB}}, 2), `Mem used GiB (avg)` = ROUND(um / {{GIB}}, 2),
-       `Mem used GiB (P95)` = ROUND(um95 / {{GIB}}, 2), `Mem efficiency %` = ROUND(um95 / rm * 100, 0)"""
-
-
-PANELS = []  # "Cluster resources (as-is)", filled by panel() below, in layout order
-REPORT_PANELS = []  # the report dashboards; each panel's "board" says which (REPORT_BOARDS)
-_TARGET = [PANELS]
-_BOARD = ["as-is"]
+REPORT_PANELS = []  # filled by panel() below, in layout order; each panel's "board" says its dashboard
+_BOARD = ["capacity"]
 
 # The report is three dashboards, so each file stays small enough for proxies in front of Kibana (--split):
 # (board, saved-object ID, title, description); the board is also the file suffix with --split
-AS_IS_BOARD = ("as-is", DASHBOARD_ID, "Cluster resources (as-is)",
-               "Allocatable, requested, limited and used CPU/memory per cluster, Rancher Project and namespace from "
-               "OpenTelemetry metrics.")
 REPORT_BOARDS = [
     ("capacity", REPORT_ID, "Cluster resource report: capacity",
      "Tiles, capacity by requests with N+1, per cluster, from OpenTelemetry metrics."),
@@ -198,173 +132,18 @@ REPORT_BOARDS = [
 
 
 def panel(kind, title, esql, grid, **opts):
-    _TARGET[0].append({"kind": kind, "title": title, "esql": esql, "grid": grid, "board": _BOARD[0], **opts})
+    REPORT_PANELS.append({"kind": kind, "title": title, "esql": esql, "grid": grid, "board": _BOARD[0], **opts})
 
 
 def board_panels(board):
-    return [p for p in PANELS + REPORT_PANELS if p["board"] == board]
+    return [p for p in REPORT_PANELS if p["board"] == board]
 
 
 def nav_links(current):
     """Links between the dashboards (relative to Kibana's dashboards app, so they work under a base path)."""
     links = [f"[{title}](#/view/{did})" if board != current else f"**{title}**"
-             for board, did, title, _ in [AS_IS_BOARD] + [b[:4] for b in REPORT_BOARDS]]
+             for board, did, title, _ in REPORT_BOARDS]
     return "Dashboards: " + " · ".join(links)
-
-
-def build_panels(index):
-    src = f"FROM {index}"
-    cp_note = (" Control-plane nodes and the pods on them are left out (the filter above the panels)."
-               if CP_FIELD[0] else "")
-
-    panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
-        "**As-is view of cluster resources**: allocatable, requested (what the scheduler reserves), limited "
-        "and actually used CPU and memory per cluster, Rancher Project and namespace, from the OpenTelemetry "
-        "metrics in Elastic. No quotas exist yet: this is the baseline for the allocation model.\n\n"
-        "Averages and peaks are over the selected time range (in ~60 buckets). *Efficiency* = P95 usage / "
-        "average requests. *(no project)* = namespace without the `field.cattle.io/projectId` label "
-        f"(system or unassigned).{cp_note} Filter with the controls above. "
-        "Docs: `guides/kibana-dashboard.md` in cluster-resource-allocation.\n\n" + nav_links("as-is")))
-
-    # The value column name is shown under the tile title.
-    tiles = [
-        ("CPU requested", "% of allocatable", "ROUND(AVG(req_cpu) / AVG(alloc_cpu) * 100, 1)"),
-        ("Memory requested", "% of allocatable", "ROUND(AVG(req_mem) / AVG(alloc_mem) * 100, 1)"),
-        ("CPU used", "% of requested", "ROUND(AVG(use_cpu) / AVG(req_cpu) * 100, 1)"),
-        ("Memory used", "% of requested", "ROUND(AVG(use_mem) / AVG(req_mem) * 100, 1)"),
-    ]
-    for i, (title, name, expr) in enumerate(tiles):
-        panel("metric", title, q(src + WHERE_ALL + ENTITY_STAGE + f"""
-| STATS alloc_cpu = SUM(alloc_cpu), alloc_mem = SUM(alloc_mem), req_cpu = SUM(req_cpu),
-        req_mem = SUM(req_mem), use_cpu = SUM(use_cpu), use_mem = SUM(use_mem) BY t
-| STATS `{name}` = {expr}"""), (i * 8, 5, 8, 6), value=name)
-
-    panel("metric", "Pods pending (last 10 min)", q(src + """
-| WHERE {phase} IS NOT NULL AND @timestamp >= NOW() - 10 minutes
-| STATS phase = MAX({phase}) BY {cluster}, {pod_uid}
-| STATS pods = COUNT(*) WHERE phase == 1"""), (32, 5, 8, 6), value="pods")
-
-    panel("metric", "Missing requests", q(src + """
-| WHERE {restarts} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
-| STATS req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem}) BY {cluster}, {pod_uid}, {container}
-| STATS `containers without CPU or memory request` = COUNT(*) WHERE req_cpu IS NULL OR req_mem IS NULL"""),
-          (40, 5, 8, 6), value="containers without CPU or memory request")
-
-    for i, (res, unit, div) in enumerate([("cpu", "cores", ""), ("mem", "GiB", " / {GIB}")]):
-        label = "CPU" if res == "cpu" else "Memory"
-        panel("line", f"{label}: allocatable vs requested vs used ({unit})", q(src + WHERE_ALL + ENTITY_STAGE + f"""
-| STATS alloc = SUM(alloc_{res}), req = SUM(req_{res}), lim = SUM(lim_{res}), used = SUM(use_{res}) BY t
-| EVAL Allocatable = ROUND(alloc{div}, 2), Requested = ROUND(req{div}, 2), Limits = ROUND(lim{div}, 2),
-       Used = ROUND(used{div}, 2)
-| KEEP t, Allocatable, Requested, Limits, Used
-| SORT t"""), (i * 24, 11, 24, 12), x="t", y=["Allocatable", "Requested", "Limits", "Used"])
-
-    panel("table", "Clusters (averages over the time range)", q(src + WHERE_ALL + ENTITY_STAGE + CLUSTER_BUCKETS + """
-| STATS Nodes = MAX(nodes),
-        `CPU allocatable` = ROUND(AVG(alloc_cpu), 1), `CPU requested` = ROUND(AVG(req_cpu), 2),
-        `CPU used` = ROUND(AVG(use_cpu), 2),
-        `Mem allocatable GiB` = ROUND(AVG(alloc_mem) / {GIB}, 1), `Mem requested GiB` = ROUND(AVG(req_mem) / {GIB}, 1),
-        `Mem used GiB` = ROUND(AVG(use_mem) / {GIB}, 1),
-        n1_cpu = AVG(alloc_cpu - largest_cpu - req_cpu), n1_mem = AVG(alloc_mem - largest_mem - req_mem)
-  BY Cluster = cluster
-| EVAL `CPU req %` = ROUND(`CPU requested` / `CPU allocatable` * 100, 0),
-       `Mem req %` = ROUND(`Mem requested GiB` / `Mem allocatable GiB` * 100, 0),
-       `CPU free N+1` = ROUND(n1_cpu, 1), `Mem free GiB N+1` = ROUND(n1_mem / {GIB}, 1)
-| KEEP Cluster, Nodes, `CPU allocatable`, `CPU requested`, `CPU req %`, `CPU used`, `CPU free N+1`,
-       `Mem allocatable GiB`, `Mem requested GiB`, `Mem req %`, `Mem used GiB`, `Mem free GiB N+1`
-| SORT Cluster"""), (0, 23, 48, 8))
-
-    if F["project"] is not None:
-        panel("table", "Rancher Projects", q(src + WHERE_WORKLOAD + ENTITY_STAGE + group_table(["cluster", "project"]) + """
-| EVAL Namespaces = MV_COUNT(MV_DEDUPE(ns))
-| RENAME cluster AS Cluster, project AS Project
-| KEEP Cluster, Project, Namespaces, `CPU req (avg)`, `CPU req (peak)`, `CPU limits`, `CPU used (avg)`,
-       `CPU used (P95)`, `CPU efficiency %`, `Mem req GiB (avg)`, `Mem req GiB (peak)`, `Mem limits GiB`,
-       `Mem used GiB (avg)`, `Mem used GiB (P95)`, `Mem efficiency %`
-| SORT `CPU req (avg)` DESC NULLS LAST
-| LIMIT 500"""), (0, 31, 48, 12))
-
-    panel("bar", "Top 20 namespaces: CPU requested vs used (cores)", q(src + WHERE_WORKLOAD + ENTITY_STAGE + """
-| STATS req = SUM(req_cpu), used = SUM(use_cpu) BY t, cluster, namespace
-| STATS Requested = ROUND(AVG(req), 3), `Used (P95)` = ROUND(PERCENTILE(used, 95), 3) BY cluster, namespace
-| EVAL Namespace = CONCAT(cluster, " / ", namespace)
-| SORT Requested DESC NULLS LAST
-| LIMIT 20
-| KEEP Namespace, Requested, `Used (P95)`"""), (0, 43, 24, 14), x="Namespace", y=["Requested", "Used (P95)"])
-
-    panel("bar", "Top 20 namespaces: memory requested vs used (GiB)", q(src + WHERE_WORKLOAD + ENTITY_STAGE + """
-| STATS req = SUM(req_mem), used = SUM(use_mem) BY t, cluster, namespace
-| STATS Requested = ROUND(AVG(req) / {GIB}, 2), `Used (P95)` = ROUND(PERCENTILE(used, 95) / {GIB}, 2)
-  BY cluster, namespace
-| EVAL Namespace = CONCAT(cluster, " / ", namespace)
-| SORT Requested DESC NULLS LAST
-| LIMIT 20
-| KEEP Namespace, Requested, `Used (P95)`"""), (24, 43, 24, 14), x="Namespace", y=["Requested", "Used (P95)"])
-
-    panel("table", "Namespaces", q(src + WHERE_WORKLOAD + ENTITY_STAGE + group_table(["cluster", "project", "namespace"]) + """
-| RENAME cluster AS Cluster, project AS Project, namespace AS Namespace
-| KEEP Cluster, Project, Namespace, `CPU req (avg)`, `CPU req (peak)`, `CPU limits`, `CPU used (avg)`,
-       `CPU used (P95)`, `CPU efficiency %`, `Mem req GiB (avg)`, `Mem req GiB (peak)`, `Mem limits GiB`,
-       `Mem used GiB (avg)`, `Mem used GiB (P95)`, `Mem efficiency %`
-| SORT `CPU req (avg)` DESC NULLS LAST
-| LIMIT 1000"""), (0, 57, 48, 14))
-
-    panel("table", "Resource standards per namespace (containers seen in the time range)", q(src + """
-| WHERE {restarts} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
-     OR {lim_cpu} IS NOT NULL OR {lim_mem} IS NOT NULL
-| EVAL any_set = COALESCE({req_cpu}, {req_mem}, {lim_cpu}, {lim_mem})
-| STATS req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem}), lim_cpu = MAX({lim_cpu}), lim_mem = MAX({lim_mem}),
-        any_set = MAX(any_set)
-  BY cluster = {cluster}, project = {project_label}, namespace = {namespace},
-     pod = {pod_uid}, container = {container}
-| EVAL no_cpu_req = CASE(req_cpu IS NULL, 1, 0), no_mem_req = CASE(req_mem IS NULL, 1, 0),
-       no_mem_lim = CASE(lim_mem IS NULL, 1, 0), cpu_lim = CASE(lim_cpu IS NULL, 0, 1),
-       any_set = CASE(any_set IS NULL, 0, 1)
-| STATS containers = COUNT(*), no_cpu_req = SUM(no_cpu_req), no_mem_req = SUM(no_mem_req),
-        no_mem_lim = SUM(no_mem_lim), cpu_lim = SUM(cpu_lim), any_set = MAX(any_set)
-  BY cluster, project, namespace, pod
-| STATS Pods = COUNT(*), Containers = SUM(containers), `No CPU request` = SUM(no_cpu_req),
-        `No memory request` = SUM(no_mem_req), `No memory limit` = SUM(no_mem_lim),
-        `CPU limit set` = SUM(cpu_lim), `BestEffort pods` = SUM(CASE(any_set == 0, 1, 0))
-  BY Cluster = cluster, Project = project, Namespace = namespace
-| KEEP Cluster, Project, Namespace, Pods, Containers, `No CPU request`, `No memory request`, `No memory limit`,
-       `CPU limit set`, `BestEffort pods`
-| SORT `No CPU request` DESC, `No memory request` DESC, Namespace
-| LIMIT 1000"""), (0, 71, 30, 14))
-
-    panel("table", "Pending pods (last 10 min)", q(src + """
-| WHERE (({phase} IS NOT NULL AND @timestamp >= NOW() - 10 minutes) OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL)
-| STATS phase = MAX({phase}), req_cpu = MAX({req_cpu}), req_mem = MAX({req_mem})
-  BY cluster = {cluster}, namespace = {namespace}, pod = {pod}, uid = {pod_uid}, container = {container}
-| STATS phase = MAX(phase), `CPU req` = SUM(req_cpu), `Mem req GiB` = ROUND(SUM(req_mem) / {GIB}, 2)
-  BY Cluster = cluster, Namespace = namespace, Pod = pod, uid
-| WHERE phase == 1
-| KEEP Cluster, Namespace, Pod, `CPU req`, `Mem req GiB`
-| SORT `CPU req` DESC NULLS LAST
-| LIMIT 200"""), (30, 71, 18, 14))
-
-    panel("table", "Nodes (averages over the time range)", q(src + """
-| WHERE {alloc_cpu} IS NOT NULL OR {alloc_mem} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
-     OR {node_use_cpu} IS NOT NULL OR {node_use_mem} IS NOT NULL
-| STATS alloc_cpu = MAX({alloc_cpu}), alloc_mem = MAX({alloc_mem}), req_cpu = MAX({req_cpu}),
-        req_mem = MAX({req_mem}), use_cpu = AVG({node_use_cpu}), use_mem = AVG({node_use_mem})
-  BY t = BUCKET(@timestamp, {BUCKETS}, ?_tstart, ?_tend), cluster = {cluster}, node = {node},
-     pod = {pod_uid}, container = {container}
-| WHERE node IS NOT NULL AND node != ""
-| STATS alloc_cpu = SUM(alloc_cpu), alloc_mem = SUM(alloc_mem), req_cpu = SUM(req_cpu), req_mem = SUM(req_mem),
-        use_cpu = SUM(use_cpu), use_mem = SUM(use_mem)
-  BY t, cluster, node
-| STATS `CPU allocatable` = ROUND(AVG(alloc_cpu), 1), `CPU requested` = ROUND(AVG(req_cpu), 2),
-        `CPU used` = ROUND(AVG(use_cpu), 2),
-        `Mem allocatable GiB` = ROUND(AVG(alloc_mem) / {GIB}, 1), `Mem requested GiB` = ROUND(AVG(req_mem) / {GIB}, 1),
-        `Mem used GiB` = ROUND(AVG(use_mem) / {GIB}, 1)
-  BY Cluster = cluster, Node = node
-| EVAL `CPU req %` = ROUND(`CPU requested` / `CPU allocatable` * 100, 0),
-       `Mem req %` = ROUND(`Mem requested GiB` / `Mem allocatable GiB` * 100, 0)
-| KEEP Cluster, Node, `CPU allocatable`, `CPU requested`, `CPU req %`, `CPU used`,
-       `Mem allocatable GiB`, `Mem requested GiB`, `Mem req %`, `Mem used GiB`
-| SORT Cluster, Node
-| LIMIT 1000"""), (0, 85, 48, 10))
 
 
 # ---- "Cluster resource report": the in-cluster dashboard of the chart, on the OTel metrics ----
@@ -561,11 +340,7 @@ COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Fr
 
 
 def build_report_panels(index):
-    _TARGET[0] = REPORT_PANELS
-    try:
-        _build_report_panels(f"FROM {index}")
-    finally:
-        _TARGET[0], _BOARD[0] = PANELS, "as-is"
+    _build_report_panels(f"FROM {index}")
 
 
 # LimitRange maxLimitRequestRatio planned for the "limit <= 2x request" rule (docs/10-implementation-plan.md, 2.1/5.4).
@@ -894,7 +669,7 @@ def saved_objects(index):
         "title": index, "name": "OTel metrics (cluster resources)", "timeFieldName": "@timestamp"},
         "references": [], "managed": False, "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "8.0.0"}
     dashboards = [dashboard_object(did, title, description, board_panels(board), index)
-                  for board, did, title, description in [AS_IS_BOARD] + REPORT_BOARDS if board_panels(board)]
+                  for board, did, title, description in REPORT_BOARDS if board_panels(board)]
     return [data_view] + dashboards
 
 
@@ -929,8 +704,8 @@ def dashboard_object(dashboard_id, title, description, panels, index):
 
 
 def default_out(no_project=False, lookup=False):
-    name = ("cluster-resources-as-is-no-project.ndjson" if no_project else
-            "cluster-resources-as-is-project-names.ndjson" if lookup else "cluster-resources-as-is.ndjson")
+    name = ("cluster-resource-report-no-project.ndjson" if no_project else
+            "cluster-resource-report-project-names.ndjson" if lookup else "cluster-resource-report.ndjson")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
 
 
@@ -957,7 +732,7 @@ def run_checks(url, window, end=None, only=None):
     iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     headers, ctx = es_auth()
     ok = True
-    for p in PANELS + REPORT_PANELS:
+    for p in REPORT_PANELS:
         if not p["esql"]:
             continue
         if only and only not in p["title"]:
@@ -986,7 +761,7 @@ def run_checks(url, window, end=None, only=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--index", default=DEFAULT_INDEX, help=f"index pattern (default {DEFAULT_INDEX})")
-    ap.add_argument("--out", help="output file (default cluster-resources-as-is[-no-project].ndjson here)")
+    ap.add_argument("--out", help="output file (default cluster-resource-report[-no-project].ndjson here)")
     ap.add_argument("--no-project", action="store_true",
                     help=f"leave out the Rancher Project ({F['project']}) when the collector does not set it")
     ap.add_argument("--check", metavar="ES_URL", help="run the panel queries against Elasticsearch instead")
@@ -1011,7 +786,7 @@ def main():
                     help=f"without the dashboard filter that leaves out nodes where {CP_FIELD[0]} is \"true\" "
                          "and the metrics of their pods (also for --check). Needs --out")
     ap.add_argument("--split", action="store_true",
-                    help="one file per dashboard (<out>-as-is.ndjson, -capacity, -projects, -limits), each with the "
+                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -limits), each with the "
                          "data view: smaller uploads, e.g. behind a proxy that limits the request size")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
@@ -1052,7 +827,6 @@ def main():
     if args.rancher_projects:
         PROJECT_NAMES.update(load_rancher_projects(args.rancher_projects))
     out = args.out or default_out(args.no_project, bool(args.project_lookup_index))
-    build_panels(args.index)
     build_report_panels(args.index)
     if args.check:
         sys.exit(0 if run_checks(args.check, args.window, args.end, args.only) else 1)
@@ -1061,7 +835,7 @@ def main():
         write_objects(out, [data_view] + dashboards)
         return
     stem = out[:-len(".ndjson")] if out.endswith(".ndjson") else out
-    boards = {did: board for board, did, _, _ in [AS_IS_BOARD] + REPORT_BOARDS}
+    boards = {did: board for board, did, _, _ in REPORT_BOARDS}
     for d in dashboards:
         write_objects(f"{stem}-{boards[d['id']]}.ndjson", [data_view, d])
 

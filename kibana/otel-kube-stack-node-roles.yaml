@@ -1,11 +1,13 @@
 # Values overlay for the opentelemetry-kube-stack Helm chart (rendered with 0.20.1): RKE2 node role labels on the
-# metrics, so the dashboards can leave out nodes that take no workloads (control-plane/etcd-only nodes).
-# No extra component: a second k8s_attributes processor reads three node labels.
+# metrics, so the dashboards can leave out control-plane nodes. RKE2 sets node-role.kubernetes.io/control-plane=true
+# and etcd=true on server nodes; worker nodes carry no role label (unless Rancher provisioned them).
+# Labels do not show taints: this assumes control-plane nodes are tainted (NoSchedule) and take no workloads.
+# No extra component: a second k8s_attributes processor reads two node labels.
 #
 #   helm upgrade ... -f <your values>.yaml -f otel-kube-stack-values.yaml -f otel-kube-stack-node-roles.yaml
 #
-# Result on node and pod metrics (value "true" when the node has the role):
-#   resource.attributes.k8s.node.role.control_plane / .etcd / .worker
+# Result on node and pod metrics (keyword "true" when the node has the role, missing otherwise):
+#   resource.attributes.k8s.node.role.control_plane / .etcd
 #
 # Why a second processor: on the daemon collector the preset's k8s_attributes only knows its own node
 # (filter.node_from_env_var), but the k8s.node.* metrics of all nodes come from one elected pod (k8s_cluster).
@@ -30,9 +32,6 @@ collectors:
                 from: node
               - tag_name: k8s.node.role.etcd
                 key: node-role.kubernetes.io/etcd
-                from: node
-              - tag_name: k8s.node.role.worker
-                key: node-role.kubernetes.io/worker
                 from: node
       service:
         pipelines:

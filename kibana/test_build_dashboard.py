@@ -31,6 +31,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.PROJECT_NAMES.clear()
         bd.LOOKUP_INDEX[0] = None
         bd.NAME_FIELD[0] = None
+        bd.CP_FIELD[0] = None
 
     def generated(self):
         return "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in bd.saved_objects(bd.DEFAULT_INDEX))
@@ -196,6 +197,22 @@ class BuildDashboardTest(unittest.TestCase):
         self.check_dashboard(bd.saved_objects(bd.DEFAULT_INDEX)[2], bd.REPORT_PANELS)
         self.without_project()
         self.assertNotIn("rancher.project", self.generated())
+
+    def test_exclude_control_plane(self):
+        bd.CP_FIELD[0] = bd.DEFAULT_CP_FIELD
+        self.rebuild()
+        field = bd.DEFAULT_CP_FIELD
+        drop = f'| WHERE {field} IS NULL OR {field} != "true"'
+        nodes = next(p for p in bd.PANELS if p["title"].startswith("Nodes"))
+        for p in bd.PANELS + bd.REPORT_PANELS:
+            if p["esql"] and p is not nodes:
+                self.assertEqual(p["esql"].splitlines()[1], drop, p["title"])
+        self.assertNotIn(drop, nodes["esql"])  # every node, with its role
+        self.assertEqual(bd.table_columns(nodes["esql"])[:3], ["Cluster", "Node", "Role"])
+        self.assertIn('Role = CASE(cp == "true", "control plane", "worker")', nodes["esql"])
+        for dashboard, source in zip(bd.saved_objects(bd.DEFAULT_INDEX)[1:], (bd.PANELS, bd.REPORT_PANELS)):
+            self.check_dashboard(dashboard, source)
+        self.assertIn("Control-plane nodes", bd.REPORT_PANELS[0]["markdown"])
 
     def test_collector_values(self):
         names = {"p-bbjk7": "payments", "p-9z9dv": 'Sys "tem" $x'}

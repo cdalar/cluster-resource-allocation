@@ -23,6 +23,9 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --no-quota --no-hpa --out no-quota-hpa.ndjson
       # no cluster has a ResourceQuota / HorizontalPodAutoscaler yet, so Elasticsearch has no such fields
       # ("Unknown column [metrics.k8s.resource_quota.hard_limit]"); the Quota / HPA columns then show 0
+  ./build_dashboard.py --exclude-control-plane --out workers-only.ndjson
+      # leave control-plane nodes and the pods on them out of allocatable, requests, usage, node count and N+1
+      # (resource.attributes.k8s.node.role.control_plane = "true", set by the collector: otel-kube-stack-node-roles.yaml)
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -113,6 +116,15 @@ def q(text):
                                     name_agg=name_agg(False))
 
 
+def from_stage(index):
+    """FROM, and with --exclude-control-plane the filter that drops control-plane nodes and their pods' metrics.
+    Documents without the field (namespaces, quotas, pending pods, workers) stay."""
+    src = f"FROM {index}"
+    if CP_FIELD[0]:
+        src += f'\n| WHERE {CP_FIELD[0]} IS NULL OR {CP_FIELD[0]} != "true"'
+    return src
+
+
 # Common first stage: one row per time bucket and entity (container, pod or node), holding that entity's
 # value in the bucket. Each OTel metric unit is a separate document, so values are aggregated per entity
 # before they are summed; summing raw documents would count every scrape.
@@ -177,7 +189,9 @@ def panel(kind, title, esql, grid, **opts):
 
 
 def build_panels(index):
-    src = f"FROM {index}"
+    src = from_stage(index)
+    cp_note = (" Control-plane nodes and the pods on them are left out (the Nodes table lists them)."
+               if CP_FIELD[0] else "")
 
     panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
         "**As-is view of cluster resources**: allocatable, requested (what the scheduler reserves), limited "
@@ -185,7 +199,7 @@ def build_panels(index):
         "metrics in Elastic. No quotas exist yet: this is the baseline for the allocation model.\n\n"
         "Averages and peaks are over the selected time range (in ~60 buckets). *Efficiency* = P95 usage / "
         "average requests. *(no project)* = namespace without the `field.cattle.io/projectId` label "
-        "(system or unassigned). Filter with the controls above. "
+        f"(system or unassigned).{cp_note} Filter with the controls above. "
         "Docs: `guides/kibana-dashboard.md` in cluster-resource-allocation."))
 
     # The value column name is shown under the tile title.
@@ -305,28 +319,32 @@ def build_panels(index):
 | SORT `CPU req` DESC NULLS LAST
 | LIMIT 200"""), (30, 71, 18, 14))
 
-    panel("table", "Nodes (averages over the time range)", q(src + """
+    cp = CP_FIELD[0]
+    role = (("", "", "", "", "") if not cp else
+            (f", cp = MAX({cp})", ", cp = MAX(cp)", ", cp = MAX(cp)",
+             '\n| EVAL Role = CASE(cp == "true", "control plane", "worker")', " Role,"))
+    panel("table", "Nodes (averages over the time range)", q(f"FROM {index}" + """
 | WHERE {alloc_cpu} IS NOT NULL OR {alloc_mem} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
      OR {node_use_cpu} IS NOT NULL OR {node_use_mem} IS NOT NULL
 | STATS alloc_cpu = MAX({alloc_cpu}), alloc_mem = MAX({alloc_mem}), req_cpu = MAX({req_cpu}),
-        req_mem = MAX({req_mem}), use_cpu = AVG({node_use_cpu}), use_mem = AVG({node_use_mem})
+        req_mem = MAX({req_mem}), use_cpu = AVG({node_use_cpu}), use_mem = AVG({node_use_mem})%s
   BY t = BUCKET(@timestamp, {BUCKETS}, ?_tstart, ?_tend), cluster = {cluster}, node = {node},
      pod = {pod_uid}, container = {container}
 | WHERE node IS NOT NULL AND node != ""
 | STATS alloc_cpu = SUM(alloc_cpu), alloc_mem = SUM(alloc_mem), req_cpu = SUM(req_cpu), req_mem = SUM(req_mem),
-        use_cpu = SUM(use_cpu), use_mem = SUM(use_mem)
+        use_cpu = SUM(use_cpu), use_mem = SUM(use_mem)%s
   BY t, cluster, node
 | STATS `CPU allocatable` = ROUND(AVG(alloc_cpu), 1), `CPU requested` = ROUND(AVG(req_cpu), 2),
         `CPU used` = ROUND(AVG(use_cpu), 2),
         `Mem allocatable GiB` = ROUND(AVG(alloc_mem) / {GIB}, 1), `Mem requested GiB` = ROUND(AVG(req_mem) / {GIB}, 1),
-        `Mem used GiB` = ROUND(AVG(use_mem) / {GIB}, 1)
-  BY Cluster = cluster, Node = node
-| EVAL `CPU req %` = ROUND(`CPU requested` / `CPU allocatable` * 100, 0),
-       `Mem req %` = ROUND(`Mem requested GiB` / `Mem allocatable GiB` * 100, 0)
-| KEEP Cluster, Node, `CPU allocatable`, `CPU requested`, `CPU req %`, `CPU used`,
-       `Mem allocatable GiB`, `Mem requested GiB`, `Mem req %`, `Mem used GiB`
+        `Mem used GiB` = ROUND(AVG(use_mem) / {GIB}, 1)%s
+  BY Cluster = cluster, Node = node%s
+| EVAL `CPU req %%` = ROUND(`CPU requested` / `CPU allocatable` * 100, 0),
+       `Mem req %%` = ROUND(`Mem requested GiB` / `Mem allocatable GiB` * 100, 0)
+| KEEP Cluster, Node,%s `CPU allocatable`, `CPU requested`, `CPU req %%`, `CPU used`,
+       `Mem allocatable GiB`, `Mem requested GiB`, `Mem req %%`, `Mem used GiB`
 | SORT Cluster, Node
-| LIMIT 1000"""), (0, 85, 48, 10))
+| LIMIT 1000""" % role), (0, 85, 48, 10))
 
 
 # ---- "Cluster resource report": the in-cluster dashboard of the chart, on the OTel metrics ----
@@ -354,6 +372,11 @@ INDEX_NAME_RE = r"[a-z0-9][a-z0-9._-]*"
 NAME_FIELD = [None]
 DEFAULT_NAME_FIELD = "resource.attributes.rancher.project.name"
 FIELD_NAME_RE = r"[A-Za-z_@][A-Za-z0-9_@]*(\.[A-Za-z_@][A-Za-z0-9_@]*)*"
+# Node role field from --exclude-control-plane: "true" on control-plane nodes and on the metrics of their pods (the
+# collector copies the RKE2 node label node-role.kubernetes.io/control-plane). Those nodes take no workloads, so
+# they are left out of capacity; the Nodes table still lists them, with a Role column.
+CP_FIELD = [None]
+DEFAULT_CP_FIELD = "resource.attributes.k8s.node.role.control_plane"
 NOW_WINDOW = "10 minutes"  # "now" values (pods, pending, standards) = the last 10 minutes of the time range
 
 
@@ -520,7 +543,7 @@ COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Fr
 def build_report_panels(index):
     _TARGET[0] = REPORT_PANELS
     try:
-        _build_report_panels(f"FROM {index}")
+        _build_report_panels(from_stage(index))
     finally:
         _TARGET[0] = PANELS
 
@@ -536,7 +559,8 @@ def _build_report_panels(src):
         "OpenTelemetry metrics. *Requested* = requests of running pods (averaged over the time range); *used* = "
         f"P95 over the time range; tiles marked *now* and the pod and standards columns = the last {NOW_WINDOW} "
         "of the range. *N+1*: allocatable − largest node − platform (System) requests = room for projects. "
-        f"{names} Docs: `guides/kibana-dashboard.md`."))
+        + ("Control-plane nodes and the pods on them are left out. " if CP_FIELD[0] else "")
+        + f"{names} Docs: `guides/kibana-dashboard.md`."))
 
     summary = base + REPORT_CLUSTER
     # (label, value, secondary label, secondary value, bar): the label names the value, so the panel title is
@@ -885,6 +909,11 @@ def main():
                          "the field does not exist. Needs --out")
     ap.add_argument("--no-hpa", action="store_true",
                     help=f"the same for the HorizontalPodAutoscaler metric ({F['hpa_max']})")
+    ap.add_argument("--exclude-control-plane", metavar="FIELD", nargs="?", const=DEFAULT_CP_FIELD,
+                    help=f"leave out nodes whose role field (default {DEFAULT_CP_FIELD}) is \"true\", and the "
+                         "metrics of their pods: allocatable, requests, usage, node count and N+1 cover the "
+                         "workers only (otel-kube-stack-node-roles.yaml sets the field). Every panel fails while "
+                         "no index has the field. Needs --out")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
                          "collector sets (build_collector_values.py). The Project filter control then lists names. "
@@ -900,6 +929,12 @@ def main():
         if not args.out and not args.check:
             ap.error("--project-name-field needs --out (the committed files are generated without it)")
         NAME_FIELD[0] = args.project_name_field
+    if args.exclude_control_plane:
+        if not re.fullmatch(FIELD_NAME_RE, args.exclude_control_plane):
+            ap.error(f"--exclude-control-plane: not a field name: {args.exclude_control_plane}")
+        if not args.out and not args.check:
+            ap.error("--exclude-control-plane needs --out (the committed files are generated without it)")
+        CP_FIELD[0] = args.exclude_control_plane
     if args.project_lookup_index:
         if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
             ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")

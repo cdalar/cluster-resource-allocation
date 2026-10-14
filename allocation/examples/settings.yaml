@@ -9,29 +9,19 @@ environments:
   dev:
     memoryLimitFactor: 2
 
-# Defaults for containers without requests/limits (LimitRange), unless a project sets its own
+# Defaults for containers without requests/limits (LimitRange in every namespace), unless a project sets its own
 containerDefault:
   cpu: 100m
   memory: 256Mi               # request; the limit is memory x memoryLimitFactor
 
-clusters:
-  onprem-prod-01:
-    id: c-m-abcd1234          # Rancher cluster ID (or pass --rancher-clusters clusters.json)
+clusters:                     # name = the kubeconfig context / directory under build/
+  prod-01:
     env: prod
-    managedBy: rancher        # quota on the Rancher Project; Rancher writes ResourceQuota/LimitRange per namespace
-    capacity:                 # what may be allocated to projects: after N+1, platform and headroom (the planner shows it)
+    capacity:                 # what may be allocated in total: after N+1, platform and headroom (optional)
       cpu: 94.5
       memory: 372Gi
-  onprem-test-01:
-    id: c-m-efgh5678
+  test-01:
     env: test
-    managedBy: rancher
     capacity:
       cpu: 60
       memory: 240Gi
-  aks-prod-weu:
-    env: prod
-    managedBy: kubernetes     # not in Rancher: ResourceQuota + LimitRange per namespace, listed in the project file
-    capacity:
-      cpu: 32
-      memory: 128Gi

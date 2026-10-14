@@ -1,20 +1,29 @@
-# allocations/projects/payments.yaml: one file per Rancher Project. Changes go by pull request.
-project: payments             # Rancher Project display name (the same name on every cluster)
+# allocations/projects/payments.yaml: one file per project. Changes go by pull request.
+project: payments
 owners: [payments-lead@corp.example]
 allocations:
-  - cluster: onprem-prod-01
-    cpu: 40                   # vCPU: requests.cpu of the whole Project on this cluster
-    memory: 160Gi             # requests.memory; limits.memory = memory x memoryLimitFactor of the environment
-    pods: 300                 # optional
-    namespaceDefault:         # quota every namespace of the Project gets (Rancher needs it); the sum stays <= the Project
-      cpu: 10
-      memory: 40Gi
-  - cluster: onprem-test-01
-    cpu: 12
-    memory: 48Gi
-    namespaceDefault:
+  - cluster: prod-01
+    cpu: 40                   # optional total for the project: its namespaces must fit in it
+    memory: 160Gi
+    namespaces:               # each gets a ResourceQuota with these numbers
+      - name: payments-api
+        cpu: 24               # vCPU: requests.cpu
+        memory: 96Gi          # requests.memory; limits.memory = memory x memoryLimitFactor (prod: equal)
+        pods: 200             # optional
+      - name: payments-worker
+        cpu: 16
+        memory: 64Gi
+  - cluster: test-01
+    namespaceDefault:         # for namespaces listed without numbers
       cpu: 4
       memory: 16Gi
     containerDefault:         # optional: other container defaults than settings.yaml
       cpu: 50m
       memory: 128Mi
+    namespaces:
+      - name: payments-api
+      - name: payments-worker
+      - name: payments-e2e
+        cpu: 2
+        memory: 8Gi
+        memoryLimit: 12Gi     # optional; at most memory x memoryLimitFactor (test: 2x)

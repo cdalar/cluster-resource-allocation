@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
-"""Generate the Kubernetes resources for the CPU and memory allocations in an allocations directory.
+"""Generate the Kubernetes ResourceQuotas and LimitRanges for the CPU and memory allocations in an allocations directory.
 
 Input (docs/04, "Allocation as code"), kept in Git and changed by pull request:
 
-  allocations/settings.yaml          clusters (Rancher ID, environment, managedBy, capacity), environment rules,
-                                     container defaults
-  allocations/projects/<name>.yaml   one Rancher Project: per cluster its vCPU and memory, namespace default,
-                                     optional container defaults (and, on clusters without Rancher, its namespaces)
+  allocations/settings.yaml          clusters (environment, capacity), environment rules, container defaults
+  allocations/projects/<name>.yaml   one project: per cluster its namespaces with vCPU and memory, optionally a
+                                     total for the project and its own container defaults
 
-Output, one file per object group under --out:
-
-  rancher/<cluster>/<project>.yaml       Rancher Project (management.cattle.io/v3) with the Project quota, the
-                                         namespace default quota and the container defaults; apply on the Rancher
-                                         local cluster. Rancher writes a ResourceQuota and a LimitRange into every
-                                         namespace of the Project.
-  kubernetes/<cluster>/<namespace>.yaml  ResourceQuota + LimitRange, for clusters with managedBy: kubernetes (not in
-                                         Rancher); apply on that cluster.
+Output, one file per namespace under --out: <cluster>/<namespace>.yaml with a ResourceQuota (requests.cpu,
+requests.memory, limits.memory, pods) and a LimitRange (defaults for containers without requests/limits). Apply each
+cluster's directory on that cluster. Plain Kubernetes: no Rancher objects.
 
 Checks (exit status 1 on any error, so CI can run it on every pull request):
   - required fields, known clusters, valid quantities, one entry per project and cluster
   - limits.memory <= requests.memory x memoryLimitFactor of the environment (1 in prod)
-  - namespace default <= the project quota; listed namespaces add up to <= the project quota
-  - per cluster: all projects together <= the cluster's capacity
+  - a namespace belongs to one project only; the namespaces fit in the project's total, if it has one
+  - per cluster: all namespaces together <= the cluster's capacity
 
-  ./generate.py examples --check                       # checks only (CI on pull requests)
-  ./generate.py examples --out build --rancher-projects projects.json
-      # projects.json: kubectl get projects.management.cattle.io -A -o json (Rancher local cluster), for the
-      # Project IDs; or set projectId per allocation
-  kubectl --context <rancher-local> apply --server-side --field-manager=allocations -f build/rancher/ -R
-  kubectl --context <aks-cluster> apply --server-side --field-manager=allocations -f build/kubernetes/<cluster>/
+  ./generate.py examples --check                 # checks only (CI on pull requests)
+  ./generate.py examples --out build             # writes build/<cluster>/<namespace>.yaml
+  kubectl --context <cluster> apply --server-side --field-manager=allocations -f build/<cluster>/
 
 Reads YAML in the block style of the examples (maps, lists, [a, b] lists, comments, quoted strings); standard
 library only, like the other tools in this repository. Writes nothing to any cluster.
@@ -230,11 +221,6 @@ def mem_str(b):
     return str(b)
 
 
-def mem_mi(b):
-    """Rancher's quota format: memory in Mi (rounded up)."""
-    return f"{-(-b // MEM_UNITS['Mi'])}Mi"
-
-
 def fmt_cpu(mc):
     return f"{mc / 1000:g}"
 
@@ -322,7 +308,7 @@ def load_dir(path, ck):
 
 
 def build_model(settings, projects, ck):
-    """Validate everything; returns the clusters and the per-project allocations with numbers."""
+    """Validate everything; returns the clusters, the per-project allocations with numbers, and the totals."""
     envs = settings.get("environments") or {}
     clusters = {}
     for cname, c in (settings.get("clusters") or {}).items():
@@ -336,22 +322,16 @@ def build_model(settings, projects, ck):
         if not isinstance(factor, (int, float)) or factor < 1:
             ck.error(f"settings.yaml: environments.{env}.memoryLimitFactor must be a number >= 1")
             factor = 1
-        managed = c.get("managedBy", "rancher")
-        if managed not in ("rancher", "kubernetes"):
-            ck.error(f"{where}: managedBy must be rancher or kubernetes, not {managed!r}")
-        cap = None
-        if c.get("capacity") is not None:
-            cap = resources(c["capacity"], f"{where}.capacity", 1, ck)
-        clusters[cname] = {"name": cname, "id": c.get("id"), "env": env, "factor": factor, "managedBy": managed,
-                           "capacity": cap}
+        cap = resources(c["capacity"], f"{where}.capacity", 1, ck) if c.get("capacity") is not None else None
+        clusters[cname] = {"name": cname, "env": env, "factor": factor, "capacity": cap}
     if not clusters:
         ck.error("settings.yaml: no clusters")
     default_cd = settings.get("containerDefault")
 
-    allocs, seen = [], {}
+    allocs, seen, owner = [], {}, {}
     for file, p in projects:
         if not isinstance(p, dict) or not isinstance(p.get("project"), str) or not p["project"].strip():
-            ck.error(f"{file}: needs 'project: <Rancher Project name>'")
+            ck.error(f"{file}: needs 'project: <name>'")
             continue
         pname = p["project"]
         if pname in seen:
@@ -376,121 +356,65 @@ def build_model(settings, projects, ck):
                 ck.error(f"{where}: listed twice")
                 continue
             done.add(c["name"])
-            total = resources(a, where, c["factor"], ck)
-            nsd = resources(a.get("namespaceDefault"), f"{where}: namespaceDefault", c["factor"], ck,
-                            required=c["managedBy"] == "rancher") if (
-                a.get("namespaceDefault") is not None or c["managedBy"] == "rancher") else None
-            cd = resources(a.get("containerDefault") or default_cd, f"{where}: containerDefault", c["factor"], ck,
-                           required=False) if (a.get("containerDefault") or default_cd) else None
-            namespaces = []
-            if a.get("namespaces") is not None:
-                if c["managedBy"] != "kubernetes":
-                    ck.error(f"{where}: namespaces are only listed for managedBy: kubernetes clusters; in Rancher "
-                             "the Project owner splits the quota over the namespaces")
-                else:
-                    for k, ns in enumerate(a["namespaces"] or []):
-                        nwhere = f"{where}: namespaces[{k}]"
-                        if not isinstance(ns, dict) or not ns.get("name"):
-                            ck.error(f"{nwhere}: needs a name")
-                            continue
-                        own = resources(ns, f"{where}: namespace {ns['name']}", c["factor"], ck, required=False)
-                        if own is None and ns.get("cpu") is None and ns.get("memory") is None:
-                            if nsd is None:
-                                ck.error(f"{where}: namespace {ns['name']} has no cpu/memory and there is no "
-                                         "namespaceDefault")
-                                continue
-                            own = nsd
-                        if own is not None:
-                            namespaces.append((ns["name"], own))
-            elif c["managedBy"] == "kubernetes":
-                ck.error(f"{where}: list the namespaces (managedBy: kubernetes has no Rancher Project to hold them)")
-            if total is None:
+            has_total = a.get("cpu") is not None or a.get("memory") is not None or a.get("quota") is not None
+            total = resources(a, where, c["factor"], ck) if has_total else None
+            nsd = (resources(a["namespaceDefault"], f"{where}: namespaceDefault", c["factor"], ck)
+                   if a.get("namespaceDefault") is not None else None)
+            cd_spec = a.get("containerDefault") or default_cd
+            cd = resources(cd_spec, f"{where}: containerDefault", c["factor"], ck, required=False) if cd_spec else None
+            if not a.get("namespaces"):
+                ck.error(f"{where}: list its namespaces (each gets a ResourceQuota)")
                 continue
-            if nsd is not None:
-                for k in ("cpu", "memory", "memoryLimit"):
-                    if nsd[k] > total[k]:
-                        ck.error(f"{where}: namespaceDefault {k} is above the project's")
-            if namespaces:
+            namespaces = []
+            for k, ns in enumerate(a["namespaces"]):
+                if not isinstance(ns, dict) or not ns.get("name"):
+                    ck.error(f"{where}: namespaces[{k}] needs a name")
+                    continue
+                nwhere = f"{where}: namespace {ns['name']}"
+                key = (c["name"], ns["name"])
+                if key in owner:
+                    ck.error(f"{nwhere}: already allocated to {owner[key]}")
+                    continue
+                owner[key] = pname
+                if ns.get("cpu") is None and ns.get("memory") is None:
+                    if nsd is None:
+                        ck.error(f"{nwhere}: no cpu/memory and no namespaceDefault")
+                        continue
+                    own = dict(nsd)
+                    if ns.get("pods") is not None:
+                        own["pods"] = int(ns["pods"])
+                else:
+                    own = resources(ns, nwhere, c["factor"], ck)
+                if own is not None:
+                    namespaces.append((ns["name"], own))
+            if total is not None and namespaces:
                 for k, show in (("cpu", fmt_cpu), ("memory", fmt_mem), ("memoryLimit", fmt_mem)):
                     used = sum(q[k] for _, q in namespaces)
                     if used > total[k]:
                         ck.error(f"{where}: the namespaces add up to {show(used)} {k}, above the project's "
                                  f"{show(total[k])}")
-            allocs.append({"project": pname, "cluster": c, "total": total, "nsDefault": nsd, "containerDefault": cd,
-                           "namespaces": namespaces, "projectId": a.get("projectId"), "file": file})
+            allocs.append({"project": pname, "cluster": c, "total": total, "containerDefault": cd,
+                           "namespaces": namespaces, "file": file})
 
     usage = {}
     for a in allocs:
         u = usage.setdefault(a["cluster"]["name"], {"cpu": 0, "memory": 0})
-        u["cpu"] += a["total"]["cpu"]
-        u["memory"] += a["total"]["memory"]
+        for _, q in a["namespaces"]:
+            u["cpu"] += q["cpu"]
+            u["memory"] += q["memory"]
     for cname, u in usage.items():
         cap = clusters[cname]["capacity"]
         if cap is None:
-            ck.warn(f"{cname}: no capacity in settings.yaml, so the sum of the projects is not checked")
+            ck.warn(f"{cname}: no capacity in settings.yaml, so the sum of the namespaces is not checked")
             continue
         for k, show in (("cpu", fmt_cpu), ("memory", fmt_mem)):
             if u[k] > cap[k]:
-                ck.error(f"{cname}: projects get {show(u[k])} {k} in total, above its capacity of {show(cap[k])}")
+                ck.error(f"{cname}: the namespaces get {show(u[k])} {k} in total, above its capacity of "
+                         f"{show(cap[k])}")
     return clusters, allocs, usage
 
 
-# ---- Rancher IDs ----
-
-def rancher_ids(projects_json, clusters_json):
-    """(cluster ID, Project display name) -> Project ID, and cluster display name -> cluster ID."""
-    pids, cids = {}, {}
-    for it in (projects_json or {}).get("items", []):
-        meta, spec = it["metadata"], it.get("spec") or {}
-        pids[(spec.get("clusterName") or meta.get("namespace"), spec.get("displayName") or meta["name"])] = meta["name"]
-    for it in (clusters_json or {}).get("items", []):
-        cids[(it.get("spec") or {}).get("displayName") or it["metadata"]["name"]] = it["metadata"]["name"]
-    return pids, cids
-
-
-def resolve(allocs, pids, cids, ck):
-    for a in allocs:
-        c = a["cluster"]
-        if c["managedBy"] != "rancher":
-            continue
-        cid = c["id"] or cids.get(c["name"])
-        if not cid:
-            ck.error(f"{c['name']}: no Rancher cluster ID (set id in settings.yaml or pass --rancher-clusters)")
-            continue
-        a["clusterId"] = cid
-        pid = a["projectId"] or pids.get((cid, a["project"]))
-        if not pid:
-            ck.error(f"{a['file']}: Rancher has no Project {a['project']} on {c['name']} ({cid}): create it in "
-                     "Rancher first, set projectId, or pass --rancher-projects")
-            continue
-        a["projectId"] = pid
-
-
 # ---- output ----
-
-def rancher_quota(q):
-    out = {"requestsCpu": f"{q['cpu']}m", "requestsMemory": mem_mi(q["memory"]),
-           "limitsMemory": mem_mi(q["memoryLimit"])}
-    if "pods" in q:
-        out["pods"] = str(q["pods"])
-    return out
-
-
-def rancher_project(a):
-    """Rancher Project with the allocation; only the fields this tool owns besides the identity (server-side apply
-    with its own field manager leaves the rest to Rancher)."""
-    spec = {"clusterName": a["clusterId"], "displayName": a["project"],
-            "resourceQuota": {"limit": rancher_quota(a["total"])},
-            "namespaceDefaultResourceQuota": {"limit": rancher_quota(a["nsDefault"])}}
-    if a["containerDefault"]:
-        cd = a["containerDefault"]
-        spec["containerDefaultResourceLimit"] = {"requestsCpu": f"{cd['cpu']}m", "requestsMemory": mem_mi(cd["memory"]),
-                                                 "limitsMemory": mem_mi(cd["memoryLimit"])}
-    return {"apiVersion": "management.cattle.io/v3", "kind": "Project",
-            "metadata": {"name": a["projectId"], "namespace": a["clusterId"],
-                         "labels": {"allocation.cluster-resource-allocation/managed": "true"}},
-            "spec": spec}
-
 
 LABELS = "allocation.cluster-resource-allocation/"
 
@@ -549,25 +473,23 @@ def _ystr(s):
 
 
 def manifests(allocs):
-    """{relative path: YAML text}"""
+    """{relative path: YAML text}: <cluster>/<namespace>.yaml"""
+    header = "# Generated by allocation/generate.py from the allocations in Git. Do not edit; change the allocation.\n"
     files = {}
     for a in allocs:
-        c = a["cluster"]
-        if c["managedBy"] == "rancher":
-            if a.get("projectId") and a.get("clusterId"):
-                files[f"rancher/{c['name']}/{a['project']}.yaml"] = [rancher_project(a)]
-        else:
-            for ns, q in a["namespaces"]:
-                files[f"kubernetes/{c['name']}/{ns}.yaml"] = namespace_objects(a, ns, q)
-    header = "# Generated by allocation/generate.py from the allocations in Git. Do not edit; change the allocation.\n"
-    return {path: header + "".join("---\n" + to_yaml(o) + "\n" for o in objs) for path, objs in files.items()}
+        for ns, q in a["namespaces"]:
+            objs = namespace_objects(a, ns, q)
+            files[f"{a['cluster']['name']}/{ns}.yaml"] = header + "".join("---\n" + to_yaml(o) + "\n" for o in objs)
+    return files
 
 
 def summary(clusters, allocs, usage):
-    lines = ["cluster              env    project                  vCPU      memory"]
+    lines = ["cluster              env    project                namespaces    vCPU      memory"]
     for a in sorted(allocs, key=lambda a: (a["cluster"]["name"], a["project"])):
+        cpu = sum(q["cpu"] for _, q in a["namespaces"])
+        mem = sum(q["memory"] for _, q in a["namespaces"])
         lines.append(f"{a['cluster']['name']:<20} {a['cluster']['env']:<6} {a['project']:<22} "
-                     f"{fmt_cpu(a['total']['cpu']):>6}  {fmt_mem(a['total']['memory']):>10}")
+                     f"{len(a['namespaces']):>10}  {fmt_cpu(cpu):>6}  {fmt_mem(mem):>10}")
     lines.append("")
     lines.append("cluster              allocated vCPU / capacity      allocated memory / capacity")
     for cname in sorted(usage):
@@ -581,27 +503,13 @@ def summary(clusters, allocs, usage):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("allocations", help="directory with settings.yaml and projects/*.yaml")
-    ap.add_argument("--out", default="build", help="output directory (default build); its rancher/ and kubernetes/ "
-                                                    "subdirectories are replaced")
+    ap.add_argument("--out", default="build", help="output directory (default build); the generated YAML files in "
+                                                    "it are replaced")
     ap.add_argument("--check", action="store_true", help="validate only, write nothing (for pull requests)")
-    ap.add_argument("--rancher-projects", metavar="FILE",
-                    help="kubectl get projects.management.cattle.io -A -o json (Rancher local cluster): Project IDs")
-    ap.add_argument("--rancher-clusters", metavar="FILE",
-                    help="kubectl get clusters.management.cattle.io -o json: cluster IDs by name, where settings.yaml "
-                         "has no id")
     args = ap.parse_args(argv)
     ck = Checker()
     settings, projects = load_dir(args.allocations, ck)
     clusters, allocs, usage = build_model(settings, projects, ck) if not ck.errors else ({}, [], {})
-    if not args.check and not ck.errors:
-        loaded = []
-        for f in (args.rancher_projects, args.rancher_clusters):
-            try:
-                loaded.append(json.load(open(f)) if f else None)
-            except (OSError, ValueError) as e:
-                ck.error(f"{f}: {e}")
-        if not ck.errors:
-            resolve(allocs, *rancher_ids(*loaded), ck)
     if allocs:
         print(summary(clusters, allocs, usage))
     for w in ck.warnings:
@@ -615,15 +523,17 @@ def main(argv=None):
         print("\nall checks passed")
         return 0
     files = manifests(allocs)
-    for sub in ("rancher", "kubernetes"):
-        root = os.path.join(args.out, sub)
-        if os.path.isdir(root):  # only what this tool wrote before: generated YAML files
-            for dirpath, _, names in os.walk(root, topdown=False):
-                for n in names:
-                    if n.endswith(".yaml"):
-                        os.remove(os.path.join(dirpath, n))
-                if not os.listdir(dirpath):
-                    os.rmdir(dirpath)
+    if os.path.isdir(args.out):  # remove what an earlier run wrote: generated YAML only
+        for dirpath, _, names in os.walk(args.out, topdown=False):
+            for n in names:
+                full = os.path.join(dirpath, n)
+                if n.endswith(".yaml"):
+                    with open(full) as f:
+                        generated = f.readline().startswith("# Generated by allocation/generate.py")
+                    if generated:
+                        os.remove(full)
+            if dirpath != args.out and not os.listdir(dirpath):
+                os.rmdir(dirpath)
     for path, text in sorted(files.items()):
         full = os.path.join(args.out, path)
         os.makedirs(os.path.dirname(full), exist_ok=True)

@@ -63,6 +63,7 @@ The second dashboard in the same file, *Cluster resource report*, follows the in
 | N+1 table | Nodes; allocatable − largest node − platform = for projects; projects request; left; fits | The N+1 note |
 | CPU / Memory by project | Top 15 projects by requests (without System), requested vs used (P95) | Same charts |
 | Projects, Namespaces | Requests, P95 use, efficiency, peak, memory limits, pods, pending, no CPU request, no memory limit, BestEffort; namespaces also quota and HPA counts | Same columns (LimitRange isn't in the metrics) |
+| Workloads vs. limit ≤ 2× request | Every Deployment, StatefulSet, DaemonSet, CronJob, Job and bare Pod (now), problems first: what a LimitRange `maxLimitRequestRatio: 2` ([10](../docs/10-implementation-plan.md), steps 2.1 and 5.4) would reject at the next pod creation, per resource. A container breaks it with limit > 2× request, or with a request but no limit (unless the LimitRange sets a default limit); without a request Kubernetes sets the request to the limit, so a limit alone passes. Columns: status, worst ratio and problems for memory and CPU, the containers affected, pods, containers, requests. Kind and name come from `k8s.deployment.name`, `k8s.statefulset.name`, `k8s.daemonset.name`, `k8s.job.name` (k8sattributes; a CronJob is its Job's name without the timestamp). The CPU column flags every container without a CPU limit: only relevant if the ratio is set for CPU too ([ADR-0003](../docs/adr/0003-cpu-limits.md) keeps CPU limits optional) | — (new) |
 
 Definitions, where they differ from the as-is dashboard:
 

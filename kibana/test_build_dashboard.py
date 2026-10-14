@@ -218,6 +218,18 @@ class BuildDashboardTest(unittest.TestCase):
         self.rebuild()
         self.assertNotIn("Control-plane", bd.REPORT_PANELS[0]["markdown"])
 
+    def test_workload_ratio_table(self):
+        p = bd.REPORT_PANELS[-1]
+        self.assertTrue(p["title"].startswith("Workloads vs. limit ≤ 2× request"))
+        self.assertEqual(bd.table_columns(p["esql"])[:7],
+                         ["Cluster", "Namespace", "Project", "Category", "Kind", "Workload", "Status"])
+        q = p["esql"]
+        self.assertIn("cpu_ratio > 2,", q)
+        self.assertIn("mem_ratio > 2,", q)
+        self.assertIn('"CronJob"', q)
+        self.assertIn("| EVAL pname = project", q)  # names patched in like the other report tables
+        self.assertIn("@timestamp >= TO_DATETIME(?_tend) - 10 minutes", q)
+
     def test_collector_values(self):
         names = {"p-bbjk7": "payments", "p-9z9dv": 'Sys "tem" $x'}
         self.assertEqual(bcv.statements(names), [

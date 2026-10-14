@@ -4,17 +4,31 @@
 environments:
   prod:
     memoryLimitFactor: 1      # limits.memory = requests.memory (S3, docs/02)
+    nodeFailures: 1           # --discover: capacity leaves out the N largest nodes (N+1)
+    maxQuotaPercent: 80       # --discover: share of what is left that may be allocated (rollouts, peaks)
   test:
     memoryLimitFactor: 2      # limits.memory up to 2x requests.memory
+    nodeFailures: 0
+    maxQuotaPercent: 100
   dev:
     memoryLimitFactor: 2
+    nodeFailures: 0
+    maxQuotaPercent: 150      # overcommit: capacity not guaranteed
+
+# --discover: which nodes count as capacity and which namespaces are platform (their requests are subtracted).
+# These are the defaults; leave the section out to use them.
+discovery:
+  skipCordoned: true
+  skipTaintEffects: [NoSchedule, NoExecute]   # tainted nodes (e.g. control-plane) take no ordinary workloads
+  skipNodeLabels: []          # e.g. [node-role.kubernetes.io/control-plane] if those nodes are not tainted
+  systemNamespaces: "^(kube-.*|cattle-.*|fleet-.*|rancher-.*|calico-.*|tigera-.*|kyverno|cert-manager|otel|monitoring|local|p-[a-z0-9]{5}|local-p-[a-z0-9]{5}|c-[a-z0-9-]+|u-[a-z0-9]+|user-[a-z0-9]+|rook-.*|openebs.*|csi-.*|.*-csi.*|.*provisioner.*|.*storage.*|.*system.*|.*ingress.*)$"
 
 # Defaults for containers without requests/limits (LimitRange in every namespace), unless a project sets its own
 containerDefault:
   cpu: 100m
   memory: 256Mi               # request; the limit is memory x memoryLimitFactor
 
-clusters:                     # name = the kubeconfig context / directory under build/
+clusters:                     # name = the kubeconfig context / directory under build/; --discover rewrites them
   prod-01:
     env: prod
     capacity:                 # what may be allocated in total: after N+1, platform and headroom (optional)

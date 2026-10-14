@@ -21,9 +21,13 @@ allocations/                       (sample: allocation/examples/)
 | Key | Meaning |
 |---|---|
 | `environments.<env>.memoryLimitFactor` | `limits.memory` = `requests.memory` × factor: 1 in prod (S3), up to 2 elsewhere |
+| `environments.<env>.nodeFailures` | `--discover`: the N largest nodes are left out of capacity (prod: 1 = N+1; default 0) |
+| `environments.<env>.maxQuotaPercent` | `--discover`: share of what is left that may be allocated (prod 80, test 100, dev 150; default 100) |
+| `discovery.skipCordoned`, `.skipTaintEffects`, `.skipNodeLabels` | `--discover`: nodes that don't count as capacity. Default: cordoned nodes and nodes with a `NoSchedule` or `NoExecute` taint (control-plane), no labels |
+| `discovery.systemNamespaces` | `--discover`: platform namespaces (regex); their pods' requests are subtracted. Default: the dashboards' system-namespace regex |
 | `containerDefault.cpu`, `.memory` | Requests for containers that set none (LimitRange); their memory limit = memory × factor |
 | `clusters.<name>.env` | One of the environments. The name is also the directory under `build/` |
-| `clusters.<name>.capacity.cpu`, `.memory` | What may be allocated in total, after N+1, platform and headroom ([03](../docs/03-allocation-model.md#headroom-and-overcommit); the capacity planner shows it). Optional; without it the sum is not checked |
+| `clusters.<name>.capacity.cpu`, `.memory` | What may be allocated in total, after N+1, platform and headroom ([03](../docs/03-allocation-model.md#headroom-and-overcommit)). Written by `--discover`, or by hand. Optional; without it the sum is not checked |
 
 **`projects/<name>.yaml`**
 
@@ -52,6 +56,38 @@ allocations:
       - name: payments-api
       - name: payments-worker
 ```
+
+## Capacity from the clusters
+
+`--discover CONTEXT=ENV` reads a cluster with `kubectl get nodes` and `kubectl get pods -A` (read-only) and writes
+its block under `clusters:` in `settings.yaml`. The cluster is named after the context. Other clusters, comments and
+the other sections are kept, so you commit the change like any other.
+
+```
+capacity = (allocatable of the counted nodes − the nodeFailures largest nodes − platform requests)
+           × maxQuotaPercent / 100            (CPU down to 0.1 vCPU, memory down to whole GiB)
+```
+
+```bash
+./allocation/generate.py allocations --discover prod-01=prod --discover test-01=test
+./allocation/generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod
+```
+
+Each block gets a comment with the inputs, so a pull request shows why the number changed:
+
+```yaml
+  prod-01:
+    env: prod
+    # discovered 2026-10-14 from context prod-01: 3 node(s) counted, left out: cp-1 (taint node-role.kubernetes.io/control-plane:NoSchedule)
+    # allocatable 40.0 vCPU / 160.0 GiB - 1 largest node(s) 16.0 vCPU / 64.0 GiB - platform requests 2.0 vCPU / 3.5 GiB, x 80 %
+    capacity:
+      cpu: 17.6
+      memory: 74Gi
+```
+
+Platform requests are the effective requests (with init containers, sidecars and overhead, as the scheduler counts
+them) of the pods in platform namespaces on counted nodes. Pods on nodes that are left out don't count. If any
+cluster fails, for example because `kubectl` can't reach it, `settings.yaml` is left unchanged.
 
 ## Use
 
@@ -89,4 +125,4 @@ Both are labelled `allocation.cluster-resource-allocation/managed: "true"` and `
 | Removed allocations | A second run removes their files from `build/` (only files it generated), but not the objects in the cluster. Delete them with `kubectl delete resourcequota,limitrange -l allocation.cluster-resource-allocation/project=<project> -n <namespace>` |
 | Rancher | On clusters managed by Rancher, a namespace in a Rancher Project with a Project quota gets Rancher's own ResourceQuota as well. Don't use both on the same namespace |
 | YAML | Standard library only: block maps and lists, `[a, b]` lists, comments and quoted strings. `{a: 1}` maps are rejected with a message |
-| Tested | Unit tests on the checks and the generated objects (`cd allocation && python3 -m unittest -v test_generate`). Not yet applied to a cluster |
+| Tested | Unit tests on the checks, the generated objects and `--discover` with a fake `kubectl` (`cd allocation && python3 -m unittest -v test_generate`). Not yet run against a cluster |

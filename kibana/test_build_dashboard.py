@@ -22,9 +22,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.rebuild()
 
     def rebuild(self):
-        bd.PANELS.clear()
         bd.REPORT_PANELS.clear()
-        bd.build_panels(bd.DEFAULT_INDEX)
         bd.build_report_panels(bd.DEFAULT_INDEX)
 
     def tearDown(self):
@@ -62,7 +60,6 @@ class BuildDashboardTest(unittest.TestCase):
         self.without_project()
         text = self.generated()
         self.assertNotIn("rancher.project.id", text)
-        self.assertNotIn("Rancher Projects", [p["title"] for p in bd.PANELS])
         self.assertNotIn("Projects", [p["title"] for p in bd.REPORT_PANELS])
         dashboard = bd.saved_objects(bd.DEFAULT_INDEX)[1]
         self.assertNotIn("ctrl-project", dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
@@ -72,7 +69,7 @@ class BuildDashboardTest(unittest.TestCase):
         data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
         self.assertEqual(data_view["type"], "index-pattern")
         self.assertEqual([d["id"] for d in dashboards],
-                         [bd.DASHBOARD_ID, bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID])
+                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID])
         self.check_dashboards()
         ids = [d["id"] for d in dashboards]
         for d in dashboards:  # every About links the other dashboards
@@ -81,7 +78,7 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertEqual(sorted(re.findall(r"\(#/view/([a-z-]+)\)", text)), sorted(set(ids) - {d["id"]}))
 
     def check_dashboards(self):
-        boards = {did: board for board, did, *_ in [bd.AS_IS_BOARD] + bd.REPORT_BOARDS}
+        boards = {did: board for board, did, *_ in bd.REPORT_BOARDS}
         for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
             self.check_dashboard(d, bd.board_panels(boards[d["id"]]))
 
@@ -101,7 +98,7 @@ class BuildDashboardTest(unittest.TestCase):
                 self.assertNotRegex(layer["query"]["esql"], r"\{[A-Za-z_]+\}", "unformatted placeholder")
 
     def test_every_query_buckets_inside_stats(self):
-        for p in bd.PANELS + bd.REPORT_PANELS:
+        for p in bd.REPORT_PANELS:
             if p["esql"] and "BUCKET(" in p["esql"]:
                 line = next(l for l in p["esql"].splitlines() if "BUCKET(" in l)
                 self.assertIn("BY", line, p["title"])
@@ -110,7 +107,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual(bd.table_columns("FROM x | STATS a = SUM(b), `c d` = MAX(e) BY f, g = h"),
                          ["a", "c d", "f", "g"])
         self.assertEqual(bd.table_columns("FROM x | KEEP a, `b, c` | SORT a"), ["a", "b, c"])
-        tables = [p for p in bd.PANELS + bd.REPORT_PANELS if p["kind"] == "table"]
+        tables = [p for p in bd.REPORT_PANELS if p["kind"] == "table"]
         self.assertTrue(tables)
         for p in tables:
             self.assertTrue(bd.table_columns(p["esql"]), p["title"])
@@ -185,7 +182,7 @@ class BuildDashboardTest(unittest.TestCase):
         for word in ("resource_quota", "resourcequota", "k8s.hpa"):
             self.assertNotIn(word, text)
         self.assertIn("NULL IS NOT NULL", text)
-        self.assertNotIn("None", "".join(p["esql"] or "" for p in bd.PANELS + bd.REPORT_PANELS))
+        self.assertNotIn("None", "".join(p["esql"] or "" for p in bd.REPORT_PANELS))
         self.check_dashboards()
 
     def test_project_name_field(self):
@@ -199,8 +196,6 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertIn("| EVAL pname = COALESCE(project_name, project)", q)
             self.assertNotIn("LOOKUP JOIN", q)
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
-        as_is = "".join(p["esql"] or "" for p in bd.PANELS)
-        self.assertIn(f'project = COALESCE({field}, resource.attributes.rancher.project.id, "(no project)")', as_is)
         for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
             control = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])["ctrl-project"]
             self.assertEqual(control["explicitInput"]["fieldName"], field)
@@ -211,7 +206,7 @@ class BuildDashboardTest(unittest.TestCase):
 
     def test_control_plane_nodes_filtered_out(self):
         field = "resource.attributes.k8s.node.role.control_plane"
-        for p in bd.PANELS + bd.REPORT_PANELS:  # a dashboard filter, so no query fails without the field
+        for p in bd.REPORT_PANELS:  # a dashboard filter, so no query fails without the field
             self.assertNotIn("control_plane", p["esql"] or "", p["title"])
         for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
             search = json.loads(dashboard["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])
@@ -239,6 +234,24 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertIn('"CronJob"', q)
         self.assertIn("| EVAL pname = project", q)  # names patched in like the other report tables
         self.assertIn("@timestamp >= TO_DATETIME(?_tend) - 10 minutes", q)
+
+    def test_every_dashboard_leaves_out_control_plane_nodes(self):
+        for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+            search = json.loads(d["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])
+            self.assertEqual([(f["meta"]["negate"], f["query"]) for f in search["filter"]],
+                             [(True, {"match_phrase": {bd.CP_FIELD[0]: "true"}})], d["id"])
+
+    def test_every_project_column_shows_names(self):
+        bd.PROJECT_NAMES["p-bbjk7"] = "payments"
+        self.rebuild()
+        shown = [p for p in bd.REPORT_PANELS if p["esql"] and "Project = pname" in p["esql"]
+                 or p["esql"] and "CONCAT(cluster, \" / \", pname)" in p["esql"]]
+        self.assertEqual({p["board"] for p in shown}, {"projects", "limits"})
+        for p in bd.REPORT_PANELS:
+            if p["esql"]:
+                self.assertIn('project == "p-bbjk7", "payments"', p["esql"], p["title"])
+            if p["kind"] == "table" and "Project" in bd.table_columns(p["esql"]):
+                self.assertIn("Project = pname", p["esql"], p["title"])
 
     def test_split_files_stay_small(self):
         # one dashboard per file stays under the 1 MiB request limit of a default ingress-nginx with 200 named
@@ -274,7 +287,6 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
         queries = [p["esql"] for p in bd.REPORT_PANELS if p["esql"]]
         self.assertTrue(all(q.count("LOOKUP JOIN") == 1 for q in queries))
-        self.assertNotIn("LOOKUP JOIN", "".join(p["esql"] or "" for p in bd.PANELS))
         for q in queries:  # the join comes after the Project ID column exists and before the name is used
             self.assertLess(q.index("project = COALESCE("), q.index("LOOKUP JOIN"))
             self.assertLess(q.index("LOOKUP JOIN"), q.index("EVAL category"))

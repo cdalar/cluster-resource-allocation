@@ -6,7 +6,7 @@ export from Kibana) and the Projects of the Rancher local cluster, and writes th
 the Project ID -> name list becomes an ES|QL CASE in every report panel. Nothing is stored in Elasticsearch.
 
   kubectl get projects.management.cattle.io -A -o json > projects.json      # on the Rancher local cluster
-  ./add_project_names.py cluster-resources-as-is.ndjson projects.json --out cluster-resources-with-names.ndjson
+  ./add_project_names.py cluster-resource-report.ndjson projects.json --out cluster-resources-with-names.ndjson
 
 Import the output in Kibana (Saved objects -> Import, overwrite). Run it again on either file after adding or
 renaming Projects: names already in the file are replaced. A Project that is not in projects.json keeps its ID.

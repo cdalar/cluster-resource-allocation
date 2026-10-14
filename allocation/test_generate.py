@@ -297,6 +297,24 @@ class DiscoverTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(calls[0][:5], ["kubectl", "--kubeconfig", kubeconfig, "--context", "prod-01"])
         self.assertIn("prod-01 (prod): 3 node(s), capacity 16 vCPU / 67 GiB", out)
+        self.assertNotIn("wrote", out)  # discovery alone generates nothing
+        # with --out: discover, then check and generate in the same run (the examples don't fit the small cluster)
+        settings = os.path.join(self.tmp, "settings.yaml")
+        with open(settings) as f:
+            text = f.read()
+        with open(settings, "w") as f:
+            f.write(text.replace("maxQuotaPercent: 80 ", "maxQuotaPercent: 500 "))
+        for p in ("payments.yaml", "data-platform.yaml"):
+            os.remove(os.path.join(self.tmp, "projects", p))
+        with open(os.path.join(self.tmp, "projects", "small.yaml"), "w") as f:
+            f.write("project: small\nallocations:\n  - cluster: prod-01\n    namespaces:\n      - name: small\n"
+                    "        cpu: 2\n        memory: 4Gi\n")
+        outdir = os.path.join(self.tmp, "build")
+        with mock.patch.object(g.subprocess, "run", fake_run):
+            code, out, err = run(self.tmp, "--kubeconfig", kubeconfig, "--discover", "prod-01=prod", "--out", outdir)
+        self.assertEqual(code, 0, err)
+        self.assertIn("wrote 1 file(s)", out)
+        self.assertTrue(os.path.exists(os.path.join(outdir, "prod-01", "small.yaml")))
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             run(self.tmp, "--kubeconfig", kubeconfig)  # only with --discover
 

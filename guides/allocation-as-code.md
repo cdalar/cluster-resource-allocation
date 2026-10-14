@@ -73,6 +73,8 @@ capacity = (allocatable of the counted nodes − the nodeFailures largest nodes 
 ```bash
 ./allocation/generate.py allocations --discover prod-01=prod --discover test-01=test
 ./allocation/generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod
+# discover, then check and generate in one run
+./allocation/generate.py allocations --kubeconfig ~/.kube/aks.yaml --discover aks-prod=prod --out build
 ```
 
 Each block gets the full calculation with the real numbers as comments, so a pull request shows how every value came

@@ -1,0 +1,37 @@
+# allocations/settings.yaml: the clusters projects can get capacity on, and the rules per environment.
+# Read by allocation/generate.py together with projects/*.yaml.
+
+environments:
+  prod:
+    memoryLimitFactor: 1      # limits.memory = requests.memory (S3, docs/02)
+  test:
+    memoryLimitFactor: 2      # limits.memory up to 2x requests.memory
+  dev:
+    memoryLimitFactor: 2
+
+# Defaults for containers without requests/limits (LimitRange), unless a project sets its own
+containerDefault:
+  cpu: 100m
+  memory: 256Mi               # request; the limit is memory x memoryLimitFactor
+
+clusters:
+  onprem-prod-01:
+    id: c-m-abcd1234          # Rancher cluster ID (or pass --rancher-clusters clusters.json)
+    env: prod
+    managedBy: rancher        # quota on the Rancher Project; Rancher writes ResourceQuota/LimitRange per namespace
+    capacity:                 # what may be allocated to projects: after N+1, platform and headroom (the planner shows it)
+      cpu: 94.5
+      memory: 372Gi
+  onprem-test-01:
+    id: c-m-efgh5678
+    env: test
+    managedBy: rancher
+    capacity:
+      cpu: 60
+      memory: 240Gi
+  aks-prod-weu:
+    env: prod
+    managedBy: kubernetes     # not in Rancher: ResourceQuota + LimitRange per namespace, listed in the project file
+    capacity:
+      cpu: 32
+      memory: 128Gi

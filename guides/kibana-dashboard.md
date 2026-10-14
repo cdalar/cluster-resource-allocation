@@ -12,7 +12,7 @@ used CPU and memory per cluster, Rancher Project, namespace and node, plus the r
 | [`kibana/cluster-resources-as-is-project-names.ndjson`](../kibana/cluster-resources-as-is-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
-| [`kibana/otel-kube-stack-node-roles.yaml`](../kibana/otel-kube-stack-node-roles.yaml) | Values overlay for the same chart: RKE2 node role labels (`node-role.kubernetes.io/control-plane`, `etcd`) as `k8s.node.role.*` on the metrics, through a second `k8s_attributes` processor that sees all nodes (or in the existing one of a `deployment`-mode collector that runs `k8s_cluster`). Used by `build_dashboard.py --control-plane-filter` ([below](#control-plane-nodes)); rendered with the chart, not run on a cluster |
+| [`kibana/otel-kube-stack-node-roles.yaml`](../kibana/otel-kube-stack-node-roles.yaml) | Values overlay for the same chart: RKE2 node role labels (`node-role.kubernetes.io/control-plane`, `etcd`) as `k8s.node.role.*` on the metrics, through a second `k8s_attributes` processor that sees all nodes (or in the existing one of a `deployment`-mode collector that runs `k8s_cluster`). Used by the dashboards' *Control-plane nodes excluded* filter ([below](#control-plane-nodes)); rendered with the chart, not run on a cluster |
 | [`kibana/build_collector_values.py`](../kibana/build_collector_values.py) | Values overlay for the `opentelemetry-kube-stack` chart that puts the Project **name** on the metrics (`rancher.project.name`), so the Project filter control lists names ([Project names on the metrics](#project-names-on-the-metrics)) |
 | [`kibana/add_project_names.py`](../kibana/add_project_names.py) | Writes the Rancher Project names into a dashboard `.ndjson` you already have (a file from here or a Kibana export), without regenerating it |
 | [`kibana/publish_project_names.py`](../kibana/publish_project_names.py) | Writes the Rancher Project names to a lookup index in Elasticsearch, for a report generated with `--project-lookup-index` ([Project names](#project-names-from-a-lookup-index)) |
@@ -160,27 +160,21 @@ spec:
 ### Control-plane nodes
 
 Control-plane nodes that take no workloads (RKE2 server nodes tainted `NoSchedule`) are not capacity for
-projects. With `--control-plane-filter` both dashboards get a **Control-plane nodes** control next to the others.
-It opens set to *exclude `true`*: the dashboard filter drops every document whose
-`resource.attributes.k8s.node.role.control_plane` is `"true"`, i.e. the nodes' allocatable and the requests and
-usage of the pods on them, so allocatable, node count, largest node (N+1), requests and usage cover the workers
-only. Clear the control to include them. The *Nodes* table gets a *Role* column.
-
-```bash
-./kibana/build_dashboard.py --control-plane-filter --project-name-field --out cluster-resources-cp-filter.ndjson
-```
+projects. Both dashboards open with a saved filter, *Control-plane nodes excluded*
+(`NOT resource.attributes.k8s.node.role.control_plane: true`), that drops the nodes' allocatable and the requests
+and usage of the pods on them: allocatable, node count, largest node (N+1), requests and usage cover the workers
+only. To look at them anyway, disable the filter pill (until the dashboard is reloaded). To generate without it:
+`--include-control-plane --out <file>`.
 
 | Point | Detail |
 |---|---|
 | Field | The collector copies the RKE2 node label `node-role.kubernetes.io/control-plane` ([overlay](../kibana/otel-kube-stack-node-roles.yaml)). Add the rule to the `k8s_attributes` of the collector that runs `k8s_cluster` (allocatable, requests). For usage, add it to the `daemon` collector's too (kubelet metrics); without it the usage of pods on control-plane nodes still counts |
-| Control | Kibana has no checkbox control: it is an options list in exclude mode with the value `true` selected. Clearing the selection (or switching it to include) changes the view until the dashboard is reloaded; save the dashboard to keep another default |
-| Labels, not taints | The control acts on every node with the label, tainted or not. RKE2 does not taint server nodes by default: check `kubectl get nodes -o custom-columns='NAME:.metadata.name,CP:.metadata.labels.node-role\\.kubernetes\\.io/control-plane,TAINTS:.spec.taints[*].key'` |
-| Nodes table | Filtered like the rest: control-plane nodes show only while the control is cleared |
+| Without the field | Nothing is excluded and nothing fails: the filter is a dashboard filter, no query names the field. Kibana may mark the pill as referring to an unknown field |
+| Labels, not taints | Every node with the label is left out, tainted or not. RKE2 does not taint server nodes by default: check `kubectl get nodes -o custom-columns='NAME:.metadata.name,CP:.metadata.labels.node-role\\.kubernetes\\.io/control-plane,TAINTS:.spec.taints[*].key'` |
 | Cordoned workers | Still counted: cordoning sets no label |
 | Old data | Metrics from before the rollout have no field and count as workers; choose a time range after it |
-| Missing field | Only the *Nodes* table (Role column) fails with `Unknown column`; import once `k8s.node.role.control_plane` is in Discover |
-| Other field | `--control-plane-filter <field>` |
-| Tested | Unit tests on the generated objects only; not yet imported into Kibana. Run `--check` with the same options first |
+| `--check` | Applies the same filter to the queries (none with `--include-control-plane`) |
+| Tested | Unit tests on the generated objects only; not yet imported into Kibana |
 
 ## Prerequisites in the collector
 
@@ -273,7 +267,7 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 | Rancher Project **ID**, not the display name | The as-is tables show `p-xxxxx`; the report shows names only when generated with `--rancher-projects` (a snapshot) | discover.py reads names from Rancher. Or names from a lookup index in Elasticsearch ([above](#project-names-from-a-lookup-index)) |
 | Init containers and pod overhead are not reported by `k8s_cluster` | Requests can be lower than the *effective* requests the scheduler uses | discover.py counts both |
 | As-is: requests include Pending pods (and pods of finished Jobs while they exist) | *CPU requested %* can exceed 100 % when big pods are Pending | discover.py and the report dashboard count pending separately |
-| Report: all nodes count as allocatable | Cordoned nodes are not excluded (the metrics don't say which nodes are unschedulable); control-plane nodes with the `--control-plane-filter` control ([above](#control-plane-nodes)) | discover.py counts schedulable nodes only |
+| Report: all nodes count as allocatable | Cordoned nodes are not excluded (the metrics don't say which nodes are unschedulable); control-plane nodes are left out by a saved filter ([above](#control-plane-nodes)) | discover.py counts schedulable nodes only |
 | Report: tested | All queries run against Elasticsearch 9.1.5 with `--check`; panels rendered with Kibana 9.1.5 reporting (PNG) on the test cluster | — |
 | About 60 buckets per time range; a container's value per bucket is its maximum, usage its average | Peaks and P95 are smoothed over long ranges; pods replaced within a bucket count twice for that bucket | discover.py uses Prometheus at a fixed resolution |
 | Query cost grows with containers × buckets | Wide ranges over many clusters are slow; filter by cluster first | — |

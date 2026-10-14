@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 PROJECT_FIELD = bd.F["project"]
 FIELDS = dict(bd.F)
+CP_FIELD = bd.CP_FIELD[0]
 
 
 class BuildDashboardTest(unittest.TestCase):
@@ -31,7 +32,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.PROJECT_NAMES.clear()
         bd.LOOKUP_INDEX[0] = None
         bd.NAME_FIELD[0] = None
-        bd.CP_FIELD[0] = None
+        bd.CP_FIELD[0] = CP_FIELD
 
     def generated(self):
         return "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in bd.saved_objects(bd.DEFAULT_INDEX))
@@ -65,7 +66,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertNotIn("Projects", [p["title"] for p in bd.REPORT_PANELS])
         dashboard = bd.saved_objects(bd.DEFAULT_INDEX)[1]
         self.assertNotIn("ctrl-project", dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
-        self.assertEqual(len(dashboard["references"]), 2)
+        self.assertEqual(len([r for r in dashboard["references"] if r["name"].startswith("controlGroup_")]), 2)
 
     def test_saved_objects(self):
         data_view, as_is, report = bd.saved_objects(bd.DEFAULT_INDEX)
@@ -198,26 +199,24 @@ class BuildDashboardTest(unittest.TestCase):
         self.without_project()
         self.assertNotIn("rancher.project", self.generated())
 
-    def test_control_plane_filter(self):
-        bd.CP_FIELD[0] = bd.DEFAULT_CP_FIELD
+    def test_control_plane_nodes_filtered_out(self):
+        field = "resource.attributes.k8s.node.role.control_plane"
+        for p in bd.PANELS + bd.REPORT_PANELS:  # a dashboard filter, so no query fails without the field
+            self.assertNotIn("control_plane", p["esql"] or "", p["title"])
+        for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+            search = json.loads(dashboard["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])
+            [f] = search["filter"]
+            self.assertTrue(f["meta"]["negate"])
+            self.assertEqual(f["query"], {"match_phrase": {field: "true"}})
+            self.assertIn({"type": "index-pattern", "id": bd.DATA_VIEW_ID, "name": f["meta"]["indexRefName"]},
+                          dashboard["references"])
+            self.assertNotIn("control-plane", dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
+        bd.CP_FIELD[0] = None
+        for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+            self.assertEqual(json.loads(dashboard["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])["filter"], [])
+            self.assertNotIn("searchSourceJSON", json.dumps(dashboard["references"]))
         self.rebuild()
-        field = bd.DEFAULT_CP_FIELD
-        nodes = next(p for p in bd.PANELS if p["title"].startswith("Nodes"))
-        for p in bd.PANELS + bd.REPORT_PANELS:  # a dashboard filter, not a query change
-            if p["esql"] and p is not nodes:
-                self.assertNotIn(field, p["esql"], p["title"])
-        self.assertEqual(bd.table_columns(nodes["esql"])[:3], ["Cluster", "Node", "Role"])
-        self.assertIn('Role = CASE(cp == "true", "control plane", "worker")', nodes["esql"])
-        for dashboard, source in zip(bd.saved_objects(bd.DEFAULT_INDEX)[1:], (bd.PANELS, bd.REPORT_PANELS)):
-            self.check_dashboard(dashboard, source)
-            controls = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
-            cp = controls[bd.CP_CONTROL]
-            self.assertEqual(cp["order"], len(controls) - 1)
-            self.assertEqual(cp["explicitInput"]["fieldName"], field)
-            self.assertEqual((cp["explicitInput"]["selectedOptions"], cp["explicitInput"]["exclude"]), (["true"], True))
-            self.assertIn(f"controlGroup_{bd.CP_CONTROL}:optionsListDataView",
-                          [r["name"] for r in dashboard["references"]])
-        self.assertIn("Control-plane nodes", bd.REPORT_PANELS[0]["markdown"])
+        self.assertNotIn("Control-plane", bd.REPORT_PANELS[0]["markdown"])
 
     def test_collector_values(self):
         names = {"p-bbjk7": "payments", "p-9z9dv": 'Sys "tem" $x'}

@@ -23,9 +23,10 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --no-quota --no-hpa --out no-quota-hpa.ndjson
       # no cluster has a ResourceQuota / HorizontalPodAutoscaler yet, so Elasticsearch has no such fields
       # ("Unknown column [metrics.k8s.resource_quota.hard_limit]"); the Quota / HPA columns then show 0
-  ./build_dashboard.py --exclude-control-plane --out workers-only.ndjson
-      # leave control-plane nodes and the pods on them out of allocatable, requests, usage, node count and N+1
-      # (resource.attributes.k8s.node.role.control_plane = "true", set by the collector: otel-kube-stack-node-roles.yaml)
+  ./build_dashboard.py --control-plane-filter --out with-cp-filter.ndjson
+      # a "Control-plane nodes" control that leaves control-plane nodes and the pods on them out of allocatable,
+      # requests, usage, node count and N+1 (on by default, clear it to include them); field
+      # resource.attributes.k8s.node.role.control_plane = "true", set by the collector: otel-kube-stack-node-roles.yaml
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -116,15 +117,6 @@ def q(text):
                                     name_agg=name_agg(False))
 
 
-def from_stage(index):
-    """FROM, and with --exclude-control-plane the filter that drops control-plane nodes and their pods' metrics.
-    Documents without the field (namespaces, quotas, pending pods, workers) stay."""
-    src = f"FROM {index}"
-    if CP_FIELD[0]:
-        src += f'\n| WHERE {CP_FIELD[0]} IS NULL OR {CP_FIELD[0]} != "true"'
-    return src
-
-
 # Common first stage: one row per time bucket and entity (container, pod or node), holding that entity's
 # value in the bucket. Each OTel metric unit is a separate document, so values are aggregated per entity
 # before they are summed; summing raw documents would count every scrape.
@@ -189,9 +181,9 @@ def panel(kind, title, esql, grid, **opts):
 
 
 def build_panels(index):
-    src = from_stage(index)
-    cp_note = (" Control-plane nodes and the pods on them are left out (the Nodes table lists them)."
-               if CP_FIELD[0] else "")
+    src = f"FROM {index}"
+    cp_note = (" *Control-plane nodes*: excluded (with the pods on them) while that control is set; clear it to "
+               "include them." if CP_FIELD[0] else "")
 
     panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
         "**As-is view of cluster resources**: allocatable, requested (what the scheduler reserves), limited "
@@ -372,11 +364,13 @@ INDEX_NAME_RE = r"[a-z0-9][a-z0-9._-]*"
 NAME_FIELD = [None]
 DEFAULT_NAME_FIELD = "resource.attributes.rancher.project.name"
 FIELD_NAME_RE = r"[A-Za-z_@][A-Za-z0-9_@]*(\.[A-Za-z_@][A-Za-z0-9_@]*)*"
-# Node role field from --exclude-control-plane: "true" on control-plane nodes and on the metrics of their pods (the
-# collector copies the RKE2 node label node-role.kubernetes.io/control-plane). Those nodes take no workloads, so
-# they are left out of capacity; the Nodes table still lists them, with a Role column.
+# Node role field from --control-plane-filter: "true" on control-plane nodes and on the metrics of their pods (the
+# collector copies the RKE2 node label node-role.kubernetes.io/control-plane). A control in exclude mode with "true"
+# selected leaves them out of every panel (a dashboard filter, so a missing field breaks no query); clearing it
+# includes them. The Nodes table gets a Role column.
 CP_FIELD = [None]
 DEFAULT_CP_FIELD = "resource.attributes.k8s.node.role.control_plane"
+CP_CONTROL = "ctrl-control-plane"
 NOW_WINDOW = "10 minutes"  # "now" values (pods, pending, standards) = the last 10 minutes of the time range
 
 
@@ -543,7 +537,7 @@ COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Fr
 def build_report_panels(index):
     _TARGET[0] = REPORT_PANELS
     try:
-        _build_report_panels(from_stage(index))
+        _build_report_panels(f"FROM {index}")
     finally:
         _TARGET[0] = PANELS
 
@@ -559,7 +553,8 @@ def _build_report_panels(src):
         "OpenTelemetry metrics. *Requested* = requests of running pods (averaged over the time range); *used* = "
         f"P95 over the time range; tiles marked *now* and the pod and standards columns = the last {NOW_WINDOW} "
         "of the range. *N+1*: allocatable − largest node − platform (System) requests = room for projects. "
-        + ("Control-plane nodes and the pods on them are left out. " if CP_FIELD[0] else "")
+        + ("*Control-plane nodes*: excluded (with the pods on them) while that control is set; clear it to "
+           "include them. " if CP_FIELD[0] else "")
         + f"{names} Docs: `guides/kibana-dashboard.md`."))
 
     summary = base + REPORT_CLUSTER
@@ -793,6 +788,13 @@ def control_group():
                        "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": fields[field],
                                          "title": title, "searchTechnique": "prefix", "selectedOptions": [],
                                          "sort": {"by": "_key", "direction": "asc"}}}
+    if CP_FIELD[0]:  # last: with hierarchical chaining it must not narrow the other controls
+        cid = CP_CONTROL
+        panels[cid] = {"order": len(controls), "width": "small", "grow": False, "type": "optionsListControl",
+                       "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": CP_FIELD[0],
+                                         "title": "Control-plane nodes", "searchTechnique": "prefix",
+                                         "selectedOptions": ["true"], "exclude": True, "singleSelect": True,
+                                         "sort": {"by": "_key", "direction": "asc"}}}
     return {"chainingSystem": "HIERARCHICAL", "controlStyle": "oneLine", "showApplySelections": False,
             "ignoreParentSettingsJSON": json.dumps({"ignoreFilters": False, "ignoreQuery": False,
                                                      "ignoreTimerange": False, "ignoreValidations": False}),
@@ -826,7 +828,8 @@ def dashboard_object(dashboard_id, title, description, panels, index):
         "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps({"query": {"query": "", "language": "kuery"},
                                                                   "filter": []})},
     }, "references": [{"type": "index-pattern", "id": DATA_VIEW_ID,
-                       "name": f"controlGroup_ctrl-{f}:optionsListDataView"} for f in control_fields()],
+                       "name": f"controlGroup_{c}:optionsListDataView"}
+                      for c in [f"ctrl-{f}" for f in control_fields()] + ([CP_CONTROL] if CP_FIELD[0] else [])],
         # Current versions (Kibana 9.x); without them Kibana runs legacy migrations that break ES|QL panels.
         "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "10.3.0"}
 
@@ -909,11 +912,11 @@ def main():
                          "the field does not exist. Needs --out")
     ap.add_argument("--no-hpa", action="store_true",
                     help=f"the same for the HorizontalPodAutoscaler metric ({F['hpa_max']})")
-    ap.add_argument("--exclude-control-plane", metavar="FIELD", nargs="?", const=DEFAULT_CP_FIELD,
-                    help=f"leave out nodes whose role field (default {DEFAULT_CP_FIELD}) is \"true\", and the "
-                         "metrics of their pods: allocatable, requests, usage, node count and N+1 cover the "
-                         "workers only (otel-kube-stack-node-roles.yaml sets the field). Every panel fails while "
-                         "no index has the field. Needs --out")
+    ap.add_argument("--control-plane-filter", metavar="FIELD", nargs="?", const=DEFAULT_CP_FIELD,
+                    help=f"add a \"Control-plane nodes\" control on this field (default {DEFAULT_CP_FIELD}, set by "
+                         "otel-kube-stack-node-roles.yaml) that excludes nodes where it is \"true\" and the metrics "
+                         "of their pods; on by default, clear it to include them. Adds a Role column to the Nodes "
+                         "table, which fails while no index has the field. Needs --out")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
                          "collector sets (build_collector_values.py). The Project filter control then lists names. "
@@ -929,12 +932,12 @@ def main():
         if not args.out and not args.check:
             ap.error("--project-name-field needs --out (the committed files are generated without it)")
         NAME_FIELD[0] = args.project_name_field
-    if args.exclude_control_plane:
-        if not re.fullmatch(FIELD_NAME_RE, args.exclude_control_plane):
-            ap.error(f"--exclude-control-plane: not a field name: {args.exclude_control_plane}")
+    if args.control_plane_filter:
+        if not re.fullmatch(FIELD_NAME_RE, args.control_plane_filter):
+            ap.error(f"--control-plane-filter: not a field name: {args.control_plane_filter}")
         if not args.out and not args.check:
-            ap.error("--exclude-control-plane needs --out (the committed files are generated without it)")
-        CP_FIELD[0] = args.exclude_control_plane
+            ap.error("--control-plane-filter needs --out (the committed files are generated without it)")
+        CP_FIELD[0] = args.control_plane_filter
     if args.project_lookup_index:
         if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
             ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")

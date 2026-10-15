@@ -258,6 +258,10 @@ a logged-in browser save a plan through Rancher's proxy.
 | `rancher.navLink.icons.report` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
+| `otel.projects.enabled` | `false` | Rancher local cluster only: renders a ConfigMap `<fullname>-otel-projects` with an OpenTelemetry Collector config that ships the Projects to an Elasticsearch lookup index (see the [Kibana guide](../../guides/kibana-project-names.md)). Not a workload: mount it into your own collector |
+| `otel.projects.elasticsearch.endpoint` / `.index` / `.apiKeyEnv` | `""` / `rancher-projects` / `ELASTICSEARCH_API_KEY` | Elasticsearch URL (required), lookup index, and the collector environment variable holding the API key |
+| `otel.projects.interval` | `15m` | Pull interval of the `k8sobjects` receiver |
+| `otel.projects.serviceAccount` / `.serviceAccountNamespace` | `""` / release namespace | Service account of your collector; the chart grants it read on Projects (none created when empty) |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
 | `resources` | 50m / 128Mi, limits 500m / 512Mi | Requests and limits of the dashboard container (CPU and memory both limited, for admission policies that require it). Raise the memory limit for clusters with many thousands of pods |
 | `priorityClass.create` / `.value` | `true` / `1000000` | PriorityClass `<fullname>` for the dashboard pod, so it preempts ordinary workloads (priority 0) on a full cluster instead of staying Pending; below the `system-*-critical` classes |
@@ -278,6 +282,8 @@ ConfigMaps.
   (`<fullname>-planner`, `<fullname>-capacity`) in the release namespace. No `create`: the chart creates them.
 - **Name publisher (`rancher.publishNames`, own service account):** read on `projects`/`clusters.management.cattle.io`,
   and `create` bundles plus `get`/`patch`/`update` on the `rancher-project-names` Bundle in the Fleet workspace.
+- **OTel Projects config (`otel.projects`):** with `serviceAccount`, a ClusterRole + binding giving that account
+  `get`/`list`/`watch` on `projects.management.cattle.io`. The chart runs no collector.
 - **NavLinks** (`ui.cattle.io`) are created by Helm at install time, not by the running app.
 - **Fleet HelmOp and ClusterGroup** (`rancher.deployDownstream`) are created by Helm at install time, with the
   installer's rights, not by the running app. No service account gets rights on it.

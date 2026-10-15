@@ -1,0 +1,76 @@
+{{- $o := dig "projects" "enabled" false (.Values.otel | default dict) -}}
+{{- if and $o (include "crr.isLocal" .) }}
+{{- $p := .Values.otel.projects }}
+# OpenTelemetry Collector config (not a workload): ships the Rancher Projects of the local cluster to Elasticsearch
+# as one small document per project (project_id, project_name, cluster_id). In Kibana, ES|QL LOOKUP JOIN adds the
+# project name to the downstream metrics. Mount the ConfigMap into your own collector (key collector.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crr.fullname" . }}-otel-projects
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+data:
+  collector.yaml: |
+    receivers:
+      k8sobjects:
+        auth_type: serviceAccount
+        objects:
+          - name: projects
+            group: management.cattle.io
+            mode: pull
+            interval: {{ $p.interval }}
+    processors:
+      transform/project:
+        log_statements:
+          - context: log
+            statements:
+              # one document per project: the project ID is the document ID, so each pull overwrites the last
+              - set(attributes["elasticsearch.document_id"], body["metadata"]["name"])
+              - set(body, {"project_id": body["metadata"]["name"], "project_name": body["spec"]["displayName"], "cluster_id": body["metadata"]["namespace"]})
+    exporters:
+      elasticsearch:
+        endpoint: {{ required "otel.projects.elasticsearch.endpoint is required" $p.elasticsearch.endpoint | quote }}
+        api_key: ${env:{{ $p.elasticsearch.apiKeyEnv }}}
+        logs_index: {{ $p.elasticsearch.index | quote }}
+        logs_dynamic_id:
+          enabled: true
+        mapping:
+          mode: bodymap
+        bulk_action: index   # overwrite by ID (the default, create, fails on an existing ID)
+    service:
+      pipelines:
+        logs/rancher-projects:
+          receivers: [k8sobjects]
+          processors: [transform/project]
+          exporters: [elasticsearch]
+{{- if $p.serviceAccount }}
+---
+# Read on the Projects, for the service account of your collector
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "crr.fullname" . }}-otel-projects
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [management.cattle.io]
+    resources: [projects]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "crr.fullname" . }}-otel-projects
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "crr.fullname" . }}-otel-projects
+subjects:
+  - kind: ServiceAccount
+    name: {{ $p.serviceAccount }}
+    namespace: {{ $p.serviceAccountNamespace | default .Release.Namespace }}
+{{- end }}
+{{- end }}

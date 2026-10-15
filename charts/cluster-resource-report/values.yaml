@@ -151,6 +151,21 @@ planner:
 capacityPlanner:
   enabled: true
 
+# OpenTelemetry: config for your own collector, not a workload of this chart. Rancher local cluster only (needs
+# isLocalCluster). Renders a ConfigMap (<fullname>-otel-projects, key collector.yaml) that ships the Rancher Projects
+# (project_id, project_name, cluster_id) to an Elasticsearch lookup index, for ES|QL LOOKUP JOIN in Kibana
+# (see guides/kibana-project-names.md). With serviceAccount set, the chart also grants that account read on Projects.
+otel:
+  projects:
+    enabled: false
+    interval: 15m                     # k8sobjects pull interval
+    serviceAccount: ""                # service account of your collector on this cluster ("" = no RBAC created)
+    serviceAccountNamespace: ""       # default: the release namespace
+    elasticsearch:
+      endpoint: ""                    # required, e.g. https://elasticsearch.example.com:9200
+      index: rancher-projects         # create it first with "index.mode": "lookup" (see the guide)
+      apiKeyEnv: ELASTICSEARCH_API_KEY  # environment variable of your collector that holds the API key
+
 # Keep the latest report across pod restarts on a PVC (needs a storage class). Without it, a new pod starts with
 # an empty dashboard until the first collection finishes. Not needed by the planners.
 persistence:

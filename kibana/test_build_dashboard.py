@@ -161,8 +161,10 @@ class BuildDashboardTest(unittest.TestCase):
         bd.PROJECT_NAMES.update(names)
         self.rebuild()
         self.assertEqual("".join(patched), self.generated())
-        # every query twice (the panel keeps it in two places), and the Project control's options query
-        self.assertEqual(changed, 2 * len([p for p in report_panels() if p["esql"]]) + 1)
+        # every query twice (the panel keeps it in two places), the "Project owner" ones twice more (their early
+        # Project filter), and the Project control's options query
+        owner = len([p for p in bd.board_panels("owner") if p["esql"]])
+        self.assertEqual(changed, 2 * len([p for p in report_panels() if p["esql"]]) + 2 * owner + 1)
         # again, with other names and on a file that already has names: replaced, not nested
         again, _ = apn.add_names(patched, {"p-bbjk7": "billing"})
         bd.PROJECT_NAMES.clear()
@@ -345,11 +347,16 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual([r["name"] for r in dashboard["references"]],
                          ["controlGroup_ctrl-cluster:optionsListDataView",
                           "controlGroup_ctrl-namespace:optionsListDataView", bd.CP_FILTER_REF])
+        for p in owner[1:]:  # the picked Project is kept before any aggregation, so one Project is aggregated
+            q = p["esql"]
+            self.assertLess(q.index('| WHERE ?project == "(all projects)" OR pname == ?project'), q.index("| STATS"))
         # names in the control in every variant that has them
         bd.LOOKUP_INDEX[0] = bd.DEFAULT_LOOKUP_INDEX
         self.rebuild()
         self.assertIn("| LOOKUP JOIN rancher-projects ON project\n| EVAL pname = COALESCE(project_name, project)",
                       bd.OWNER_CONTROL[0])
+        # the name comes from the join: no early filter, only the late one
+        self.assertNotIn("OR pname == ?project\n", bd.board_panels("owner")[1]["esql"])
         bd.LOOKUP_INDEX[0], bd.NAME_FIELD[0] = None, bd.DEFAULT_NAME_FIELD
         self.rebuild()
         self.assertIn("| STATS project_name = MAX(resource.attributes.rancher.project.name) "

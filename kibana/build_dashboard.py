@@ -366,7 +366,8 @@ REPORT_COLUMNS = ("`CPU req`, `CPU P95`, `CPU eff. %`, `CPU req peak`, `Mem req 
 
 COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Free (N+1)": "#e2e8f0",
           "N+1 reserve": "#fca5a5", "Requested": "#1d4ed8", "Used (P95)": "#0d9488", "Pending": "#f59e0b",
-          "New deployment": "#7c3aed", "Free": "#e2e8f0", "Reserve (failures, ceiling)": "#fca5a5"}
+          "New deployment": "#7c3aed", "Free": "#e2e8f0", "Reserve (failures, ceiling)": "#fca5a5",
+          "Requested and used": "#1d4ed8", "Requested, unused": "#93c5fd", "Used above requests": "#dc2626"}
 
 
 def build_report_panels(index):
@@ -657,18 +658,26 @@ def _build_report_panels(src):
        `GiB left by usage`, `Most free vCPU on a node`, `Most free GiB on a node`, `Pending vCPU`, `Pending GiB`"""),
           (0, 7 + TILE_H, 48, 9))
 
-    panel("bar_stacked", "Requests with the new deployment (% of allocatable)", q(clusters + """
+    # What is taken now is split into requested-and-used, requested-but-unused and used-above-requests: requests are the
+    # first two, used (P95) the first and the last, and all three together are what the "by usage" check subtracts.
+    panel("bar_stacked", "Requests and usage (P95) with the new deployment (% of allocatable)", q(clusters + """
 | EVAL res = ["CPU", "Memory"]
 | MV_EXPAND res
-| EVAL a = CASE(res == "CPU", a_cpu, a_mem), r = CASE(res == "CPU", rc, rm), p = CASE(res == "CPU", pc, pm),
-       n = CASE(res == "CPU", need_cpu, need_mem), cap = CASE(res == "CPU", cap_cpu, cap_mem)
-| EVAL Label = CONCAT(cluster, " · ", res), Requested = ROUND(r / a * 100, 1), Pending = ROUND(p / a * 100, 1),
-       `New deployment` = ROUND(n / a * 100, 1), Free = ROUND(GREATEST(cap - r - p - n, 0) / a * 100, 1),
-       `Reserve (failures, ceiling)` = ROUND(GREATEST(a - GREATEST(cap, r + p + n), 0) / a * 100, 1)
+| EVAL a = CASE(res == "CPU", a_cpu, a_mem), r = CASE(res == "CPU", rc, rm), u = CASE(res == "CPU", uc, um),
+       p = CASE(res == "CPU", pc, pm), n = CASE(res == "CPU", need_cpu, need_mem),
+       cap = CASE(res == "CPU", cap_cpu, cap_mem)
+| EVAL taken = GREATEST(r, u)
+| EVAL Label = CONCAT(cluster, " · ", res), `Requested and used` = ROUND(LEAST(r, u) / a * 100, 1),
+       `Requested, unused` = ROUND(GREATEST(r - u, 0) / a * 100, 1),
+       `Used above requests` = ROUND(GREATEST(u - r, 0) / a * 100, 1), Pending = ROUND(p / a * 100, 1),
+       `New deployment` = ROUND(n / a * 100, 1), Free = ROUND(GREATEST(cap - taken - p - n, 0) / a * 100, 1),
+       `Reserve (failures, ceiling)` = ROUND(GREATEST(a - GREATEST(cap, taken + p + n), 0) / a * 100, 1)
 | SORT cluster, res
-| KEEP Label, Requested, Pending, `New deployment`, Free, `Reserve (failures, ceiling)`"""),
+| KEEP Label, `Requested and used`, `Requested, unused`, `Used above requests`, Pending, `New deployment`, Free,
+       `Reserve (failures, ceiling)`"""),
           (0, 16 + TILE_H, 48, 10), x="Label",
-          y=["Requested", "Pending", "New deployment", "Free", "Reserve (failures, ceiling)"])
+          y=["Requested and used", "Requested, unused", "Used above requests", "Pending", "New deployment", "Free",
+             "Reserve (failures, ceiling)"])
 
     panel("table", "Nodes: room and replicas per node", q(nodes + """
 | WHERE a_cpu IS NOT NULL

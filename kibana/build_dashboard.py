@@ -723,6 +723,20 @@ def owner_control_query(src):
 | KEEP pname""")
 
 
+def owner_prefilter():
+    """First stage of the "Project owner" panels: keep only the picked Project's rows, before any aggregation, so a
+    query aggregates one Project and not all of them. The label is computed from the raw fields as pname_stage does
+    later (and on its own line, so add_project_names.py puts the names in here too). A lookup index can only name a
+    Project after a join, so there the panels filter late only (after pname_stage)."""
+    if LOOKUP_INDEX[0] and not NAME_FIELD[0]:
+        return ""
+    label = f"COALESCE({NAME_FIELD[0]}, project)" if NAME_FIELD[0] else pname_expr()
+    return f"""
+| EVAL project = {{project}}
+| EVAL pname = {label}
+| WHERE ?project == {esql_str(OWNER_ALL)} OR pname == ?project"""
+
+
 def build_owner_panels(src, base, cp_note, names):
     """"Project owner": the Project picked in the Project control (an ES|QL control listing Project names, so the
     panels filter on ?project after the name is known), on every cluster that has it; OWNER_ALL shows every Project.
@@ -738,6 +752,7 @@ def build_owner_panels(src, base, cp_note, names):
         "Over time: requests, usage and the memory limit per time bucket. "
         + cp_note + f"{names}\n\n" + nav_links("owner")))
 
+    base = src + owner_prefilter() + base[len(src):]
     ns = base + f'''
 | WHERE namespace != "" AND (?project == {esql_str(OWNER_ALL)} OR pname == ?project)'''
     # per time bucket: the selection's totals, then the tiles aggregate over the buckets

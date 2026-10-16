@@ -761,23 +761,25 @@ def build_owner_panels(src, base, cp_note, names):
         pending = SUM(pending), no_cpu = SUM(no_cpu), no_mem_lim = SUM(no_mem_lim), besteffort = SUM(besteffort),
         clusters = COUNT_DISTINCT(cluster), nss = COUNT_DISTINCT(CONCAT(cluster, "/", namespace))
   BY t"""
+    # Lens writes the value column's name under every tile of a grid, so each row holds tiles of one kind: values over
+    # the time range, then counts as of the last minutes
     tile_grid("Requests and usage", totals, [
         ("Clusters", "MAX(clusters)"),
         ("Namespaces", "MAX(nss)"),
         ("Requested vCPU", "ROUND(AVG(rc), 2)"),
         ("Used P95 vCPU", "ROUND(PERCENTILE(uc, 95), 2)"),
+        ("CPU used % of requests", "ROUND(PERCENTILE(uc, 95) / AVG(rc) * 100, 0)"),
         ("Requested GiB", "ROUND(AVG(rm) / {GIB}, 2)"),
         ("Used P95 GiB", "ROUND(PERCENTILE(um, 95) / {GIB}, 2)"),
-    ], (0, 4, 48, TILE_H), "over the range")
-    tile_grid("Efficiency and checks", totals, [
-        ("CPU used % of requests", "ROUND(PERCENTILE(uc, 95) / AVG(rc) * 100, 0)"),
         ("Mem used % of requests", "ROUND(PERCENTILE(um, 95) / AVG(rm) * 100, 0)"),
+    ], (0, 4, 48, TILE_H), "over the range")
+    tile_grid("Pods and standards now", totals, [
         ("Pods", "MAX(pods)"),
         ("Pending pods", "MAX(pending)"),
         ("No CPU request", "MAX(no_cpu)"),
         ("No memory limit", "MAX(no_mem_lim)"),
         ("BestEffort pods", "MAX(besteffort)"),
-    ], (0, 4 + TILE_H, 48, TILE_H), "P95 % · now")
+    ], (0, 4 + TILE_H, 48, TILE_H), f"now (last {NOW_WINDOW})")
 
     top = 4 + 2 * TILE_H
     for i, (res, unit) in enumerate([("cpu", "vCPU"), ("mem", "GiB")]):

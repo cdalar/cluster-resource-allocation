@@ -56,7 +56,7 @@ the Project attribute).
 
 | Panel | Content |
 |---|---|
-| Tiles | Clusters and namespaces of the Project, requested and used (P95) vCPU and GiB over the range; P95 used as % of requests for CPU and memory; pods, pending pods, containers without CPU request or memory limit, BestEffort pods (now) |
+| Tiles | Two rows, one query each; Kibana writes the same text under every tile of a row, so a row holds one kind. *Over the range*: clusters and namespaces of the Project, requested and used (P95) vCPU and GiB, P95 used as % of requests for CPU and memory. *Now (last 10 minutes)*: pods, pending pods, containers without CPU request or memory limit, BestEffort pods |
 | CPU / Memory by cluster | Per Project and cluster: requested vs used (P95) |
 | CPU / Memory over time | Requests and usage per time bucket (memory also the limits): the trend, and whether usage nears the requests or the limit |
 | Clusters | One row per Project and cluster: namespaces (count and names) and the columns of the *Projects* table, plus the Project ID |

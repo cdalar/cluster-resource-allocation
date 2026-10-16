@@ -311,7 +311,7 @@ class BuildDashboardTest(unittest.TestCase):
     def test_tiles_share_one_query_per_row(self):
         grids = [p for p in bd.REPORT_PANELS if p["kind"] == "metric_grid"]
         self.assertEqual([(p["board"], p["tiles"]) for p in grids],
-                         [("capacity", 6), ("capacity", 2), ("capacity", 9), ("owner", 6), ("owner", 7),
+                         [("capacity", 6), ("capacity", 2), ("capacity", 9), ("owner", 8), ("owner", 5),
                           ("fit", 5)])
         self.assertNotIn("metric", {p["kind"] for p in bd.REPORT_PANELS})
         for p in grids:

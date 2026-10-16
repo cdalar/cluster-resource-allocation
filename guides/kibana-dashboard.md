@@ -68,7 +68,7 @@ ceiling); *DOES NOT FIT*.
 |---|---|
 | Answer | Number of clusters per verdict, and the vCPU and GiB the deployment needs in total |
 | Does it fit? | One row per cluster: verdict, nodes, replicas that fit now / after failures / by usage after failures, needed and left vCPU and GiB (after failures, and by usage), most free vCPU and GiB on one node (the largest replica that still fits), pending requests |
-| Requests with the new deployment | Per cluster and resource, % of allocatable: requested, pending, the new deployment, free, and the reserve for node failures and the ceiling |
+| Requests and usage with the new deployment | Per cluster and resource, % of allocatable. What is taken now in three parts: *requested and used*, *requested, unused* and *used above requests* (requests = the first two, used P95 = the first and the third; together, what the *by usage* check subtracts). Then pending, the new deployment, free, and the reserve for node failures and the ceiling |
 | Nodes | Per node: replicas that fit (by requests and by usage), which resource limits it, allocatable, requested, used (P95) and free vCPU and GiB |
 
 Not in the metrics, so not checked: taints and tolerations, node selectors and affinity to particular nodes,

@@ -45,10 +45,14 @@ another). With Project names (any of the ways below), every Project column and c
 
 ### Project owner
 
-For the owner of one Rancher Project: pick it in the **Project** control at the top, and the dashboard shows it on
-every cluster that has it. The cluster and namespace controls come after the Project and list only its clusters
-and namespaces. With nothing picked it shows every Project. Not in the `--no-project` file (it needs the Project
-attribute).
+For the owner of one Rancher Project: pick it by **name** in the **Project** control at the top, and the dashboard
+shows it on every cluster that has it. The control is an ES|QL control whose options come from a query over the
+dashboard's time range: the Project names, worked out the same way as in the panels (from `--rancher-projects`, the
+lookup index or `--project-name-field`; a Project without a known name, and every Project in the file without
+names, is listed by its ID). Kibana's ES|QL controls take exactly one value, so the first option, *(all projects)*,
+stands for all of them; the dashboard opens with it. The cluster and namespace controls narrow it down further, but
+list every cluster and namespace (they don't follow the Project control). Not in the `--no-project` file (it needs
+the Project attribute).
 
 | Panel | Content |
 |---|---|
@@ -58,9 +62,8 @@ attribute).
 | Clusters | One row per Project and cluster: namespaces (count and names) and the columns of the *Projects* table, plus the Project ID |
 | Namespaces | The *Namespaces* table of the projects dashboard for the Project: requests, P95 use, efficiency, limits, pods, standards, quota and HPA |
 
-The Project control lists Project IDs unless the names are on the metrics ([`--project-name-field`](#project-names-on-the-metrics)).
-With names from Rancher or a lookup index, the panels show names but the control still lists IDs: an owner finds
-the ID next to the name in the *Clusters* table, or in the *Projects* table of the projects dashboard.
+The panels filter on the picked name after the name is worked out, so every query still reads all Projects of the
+time range (as the projects dashboard does) and then keeps one.
 
 ### Will it fit?
 

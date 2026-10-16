@@ -161,7 +161,8 @@ class BuildDashboardTest(unittest.TestCase):
         bd.PROJECT_NAMES.update(names)
         self.rebuild()
         self.assertEqual("".join(patched), self.generated())
-        self.assertEqual(changed, 2 * len([p for p in report_panels() if p["esql"]]))
+        # every query twice (the panel keeps it in two places), and the Project control's options query
+        self.assertEqual(changed, 2 * len([p for p in report_panels() if p["esql"]]) + 1)
         # again, with other names and on a file that already has names: replaced, not nested
         again, _ = apn.add_names(patched, {"p-bbjk7": "billing"})
         bd.PROJECT_NAMES.clear()
@@ -206,6 +207,8 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertNotIn("LOOKUP JOIN", q)
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
         for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:-1]:  # not "Will it fit?": no Project control
+            if dashboard["id"] == bd.OWNER_ID:  # an ES|QL control with names in every variant
+                continue
             control = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])["ctrl-project"]
             self.assertEqual(control["explicitInput"]["fieldName"], field)
             self.assertEqual(control["explicitInput"]["title"], "Rancher Project")
@@ -329,9 +332,31 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual(line["seriesType"], "line")
         dashboard = next(d for d in bd.saved_objects(bd.DEFAULT_INDEX) if d["id"] == bd.OWNER_ID)
         controls = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
-        # the Project first: the chained cluster and namespace controls then list only that Project's
         self.assertEqual([(cid, c["order"]) for cid, c in controls.items()],
-                         [("ctrl-project", 0), ("ctrl-cluster", 1), ("ctrl-namespace", 2)])
+                         [("ctrl-project-name", 0), ("ctrl-cluster", 1), ("ctrl-namespace", 2)])
+        project = controls["ctrl-project-name"]["explicitInput"]
+        self.assertEqual((project["controlType"], project["variableName"], project["selectedOptions"]),
+                         ("VALUES_FROM_QUERY", "project", ["(all projects)"]))
+        self.assertEqual(project["esqlQuery"], bd.OWNER_CONTROL[0])
+        self.assertTrue(project["esqlQuery"].endswith("| MV_EXPAND pname\n| KEEP pname"))
+        self.assertIn("| EVAL pname = project", project["esqlQuery"])  # the same label as the panels
+        for p in owner[1:]:  # every panel filters on the picked Project's label
+            self.assertIn('(?project == "(all projects)" OR pname == ?project)', p["esql"], p["title"])
+        self.assertEqual([r["name"] for r in dashboard["references"]],
+                         ["controlGroup_ctrl-cluster:optionsListDataView",
+                          "controlGroup_ctrl-namespace:optionsListDataView", bd.CP_FILTER_REF])
+        # names in the control in every variant that has them
+        bd.LOOKUP_INDEX[0] = bd.DEFAULT_LOOKUP_INDEX
+        self.rebuild()
+        self.assertIn("| LOOKUP JOIN rancher-projects ON project\n| EVAL pname = COALESCE(project_name, project)",
+                      bd.OWNER_CONTROL[0])
+        bd.LOOKUP_INDEX[0], bd.NAME_FIELD[0] = None, bd.DEFAULT_NAME_FIELD
+        self.rebuild()
+        self.assertIn("| STATS project_name = MAX(resource.attributes.rancher.project.name) "
+                      "BY project = resource.attributes.rancher.project.id", bd.OWNER_CONTROL[0])
+        self.assertIn("| EVAL pname = COALESCE(project_name, project)", bd.OWNER_CONTROL[0])
+        self.without_project()
+        self.assertIsNone(bd.OWNER_CONTROL[0])
         self.assertEqual(dashboard["attributes"]["timeFrom"], "now-1h")
 
     def test_fit_board(self):

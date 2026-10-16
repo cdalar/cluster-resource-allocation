@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build the Kibana dashboards of the cluster resource report from OpenTelemetry metrics.
 
-Writes an importable saved-objects file: four linked dashboards and a data view for the filter controls. They follow
+Writes an importable saved-objects file: five linked dashboards and a data view for the filter controls. They follow
 the in-cluster dashboard of the cluster-resource-report chart: "capacity" (tiles, capacity by requests with N+1),
 "projects" (CPU and memory by project, Projects and Namespaces tables) and "Workload limits" (every workload against
-limit <= 2x request); "Will it fit?" answers whether a new deployment (replicas x CPU and memory per replica, chosen
+limit <= 2x request); "Project owner" shows one Project (chosen in a control) on every cluster that has it: its
+namespaces, requests and usage, now and over time; "Will it fit?" answers whether a new deployment (replicas x CPU and memory per replica, chosen
 in controls) fits a cluster, node by node, after node failures and by usage. Control-plane nodes are left out by a
 filter saved in each dashboard. Every panel is an
 ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch exporter (mapping mode `otel`):
@@ -48,6 +49,7 @@ import urllib.request
 
 REPORT_ID = "cra-cluster-resource-report"
 PROJECTS_ID = "cra-cluster-resource-projects"
+OWNER_ID = "cra-project-owner"
 LIMITS_ID = "cra-workload-limits"
 FIT_ID = "cra-deployment-fit"
 DATA_VIEW_ID = "cra-otel-metrics"
@@ -132,6 +134,9 @@ REPORT_BOARDS = [
      "Tiles, capacity by requests with N+1, per cluster, from OpenTelemetry metrics."),
     ("projects", PROJECTS_ID, "Cluster resource report: projects",
      "CPU and memory by project, Projects and Namespaces tables, from OpenTelemetry metrics."),
+    ("owner", OWNER_ID, "Project owner: my Project on every cluster",
+     "One Rancher Project (chosen in the Project control) on every cluster that has it: namespaces, requests and "
+     "P95 usage, over time, from OpenTelemetry metrics."),
     ("limits", LIMITS_ID, "Workload limits: limit ≤ 2× request",
      "Every workload checked against a LimitRange maxLimitRequestRatio of 2, from OpenTelemetry metrics."),
     ("fit", FIT_ID, "Will it fit? New deployment vs. cluster capacity",
@@ -171,7 +176,7 @@ def board_panels(board):
 def nav_links(current):
     """Links between the dashboards (relative to Kibana's dashboards app, so they work under a base path)."""
     links = [f"[{title}](#/view/{did})" if board != current else f"**{title}**"
-             for board, did, title, _ in REPORT_BOARDS]
+             for board, did, title, _ in REPORT_BOARDS if board != "owner" or F["project"] is not None]
     return "Dashboards: " + " · ".join(links)
 
 
@@ -367,7 +372,8 @@ REPORT_COLUMNS = ("`CPU req`, `CPU P95`, `CPU eff. %`, `CPU req peak`, `Mem req 
 COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Free (N+1)": "#e2e8f0",
           "N+1 reserve": "#fca5a5", "Requested": "#1d4ed8", "Used (P95)": "#0d9488", "Pending": "#f59e0b",
           "New deployment": "#7c3aed", "Free": "#e2e8f0", "Reserve (failures, ceiling)": "#fca5a5",
-          "Requested and used": "#1d4ed8", "Requested, unused": "#93c5fd", "Used above requests": "#dc2626"}
+          "Requested and used": "#1d4ed8", "Requested, unused": "#93c5fd", "Used above requests": "#dc2626",
+          "Used": "#0d9488", "Limit": "#64748b"}
 
 
 def build_report_panels(index):
@@ -595,6 +601,9 @@ def _build_report_panels(src):
 | LIMIT 1000
 | KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, 28, 48, 16))
 
+    if F["project"] is not None:
+        build_owner_panels(base, cp_note, names)
+
     _BOARD[0] = "limits"
     panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
         f"**Workload limits: limit ≤ {LIMIT_RATIO}× request.** Every Deployment, StatefulSet, DaemonSet, CronJob, "
@@ -690,6 +699,86 @@ def _build_report_panels(src):
 | LIMIT 1000
 | KEEP Cluster, Node, `Replicas fit`, `Replicas fit by usage`, `Limited by`, `Alloc vCPU`, `Req vCPU`,
        `Used P95 vCPU`, `Free vCPU`, `Alloc GiB`, `Req GiB`, `Used P95 GiB`, `Free GiB`"""), (0, 26 + TILE_H, 48, 14))
+
+
+def build_owner_panels(base, cp_note, names):
+    """"Project owner": the Projects picked in the Project control (all of them while none is picked), on every
+    cluster that has them. Needs the Project attribute. Requests and usage per namespace (as in the Namespaces table of
+    the projects dashboard), per cluster, and over time."""
+    _BOARD[0] = "owner"
+    control = "Rancher Project" if NAME_FIELD[0] else "Rancher Project ID"
+    panel("markdown", "About", None, (0, 0, 48, 4), markdown=(
+        f"**Project owner: my Project on every cluster.** Pick your Project in the *{control}* control above (then "
+        "a cluster or namespace to narrow it down); with none picked, every Project is shown. "
+        "*Requested* = requests of running pods, averaged over the time range; *used* = P95 of usage over the range; "
+        f"*used % of requests* = P95 used / requested; pods, pending and standards = the last {NOW_WINDOW}. "
+        "Over time: requests, usage and the memory limit per time bucket. "
+        + ("" if NAME_FIELD[0] else "The Project control lists Project IDs: the *Clusters* table below shows the ID "
+           "next to each name. ")
+        + cp_note + f"{names}\n\n" + nav_links("owner")))
+
+    ns = base + '\n| WHERE namespace != ""'
+    # per time bucket: the selection's totals, then the tiles aggregate over the buckets
+    totals = ns + """
+| STATS rc = SUM(rc), rm = SUM(rm), lm = SUM(lm), uc = SUM(use_cpu), um = SUM(use_mem), pods = SUM(pods),
+        pending = SUM(pending), no_cpu = SUM(no_cpu), no_mem_lim = SUM(no_mem_lim), besteffort = SUM(besteffort),
+        clusters = COUNT_DISTINCT(cluster), nss = COUNT_DISTINCT(CONCAT(cluster, "/", namespace))
+  BY t"""
+    tile_grid("Requests and usage", totals, [
+        ("Clusters", "MAX(clusters)"),
+        ("Namespaces", "MAX(nss)"),
+        ("Requested vCPU", "ROUND(AVG(rc), 2)"),
+        ("Used P95 vCPU", "ROUND(PERCENTILE(uc, 95), 2)"),
+        ("Requested GiB", "ROUND(AVG(rm) / {GIB}, 2)"),
+        ("Used P95 GiB", "ROUND(PERCENTILE(um, 95) / {GIB}, 2)"),
+    ], (0, 4, 48, TILE_H), "over the range")
+    tile_grid("Efficiency and checks", totals, [
+        ("CPU used % of requests", "ROUND(PERCENTILE(uc, 95) / AVG(rc) * 100, 0)"),
+        ("Memory used % of requests", "ROUND(PERCENTILE(um, 95) / AVG(rm) * 100, 0)"),
+        ("Pods", "MAX(pods)"),
+        ("Pending pods", "MAX(pending)"),
+        ("No CPU request", "MAX(no_cpu)"),
+        ("No memory limit", "MAX(no_mem_lim)"),
+        ("BestEffort pods", "MAX(besteffort)"),
+    ], (0, 4 + TILE_H, 48, TILE_H), "P95 % · now")
+
+    top = 4 + 2 * TILE_H
+    for i, (res, unit) in enumerate([("cpu", "vCPU"), ("mem", "GiB")]):
+        label = "CPU" if res == "cpu" else "Memory"
+        r, u = ("rc", "use_cpu") if res == "cpu" else ("rm", "use_mem")
+        div = "" if res == "cpu" else " / {GIB}"
+        panel("bar", f"{label} by cluster ({unit}): requested and used (P95)", q(ns + f"""
+| STATS req = SUM({r}), used = SUM({u}) BY t, cluster, pname
+| STATS Requested = ROUND(AVG(req){div}, 2), `Used (P95)` = ROUND(PERCENTILE(used, 95){div}, 2) BY cluster, pname
+| EVAL Cluster = CONCAT(pname, " · ", cluster)
+| SORT Requested DESC NULLS LAST
+| LIMIT 30
+| KEEP Cluster, Requested, `Used (P95)`"""), (i * 24, top, 24, 10), x="Cluster", y=["Requested", "Used (P95)"])
+
+    # requests and usage per time bucket (sums over the pods; usage is the average within a bucket, not the P95)
+    panel("line", "CPU over time (vCPU)", q(ns + """
+| STATS Requested = ROUND(SUM(rc), 2), Used = ROUND(SUM(use_cpu), 2) BY t
+| SORT t
+| KEEP t, Requested, Used"""), (0, top + 10, 24, 10), x="t", y=["Requested", "Used"])
+    panel("line", "Memory over time (GiB)", q(ns + """
+| STATS Requested = ROUND(SUM(rm) / {GIB}, 2), Used = ROUND(SUM(use_mem) / {GIB}, 2),
+        Limit = ROUND(SUM(lm) / {GIB}, 2) BY t
+| SORT t
+| KEEP t, Requested, Used, Limit"""), (24, top + 10, 24, 10), x="t", y=["Requested", "Used", "Limit"])
+
+    panel("table", "Clusters: my Project per cluster", q(ns + report_group("cluster, project, pname, category") + """
+| EVAL NS = MV_COUNT(MV_DEDUPE(ns)), Cluster = cluster, Project = pname, `Project ID` = project,
+       Category = category, Namespaces = MV_SORT(MV_DEDUPE(ns))
+| SORT Project, Cluster
+| LIMIT 500
+| KEEP Cluster, Project, NS, """ + REPORT_COLUMNS + ", Namespaces, Category, `Project ID`"), (0, top + 20, 48, 9))
+
+    panel("table", "Namespaces", q(ns + report_group(
+        "cluster, project, pname, category, namespace", extra=", Quota = COALESCE(rq, 0), HPA = COALESCE(hpa, 0)") + """
+| EVAL Cluster = cluster, Namespace = namespace, Project = pname
+| SORT Project, Cluster, Namespace
+| LIMIT 1000
+| KEEP Cluster, Namespace, Project, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, top + 29, 48, 14))
 
 
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----
@@ -825,8 +914,10 @@ def dashboard_panels(index, panels):
 
 def control_fields(board=None):
     """Filter controls of a board. "Will it fit?" has only the cluster: a Project or namespace filter would drop the
-    nodes' allocatable from its queries."""
-    fields = ("cluster",) if board == "fit" else ("cluster", "project", "namespace")
+    nodes' allocatable from its queries. "Project owner" starts with the Project, so the cluster and namespace
+    controls (chained) list only those of the picked Project."""
+    fields = (("cluster",) if board == "fit" else ("project", "cluster", "namespace") if board == "owner" else
+              ("cluster", "project", "namespace"))
     return [f for f in fields if F[f] is not None]
 
 
@@ -986,7 +1077,7 @@ def main():
                     help=f"without the dashboard filter that leaves out nodes where {CP_FIELD[0]} is \"true\" "
                          "and the metrics of their pods (also for --check). Needs --out")
     ap.add_argument("--split", action="store_true",
-                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -limits, -fit), each with the "
+                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -owner, -limits, -fit), each with the "
                          "data view: smaller uploads, e.g. behind a proxy that limits the request size")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "

@@ -377,6 +377,7 @@ COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Fr
 
 
 def build_report_panels(index):
+    OWNER_CONTROL[0] = None
     _build_report_panels(f"FROM {index}")
 
 
@@ -428,6 +429,12 @@ FIT_CONTROLS = [
     ("ceiling", "Ceiling (% of allocatable)", ["100", "90", "80", "70"], "100"),
 ]
 FIT_DEFAULTS = {name: default for name, _, _, default in FIT_CONTROLS}
+
+# "Project owner": the Project control (ES|QL variable ?project) lists Project names from a query; Kibana's ES|QL
+# controls take exactly one value, so the first option (and the one the dashboard opens with) stands for all of them.
+OWNER_ALL = "(all projects)"
+OWNER_CONTROL = [None]  # the control's options query, set by build_owner_panels
+CHECK_PARAMS = {**FIT_DEFAULTS, "project": OWNER_ALL}  # the ES|QL variables as the dashboards open, for --check
 
 FIT_INPUTS = """
 | EVAL replicas = TO_DOUBLE(?replicas), c = TO_DOUBLE(?cpu), m = TO_DOUBLE(?memory) * {GIB},
@@ -602,7 +609,7 @@ def _build_report_panels(src):
 | KEEP Cluster, Namespace, Project, Category, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, 28, 48, 16))
 
     if F["project"] is not None:
-        build_owner_panels(base, cp_note, names)
+        build_owner_panels(src, base, cp_note, names)
 
     _BOARD[0] = "limits"
     panel("markdown", "About", None, (0, 0, 48, 5), markdown=(
@@ -701,23 +708,38 @@ def _build_report_panels(src):
        `Used P95 vCPU`, `Free vCPU`, `Alloc GiB`, `Req GiB`, `Used P95 GiB`, `Free GiB`"""), (0, 26 + TILE_H, 48, 14))
 
 
-def build_owner_panels(base, cp_note, names):
-    """"Project owner": the Projects picked in the Project control (all of them while none is picked), on every
-    cluster that has them. Needs the Project attribute. Requests and usage per namespace (as in the Namespaces table of
-    the projects dashboard), per cluster, and over time."""
+def owner_control_query(src):
+    """Options of the Project control: the Project labels of the time range (names when the report has them, as in
+    its panels: pname), after OWNER_ALL. Projects without a name keep their ID; namespaces without a Project are not
+    offered. A control query gets the dashboard's time range as a filter, not ?_tstart / ?_tend."""
+    name = f"{LOOKUP_NAME} = MAX({NAME_FIELD[0]}) " if NAME_FIELD[0] else ""
+    return q(src + f"""
+| WHERE {F["project"]} IS NOT NULL
+| STATS {name}BY project = {F["project"]}
+{{pname_stage}}
+| STATS names = VALUES(pname)
+| EVAL pname = MV_APPEND({esql_str(OWNER_ALL)}, MV_SORT(names))
+| MV_EXPAND pname
+| KEEP pname""")
+
+
+def build_owner_panels(src, base, cp_note, names):
+    """"Project owner": the Project picked in the Project control (an ES|QL control listing Project names, so the
+    panels filter on ?project after the name is known), on every cluster that has it; OWNER_ALL shows every Project.
+    Needs the Project attribute. Requests and usage per namespace (as in the Namespaces table of the projects
+    dashboard), per cluster, and over time."""
     _BOARD[0] = "owner"
-    control = "Rancher Project" if NAME_FIELD[0] else "Rancher Project ID"
+    OWNER_CONTROL[0] = owner_control_query(src)
     panel("markdown", "About", None, (0, 0, 48, 4), markdown=(
-        f"**Project owner: my Project on every cluster.** Pick your Project in the *{control}* control above (then "
-        "a cluster or namespace to narrow it down); with none picked, every Project is shown. "
+        "**Project owner: my Project on every cluster.** Pick your Project in the *Project* control above (then "
+        f"a cluster or namespace to narrow it down); *{OWNER_ALL}* shows every Project. "
         "*Requested* = requests of running pods, averaged over the time range; *used* = P95 of usage over the range; "
         f"*used % of requests* = P95 used / requested; pods, pending and standards = the last {NOW_WINDOW}. "
         "Over time: requests, usage and the memory limit per time bucket. "
-        + ("" if NAME_FIELD[0] else "The Project control lists Project IDs: the *Clusters* table below shows the ID "
-           "next to each name. ")
         + cp_note + f"{names}\n\n" + nav_links("owner")))
 
-    ns = base + '\n| WHERE namespace != ""'
+    ns = base + f'''
+| WHERE namespace != "" AND (?project == {esql_str(OWNER_ALL)} OR pname == ?project)'''
     # per time bucket: the selection's totals, then the tiles aggregate over the buckets
     totals = ns + """
 | STATS rc = SUM(rc), rm = SUM(rm), lm = SUM(lm), uc = SUM(use_cpu), um = SUM(use_mem), pods = SUM(pods),
@@ -914,9 +936,8 @@ def dashboard_panels(index, panels):
 
 def control_fields(board=None):
     """Filter controls of a board. "Will it fit?" has only the cluster: a Project or namespace filter would drop the
-    nodes' allocatable from its queries. "Project owner" starts with the Project, so the cluster and namespace
-    controls (chained) list only those of the picked Project."""
-    fields = (("cluster",) if board == "fit" else ("project", "cluster", "namespace") if board == "owner" else
+    nodes' allocatable from its queries. "Project owner" picks its Project in an ES|QL control instead (names)."""
+    fields = (("cluster",) if board == "fit" else ("cluster", "namespace") if board == "owner" else
               ("cluster", "project", "namespace"))
     return [f for f in fields if F[f] is not None]
 
@@ -929,16 +950,24 @@ def esql_controls():
         for name, title, values, default in FIT_CONTROLS}
 
 
+def owner_control():
+    """ES|QL control of "Project owner" that sets ?project: options from OWNER_CONTROL, opens with OWNER_ALL."""
+    return {"ctrl-project-name": {"type": "esqlControl", "width": "medium", "grow": True, "explicitInput": {
+        "id": "ctrl-project-name", "title": "Project", "variableName": "project", "variableType": "values",
+        "controlType": "VALUES_FROM_QUERY", "esqlQuery": OWNER_CONTROL[0], "availableOptions": [],
+        "selectedOptions": [OWNER_ALL]}}}
+
+
 def control_group(board=None):
     titles = {"cluster": "Cluster", "project": "Rancher Project ID", "namespace": "Namespace"}
     fields = dict(F)
     if NAME_FIELD[0] and F["project"] is not None:  # select Projects by name
         titles["project"], fields["project"] = "Rancher Project", NAME_FIELD[0]
     controls = [(f, titles[f]) for f in control_fields(board)]
-    panels = {}
-    for i, (field, title) in enumerate(controls):
+    panels = {cid: {"order": 0, **c} for cid, c in owner_control().items()} if board == "owner" else {}
+    for field, title in controls:
         cid = f"ctrl-{field}"
-        panels[cid] = {"order": i, "width": "medium", "grow": True, "type": "optionsListControl",
+        panels[cid] = {"order": len(panels), "width": "medium", "grow": True, "type": "optionsListControl",
                        "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": fields[field],
                                          "title": title, "searchTechnique": "prefix", "selectedOptions": [],
                                          "sort": {"by": "_key", "direction": "asc"}}}
@@ -1019,14 +1048,16 @@ def run_checks(url, window, end=None, only=None):
     iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     headers, ctx = es_auth()
     ok = True
-    for p in REPORT_PANELS:
+    # the panels, and the query that fills the "Project owner" control
+    control = [{"title": "Project owner: options of the Project control", "esql": OWNER_CONTROL[0], "kind": "control"}]
+    for p in REPORT_PANELS + (control if OWNER_CONTROL[0] else []):
         if not p["esql"]:
             continue
         if only and only not in p["title"]:
             continue
-        # the "Will it fit?" variables as the dashboard opens (strings, as Kibana stores them)
+        # the ES|QL control variables as the dashboards open (strings, as Kibana stores them)
         params = [{"_tstart": iso(start)}, {"_tend": iso(end)}] + [
-            {k: v} for k, v in FIT_DEFAULTS.items() if re.search(rf"\?{k}\b", p["esql"])]
+            {k: v} for k, v in CHECK_PARAMS.items() if re.search(rf"\?{k}\b", p["esql"])]
         body = {"query": p["esql"], "params": params,
                 "filter": {"bool": {"filter": [{"range": {"@timestamp": {"gte": iso(start), "lte": iso(end)}}}],
                                     "must_not": [f["query"] for f in saved_filters()]}}}

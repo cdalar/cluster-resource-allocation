@@ -734,7 +734,7 @@ def build_owner_panels(base, cp_note, names):
     ], (0, 4, 48, TILE_H), "over the range")
     tile_grid("Efficiency and checks", totals, [
         ("CPU used % of requests", "ROUND(PERCENTILE(uc, 95) / AVG(rc) * 100, 0)"),
-        ("Memory used % of requests", "ROUND(PERCENTILE(um, 95) / AVG(rm) * 100, 0)"),
+        ("Mem used % of requests", "ROUND(PERCENTILE(um, 95) / AVG(rm) * 100, 0)"),
         ("Pods", "MAX(pods)"),
         ("Pending pods", "MAX(pending)"),
         ("No CPU request", "MAX(no_cpu)"),

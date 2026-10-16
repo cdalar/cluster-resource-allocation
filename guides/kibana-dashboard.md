@@ -297,6 +297,12 @@ Object IDs are fixed (`cra-cluster-resource-report`, `cra-cluster-resource-repor
 so importing again updates the dashboards in place. Changes made in the Kibana UI are overwritten by the next import; make them in
 `build_dashboard.py` instead.
 
+**After importing a new version, click *Reset* (top right) on a dashboard you had open before.** Kibana keeps a
+dashboard's unsaved changes in the browser (a control selection is one), and they win over the imported version. When
+the controls changed, the old ones stay on screen and the panels fail: e.g. *Project owner* with its earlier
+*Rancher Project ID* control instead of the *Project* control shows `Unknown query parameter [project]`. *Reset*
+drops the browser's changes; opening the dashboard in a private window shows the imported version too.
+
 ## Checking and adapting
 
 Run all panel queries against Elasticsearch before importing, with a read-only API key:

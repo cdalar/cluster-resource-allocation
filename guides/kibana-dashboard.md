@@ -61,7 +61,6 @@ attribute).
 The Project control lists Project IDs unless the names are on the metrics ([`--project-name-field`](#project-names-on-the-metrics)).
 With names from Rancher or a lookup index, the panels show names but the control still lists IDs: an owner finds
 the ID next to the name in the *Clusters* table, or in the *Projects* table of the projects dashboard.
-The panels were checked with the unit tests only, not yet against Elasticsearch.
 
 ### Will it fit?
 

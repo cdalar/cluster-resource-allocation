@@ -1,3 +1,5 @@
 discovery-output/
 baseline-*/
 __pycache__/
+allocation/build/
+build/

@@ -1,0 +1,12 @@
+# allocations/projects/data-platform.yaml
+project: data-platform
+owners: [data-lead@corp.example, data-ops@corp.example]
+allocations:
+  - cluster: prod-01
+    namespaces:
+      - name: data-ingest
+        cpu: 16
+        memory: 64Gi
+      - name: data-api
+        cpu: 8
+        memory: 32Gi

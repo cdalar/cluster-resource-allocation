@@ -69,12 +69,16 @@ class BuildDashboardTest(unittest.TestCase):
         dashboard = bd.saved_objects(bd.DEFAULT_INDEX)[1]
         self.assertNotIn("ctrl-project", dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
         self.assertEqual(len([r for r in dashboard["references"] if r["name"].startswith("controlGroup_")]), 2)
+        # no "Project owner" dashboard without Projects, and no link to it
+        ids = [d["id"] for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]]
+        self.assertEqual(ids, [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID, bd.FIT_ID])
+        self.assertNotIn(bd.OWNER_ID, text)
 
     def test_saved_objects(self):
         data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
         self.assertEqual(data_view["type"], "index-pattern")
         self.assertEqual([d["id"] for d in dashboards],
-                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID, bd.FIT_ID])
+                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.OWNER_ID, bd.LIMITS_ID, bd.FIT_ID])
         self.check_dashboards()
         ids = [d["id"] for d in dashboards]
         for d in dashboards:  # every About links the other dashboards
@@ -251,7 +255,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.rebuild()
         shown = [p for p in bd.REPORT_PANELS if p["esql"] and "Project = pname" in p["esql"]
                  or p["esql"] and "CONCAT(cluster, \" / \", pname)" in p["esql"]]
-        self.assertEqual({p["board"] for p in shown}, {"projects", "limits"})
+        self.assertEqual({p["board"] for p in shown}, {"projects", "owner", "limits"})
         for p in report_panels():
             if p["esql"]:
                 self.assertIn('project == "p-bbjk7", "payments"', p["esql"], p["title"])
@@ -302,7 +306,8 @@ class BuildDashboardTest(unittest.TestCase):
     def test_tiles_share_one_query_per_row(self):
         grids = [p for p in bd.REPORT_PANELS if p["kind"] == "metric_grid"]
         self.assertEqual([(p["board"], p["tiles"]) for p in grids],
-                         [("capacity", 6), ("capacity", 2), ("capacity", 9), ("fit", 5)])
+                         [("capacity", 6), ("capacity", 2), ("capacity", 9), ("owner", 6), ("owner", 7),
+                          ("fit", 5)])
         self.assertNotIn("metric", {p["kind"] for p in bd.REPORT_PANELS})
         for p in grids:
             self.assertTrue(p["esql"].endswith("| SORT ord\n| KEEP label, value" + (", max" if p["bar"] else "")
@@ -310,6 +315,24 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertEqual(p["esql"].count("TO_DOUBLE(v"), p["tiles"])
         vis = bd.lens_attributes(grids[1], bd.DEFAULT_INDEX)["state"]["visualization"]
         self.assertEqual((vis["breakdownByAccessor"], vis["maxAccessor"], vis["maxCols"]), ("label", "max", 2))
+
+    def test_owner_board(self):
+        owner = bd.board_panels("owner")
+        self.assertEqual([p["kind"] for p in owner],
+                         ["markdown", "metric_grid", "metric_grid", "bar", "bar", "line", "line", "table", "table"])
+        for p in owner[1:]:  # namespaces of Projects only: node rows (allocatable) are left out
+            self.assertIn('| WHERE namespace != ""', p["esql"], p["title"])
+        clusters = next(p for p in owner if p["title"].startswith("Clusters"))
+        self.assertEqual(bd.table_columns(clusters["esql"])[:3], ["Cluster", "Project", "NS"])
+        self.assertIn("Project ID", bd.table_columns(clusters["esql"]))
+        line = bd.lens_attributes(owner[5], bd.DEFAULT_INDEX)["state"]["visualization"]["layers"][0]
+        self.assertEqual(line["seriesType"], "line")
+        dashboard = next(d for d in bd.saved_objects(bd.DEFAULT_INDEX) if d["id"] == bd.OWNER_ID)
+        controls = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
+        # the Project first: the chained cluster and namespace controls then list only that Project's
+        self.assertEqual([(cid, c["order"]) for cid, c in controls.items()],
+                         [("ctrl-project", 0), ("ctrl-cluster", 1), ("ctrl-namespace", 2)])
+        self.assertEqual(dashboard["attributes"]["timeFrom"], "now-1h")
 
     def test_fit_board(self):
         fit = bd.board_panels("fit")

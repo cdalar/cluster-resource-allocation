@@ -3,12 +3,12 @@
 Kibana dashboards with the current situation of every cluster, built from the OpenTelemetry metrics the
 clusters already send to the central Elastic. They show the same report as the in-cluster dashboard, without
 installing anything in the clusters: capacity and N+1 per cluster, requests and usage per Rancher Project and
-namespace, the resource-standards gaps, the workloads a limit ≤ 2× request rule would reject, and whether a new
-deployment fits a cluster.
+namespace, one Project on every cluster for its owner, the resource-standards gaps, the workloads a limit ≤ 2×
+request rule would reject, and whether a new deployment fits a cluster.
 
 | File | Content |
 |---|---|
-| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: four linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects*, *Workload limits* ([below](#cluster-resource-report)) and *Will it fit?* ([below](#will-it-fit)), and a data view (`metrics-*.otel-*`) for the filter controls |
+| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: five linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects*, *Workload limits* ([below](#cluster-resource-report)), *Project owner* ([below](#project-owner)) and *Will it fit?* ([below](#will-it-fit)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resource-report-no-project.ndjson`](../kibana/cluster-resource-report-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
 | [`kibana/cluster-resource-report-project-names.ndjson`](../kibana/cluster-resource-report-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
@@ -26,7 +26,7 @@ mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.
 ## Cluster resource report
 
 The report follows the in-cluster dashboard of the [chart](../charts/cluster-resource-report/README.md) on the
-OTel metrics, for all clusters at once. It is three dashboards, plus [*Will it fit?*](#will-it-fit), and every About
+OTel metrics, for all clusters at once. It is three dashboards, plus [*Project owner*](#project-owner) and [*Will it fit?*](#will-it-fit), and every About
 box links the others: *capacity* (tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and
 Namespaces tables) and *Workload limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
 leaves out control-plane nodes ([below](#control-plane-nodes)); the selections do not carry over when following a
@@ -42,6 +42,26 @@ another). With Project names (any of the ways below), every Project column and c
 | CPU / Memory by project | Top 15 projects by requests (without System), requested vs used (P95) | Same charts |
 | Projects, Namespaces | Requests, P95 use, efficiency, peak, memory limits, pods, pending, no CPU request, no memory limit, BestEffort; namespaces also quota and HPA counts | Same columns (LimitRange isn't in the metrics) |
 | Workloads vs. limit ≤ 2× request | Every Deployment, StatefulSet, DaemonSet, CronJob, Job and bare Pod (now), problems first: what a LimitRange `maxLimitRequestRatio: 2` ([10](../docs/10-implementation-plan.md), steps 2.1 and 5.4) would reject at the next pod creation, per resource. A container breaks it with limit > 2× request, or with a request but no limit (unless the LimitRange sets a default limit); without a request Kubernetes sets the request to the limit, so a limit alone passes. Columns: status, worst ratio and problems for memory and CPU, the containers affected, pods, containers, requests. Kind and name come from `k8s.deployment.name`, `k8s.statefulset.name`, `k8s.daemonset.name`, `k8s.job.name` (k8sattributes; a CronJob is its Job's name without the timestamp). The CPU column flags every container without a CPU limit: only relevant if the ratio is set for CPU too ([ADR-0003](../docs/adr/0003-cpu-limits.md) keeps CPU limits optional) | — (new) |
+
+### Project owner
+
+For the owner of one Rancher Project: pick it in the **Project** control at the top, and the dashboard shows it on
+every cluster that has it. The cluster and namespace controls come after the Project and list only its clusters
+and namespaces. With nothing picked it shows every Project. Not in the `--no-project` file (it needs the Project
+attribute).
+
+| Panel | Content |
+|---|---|
+| Tiles | Clusters and namespaces of the Project, requested and used (P95) vCPU and GiB over the range; P95 used as % of requests for CPU and memory; pods, pending pods, containers without CPU request or memory limit, BestEffort pods (now) |
+| CPU / Memory by cluster | Per Project and cluster: requested vs used (P95) |
+| CPU / Memory over time | Requests and usage per time bucket (memory also the limits): the trend, and whether usage nears the requests or the limit |
+| Clusters | One row per Project and cluster: namespaces (count and names) and the columns of the *Projects* table, plus the Project ID |
+| Namespaces | The *Namespaces* table of the projects dashboard for the Project: requests, P95 use, efficiency, limits, pods, standards, quota and HPA |
+
+The Project control lists Project IDs unless the names are on the metrics ([`--project-name-field`](#project-names-on-the-metrics)).
+With names from Rancher or a lookup index, the panels show names but the control still lists IDs: an owner finds
+the ID next to the name in the *Clusters* table, or in the *Projects* table of the projects dashboard.
+The panels were checked with the unit tests only, not yet against Elasticsearch.
 
 ### Will it fit?
 
@@ -256,7 +276,7 @@ and import them one by one; each holds the data view, so the order does not matt
 
 ```bash
 ./kibana/build_dashboard.py <options> --split --out cluster-resources.ndjson
-# cluster-resources-capacity.ndjson, -projects, -limits, -fit; the sizes are printed
+# cluster-resources-capacity.ndjson, -projects, -owner, -limits, -fit; the sizes are printed
 ```
 
 `--rancher-projects` adds about 2 KiB per Project to the capacity file (about 270 KiB without names); with several

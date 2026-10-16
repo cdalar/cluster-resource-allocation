@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Build the Kibana dashboards of the cluster resource report from OpenTelemetry metrics.
 
-Writes an importable saved-objects file: three linked dashboards and a data view for the filter controls. They follow
+Writes an importable saved-objects file: four linked dashboards and a data view for the filter controls. They follow
 the in-cluster dashboard of the cluster-resource-report chart: "capacity" (tiles, capacity by requests with N+1),
 "projects" (CPU and memory by project, Projects and Namespaces tables) and "Workload limits" (every workload against
-limit <= 2x request). Control-plane nodes are left out by a filter saved in each dashboard. Every panel is an
+limit <= 2x request); "Will it fit?" answers whether a new deployment (replicas x CPU and memory per replica, chosen
+in controls) fits a cluster, node by node, after node failures and by usage. Control-plane nodes are left out by a
+filter saved in each dashboard. Every panel is an
 ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch exporter (mapping mode `otel`):
 `metrics-k8sclusterreceiver.otel-*` (requests, limits, allocatable, pod phase) and
 `metrics-kubeletstatsreceiver.otel-*` (usage).
@@ -47,6 +49,7 @@ import urllib.request
 REPORT_ID = "cra-cluster-resource-report"
 PROJECTS_ID = "cra-cluster-resource-projects"
 LIMITS_ID = "cra-workload-limits"
+FIT_ID = "cra-deployment-fit"
 DATA_VIEW_ID = "cra-otel-metrics"
 ADHOC_ID = "cra-otel-metrics-esql"
 DEFAULT_INDEX = "metrics-*.otel-*"
@@ -89,6 +92,9 @@ F = {
 # field and ES|QL rejects every query that names it ("Unknown column"): --no-quota / --no-hpa leave them out.
 OPTIONAL_FIELDS = {"quota": ("rq_uid", "rq_hard"), "hpa": ("hpa_uid", "hpa_max")}
 TIME_FROM = ["now-1h"]  # time range the dashboards open with (to now); --time-from
+# Boards that open with a longer range: "Will it fit?" checks usage too, and a P95 over one hour misses daily peaks.
+# --time-from sets every board.
+BOARD_TIME_FROM = {"fit": "now-24h"}
 GIB = "1073741824.0"  # a double, so byte sums (longs) are not integer-divided
 NO_PROJECT = '"(no project)"'
 
@@ -119,7 +125,7 @@ def q(text):
 REPORT_PANELS = []  # filled by panel() below, in layout order; each panel's "board" says its dashboard
 _BOARD = ["capacity"]
 
-# The report is three dashboards, so each file stays small enough for proxies in front of Kibana (--split):
+# The report is several dashboards, so each file stays small enough for proxies in front of Kibana (--split):
 # (board, saved-object ID, title, description); the board is also the file suffix with --split
 REPORT_BOARDS = [
     ("capacity", REPORT_ID, "Cluster resource report: capacity",
@@ -128,11 +134,34 @@ REPORT_BOARDS = [
      "CPU and memory by project, Projects and Namespaces tables, from OpenTelemetry metrics."),
     ("limits", LIMITS_ID, "Workload limits: limit ≤ 2× request",
      "Every workload checked against a LimitRange maxLimitRequestRatio of 2, from OpenTelemetry metrics."),
+    ("fit", FIT_ID, "Will it fit? New deployment vs. cluster capacity",
+     "Does a new deployment (replicas x CPU and memory per replica) fit each cluster: per node, after node "
+     "failures and by usage, from OpenTelemetry metrics."),
 ]
 
 
 def panel(kind, title, esql, grid, **opts):
     REPORT_PANELS.append({"kind": kind, "title": title, "esql": esql, "grid": grid, "board": _BOARD[0], **opts})
+
+
+def tile_grid(title, src, tiles, grid, subtitle, bar=False):
+    """One panel of several single-value tiles from one query: each (label, STATS expression) becomes a row
+    (label, value), shown as a Lens metric grid broken down by label. One query per row of tiles instead of one per
+    tile: every tile would otherwise run the whole report query again. With bar, every tile gets a bar to 100 %.
+    Labels must be short (a tile shows one line). Under each label Lens shows the name of the value column, so that
+    column is named after the subtitle, the same for the whole grid."""
+    labels = [label for label, _ in tiles]
+    stats = ", ".join(f"v{i} = {expr}" for i, (_, expr) in enumerate(tiles))
+    value = ", ".join(f"label == {esql_str(l)}, TO_DOUBLE(v{i})" for i, l in enumerate(labels))
+    order = ", ".join(f"label == {esql_str(l)}, {i}" for i, l in enumerate(labels))
+    panel("metric_grid", title, q(src + f"""
+| STATS {stats}
+| EVAL label = [{", ".join(esql_str(l) for l in labels)}]
+| MV_EXPAND label
+| EVAL value = CASE({value}), ord = CASE({order}){", max = 100.0" if bar else ""}
+| SORT ord
+| KEEP label, value{", max" if bar else ""}
+| RENAME value AS `{subtitle}`"""), grid, tiles=len(tiles), bar=bar, subtitle=subtitle, hide_title=True)
 
 
 def board_panels(board):
@@ -336,7 +365,8 @@ REPORT_COLUMNS = ("`CPU req`, `CPU P95`, `CPU eff. %`, `CPU req peak`, `Mem req 
                   "`Mem limit GiB`, Pods, Pending, `No CPU req`, `No mem limit`, BestEffort")
 
 COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Free (N+1)": "#e2e8f0",
-          "N+1 reserve": "#fca5a5", "Requested": "#1d4ed8", "Used (P95)": "#0d9488"}
+          "N+1 reserve": "#fca5a5", "Requested": "#1d4ed8", "Used (P95)": "#0d9488", "Pending": "#f59e0b",
+          "New deployment": "#7c3aed", "Free": "#e2e8f0", "Reserve (failures, ceiling)": "#fca5a5"}
 
 
 def build_report_panels(index):
@@ -377,6 +407,86 @@ WORKLOAD_RATIO = """
 {pname_stage}
 | EVAL category = {category}""".replace("NOW_WINDOW", NOW_WINDOW).replace("RATIO", str(LIMIT_RATIO))
 
+# ---- "Will it fit?": a new deployment against each cluster ----
+
+# The deployment to check, as ES|QL variables set by controls on the dashboard: (variable, title, values, default).
+# The values are strings, as Kibana stores them; the queries convert them. Edit a control in Kibana to add values.
+FIT_CONTROLS = [
+    ("replicas", "Replicas", ["1", "2", "3", "4", "5", "6", "8", "10", "12", "16", "20", "30", "50"], "3"),
+    ("cpu", "CPU request per replica (vCPU)", ["0.05", "0.1", "0.25", "0.5", "1", "1.5", "2", "4", "8", "16"], "0.5"),
+    ("memory", "Memory request per replica (GiB)",
+     ["0.125", "0.25", "0.5", "1", "1.5", "2", "4", "8", "16", "32", "64"], "1"),
+    ("spread", "Replicas per node", ["any", "one per node"], "any"),
+    ("failures", "Node failures to survive", ["0", "1", "2"], "1"),
+    ("ceiling", "Ceiling (% of allocatable)", ["100", "90", "80", "70"], "100"),
+]
+FIT_DEFAULTS = {name: default for name, _, _, default in FIT_CONTROLS}
+
+FIT_INPUTS = """
+| EVAL replicas = TO_DOUBLE(?replicas), c = TO_DOUBLE(?cpu), m = TO_DOUBLE(?memory) * {GIB},
+       fails = TO_INTEGER(?failures), ceil = TO_DOUBLE(?ceiling) / 100.0, one = TO_STRING(?spread) == "one per node\""""
+
+# One row per node (and one with node "" for the pending pods): allocatable, requests of running pods and of pending
+# pods as of the last minutes of the range, P95 of the node's usage over the range, and how many replicas of the new
+# deployment fit on it: by requests (what the scheduler checks) and by requests or usage, whichever is higher.
+# A pod's node comes from its own metrics (MAX: the container rows may not have it); pending pods have none.
+FIT_NODE_STAGE = """
+| WHERE {alloc_cpu} IS NOT NULL OR {alloc_mem} IS NOT NULL OR {req_cpu} IS NOT NULL OR {req_mem} IS NOT NULL
+     OR {phase} IS NOT NULL OR {node_use_cpu} IS NOT NULL OR {node_use_mem} IS NOT NULL
+| EVAL cluster = COALESCE({cluster}, "(unknown)"), node = COALESCE({node}, ""),
+       entity = COALESCE({pod_uid}, {node}, ""), container = COALESCE({container}, ""),
+       recent = @timestamp >= TO_DATETIME(?_tend) - NOW_WINDOW
+| EVAL a_cpu = CASE(recent, {alloc_cpu}), a_mem = CASE(recent, {alloc_mem}), r_cpu = CASE(recent, {req_cpu}),
+       r_mem = CASE(recent, {req_mem}), ph = CASE(recent, {phase})
+| STATS a_cpu = MAX(a_cpu), a_mem = MAX(a_mem), r_cpu = MAX(r_cpu), r_mem = MAX(r_mem), ph = MAX(ph),
+        node = MAX(node), u_cpu = AVG({node_use_cpu}), u_mem = AVG({node_use_mem})
+  BY t = BUCKET(@timestamp, {BUCKETS}, ?_tstart, ?_tend), cluster, entity, container
+| STATS a_cpu = MAX(a_cpu), a_mem = MAX(a_mem), r_cpu = SUM(r_cpu), r_mem = SUM(r_mem), ph = MAX(ph),
+        node = MAX(node), u_cpu = MAX(u_cpu), u_mem = MAX(u_mem)
+  BY t, cluster, entity
+| EVAL run = CASE(ph == 1 OR ph >= 3, 0.0, 1.0), pend = CASE(ph == 1, 1.0, 0.0)
+| EVAL rc = TO_DOUBLE(r_cpu) * run, rm = TO_DOUBLE(r_mem) * run, pc = TO_DOUBLE(r_cpu) * pend,
+       pm = TO_DOUBLE(r_mem) * pend, node = CASE(pend == 1.0, "", node)
+| STATS a_cpu = MAX(a_cpu), a_mem = MAX(a_mem), rc = SUM(rc), rm = SUM(rm), pc = SUM(pc), pm = SUM(pm),
+        u_cpu = MAX(u_cpu), u_mem = MAX(u_mem)
+  BY t, cluster, node
+| STATS a_cpu = MAX(a_cpu), a_mem = MAX(a_mem), rc = MAX(rc), rm = MAX(rm), pc = MAX(pc), pm = MAX(pm),
+        uc = PERCENTILE(u_cpu, 95), um = PERCENTILE(u_mem, 95)
+  BY cluster, node
+| EVAL rc = COALESCE(rc, 0.0), rm = COALESCE(rm, 0.0), pc = COALESCE(pc, 0.0), pm = COALESCE(pm, 0.0),
+       uc = COALESCE(uc, 0.0), um = COALESCE(um, 0.0)""".replace("NOW_WINDOW", NOW_WINDOW) + FIT_INPUTS + """
+| EVAL fc = a_cpu - rc, fm = a_mem - rm, fcu = a_cpu - GREATEST(rc, uc), fmu = a_mem - GREATEST(rm, um)
+| EVAL fit = FLOOR(GREATEST(LEAST(fc / c, fm / m), 0.0) + 0.000001),
+       fit_u = FLOOR(GREATEST(LEAST(fcu / c, fmu / m), 0.0) + 0.000001)
+| EVAL fit = CASE(one, LEAST(fit, 1.0), fit), fit_u = CASE(one, LEAST(fit_u, 1.0), fit_u)"""
+
+
+def fit_lost(top):
+    """What the failed nodes take with them: the largest `fails` values of TOP(..., 2, "desc")."""
+    return f"COALESCE(CASE(fails <= 0, 0.0, fails == 1, MV_MAX({top}), MV_SUM({top})), 0.0)"
+
+
+# One row per cluster. With `fails` nodes down (the largest by allocatable; the ones with the most room for replicas)
+# the deployment must still fit node by node, and all requests (running, pending, new) must stay under the ceiling
+# of what is left: the N+1 rule of the capacity dashboard, for the new deployment too.
+FIT_CLUSTER = """
+| STATS nodes = COUNT(a_cpu), a_cpu = SUM(a_cpu), a_mem = SUM(a_mem), rc = SUM(rc), rm = SUM(rm), pc = SUM(pc),
+        pm = SUM(pm), uc = SUM(uc), um = SUM(um), top_cpu = TOP(a_cpu, 2, "desc"), top_mem = TOP(a_mem, 2, "desc"),
+        fit = SUM(fit), fit_u = SUM(fit_u), top_fit = TOP(fit, 2, "desc"), top_fit_u = TOP(fit_u, 2, "desc"),
+        max_fc = MAX(fc), max_fm = MAX(fm)
+  BY cluster""" + FIT_INPUTS + f"""
+| EVAL need_cpu = replicas * c, need_mem = replicas * m,
+       cap_cpu = (a_cpu - {fit_lost("top_cpu")}) * ceil, cap_mem = (a_mem - {fit_lost("top_mem")}) * ceil,
+       fit_f = GREATEST(fit - {fit_lost("top_fit")}, 0.0), fit_uf = GREATEST(fit_u - {fit_lost("top_fit_u")}, 0.0)
+| EVAL left_cpu = cap_cpu - rc - pc - need_cpu, left_mem = cap_mem - rm - pm - need_mem,
+       left_cpu_u = cap_cpu - GREATEST(rc, uc) - pc - need_cpu, left_mem_u = cap_mem - GREATEST(rm, um) - pm - need_mem
+| EVAL ok_now = fit >= replicas, ok_fail = fit_f >= replicas AND left_cpu >= 0 AND left_mem >= 0,
+       ok_use = fit_uf >= replicas AND left_cpu_u >= 0 AND left_mem_u >= 0
+| EVAL verdict = CASE(ok_now AND ok_fail AND ok_use, "FITS",
+                      ok_now AND ok_fail, "fits by requests, tight by usage",
+                      ok_now, CONCAT("fits now, not N+", TO_STRING(fails), " / ceiling"),
+                      "DOES NOT FIT")"""
+
 TILE_H = 5  # height of the report's tile rows
 TOP = 4 + 2 * TILE_H  # first row below the About text and the two tile rows
 
@@ -401,37 +511,35 @@ def _build_report_panels(src):
     # (label, value, bar): one value per tile; the label names it, so the panel title is hidden. % tiles get a bar
     # to 100 % coloured by the allocation rule (80 % prod ceiling, over 100 % overcommitted). Two rows: capacity and
     # requests, then N+1 room, usage and the "now" checks.
-    rows = [[
-        ("Clusters", "COUNT(*)", False),
-        ("Nodes", "SUM(nodes)", False),
-        ("Allocatable vCPU", "ROUND(SUM(alloc_cpu), 1)", False),
-        ("Allocatable memory (GiB)", "ROUND(SUM(alloc_mem) / {GIB}, 1)", False),
-        ("CPU requested (% of allocatable)", "ROUND(SUM(rc) / SUM(alloc_cpu) * 100, 0)", True),
-        ("Memory requested (% of allocatable)", "ROUND(SUM(rm) / SUM(alloc_mem) * 100, 0)", True),
-        ("CPU requested (vCPU)", "ROUND(SUM(rc), 1)", False),
-        ("Memory requested (GiB)", "ROUND(SUM(rm) / {GIB}, 1)", False),
-    ], [
-        ("Room for projects, N+1 (vCPU)", "ROUND(SUM(room_cpu), 1)", False),
-        ("Left after project requests (vCPU)", "ROUND(SUM(room_cpu - rc_t), 1)", False),
-        ("CPU used, P95 (vCPU)", "ROUND(SUM(uc), 2)", False),
-        ("Memory used, P95 (GiB)", "ROUND(SUM(um) / {GIB}, 1)", False),
-        ("Containers without CPU request (now)", "SUM(no_cpu)", False),
-        ("Containers without memory limit (now)", "SUM(no_mem_lim)", False),
-        ("Pending requests (now, vCPU)", "ROUND(SUM(pend_cpu), 2)", False),
-        ("Pending requests (now, GiB)", "ROUND(SUM(pend_mem) / {GIB}, 2)", False),
-    ]]
+    # Three queries for the tiles: capacity and requests, the same as % of allocatable (bars coloured by the
+    # allocation rule: 80 % prod ceiling, over 100 % overcommitted), then N+1 room, usage and the "now" checks.
+    tile_grid("Capacity and requests", summary, [
+        ("Clusters", "COUNT(*)"),
+        ("Nodes", "SUM(nodes)"),
+        ("Allocatable vCPU", "ROUND(SUM(alloc_cpu), 1)"),
+        ("Allocatable GiB", "ROUND(SUM(alloc_mem) / {GIB}, 1)"),
+        ("Requested vCPU", "ROUND(SUM(rc), 1)"),
+        ("Requested GiB", "ROUND(SUM(rm) / {GIB}, 1)"),
+    ], (0, 4, 36, TILE_H), "average over the range")
+    tile_grid("Requested (% of allocatable)", summary, [
+        ("CPU requested", "ROUND(SUM(rc) / SUM(alloc_cpu) * 100, 0)"),
+        ("Memory requested", "ROUND(SUM(rm) / SUM(alloc_mem) * 100, 0)"),
+    ], (36, 4, 12, TILE_H), "% of allocatable", bar=True)
+    checks = [
+        ("N+1 room vCPU", "ROUND(SUM(room_cpu), 1)"),
+        ("Left after projects", "ROUND(SUM(room_cpu - rc_t), 1)"),
+        ("Used P95 vCPU", "ROUND(SUM(uc), 2)"),
+        ("Used P95 GiB", "ROUND(SUM(um) / {GIB}, 1)"),
+        ("No CPU request", "SUM(no_cpu)"),
+        ("No memory limit", "SUM(no_mem_lim)"),
+        ("Pending vCPU", "ROUND(SUM(pend_cpu), 2)"),
+        ("Pending GiB", "ROUND(SUM(pend_mem) / {GIB}, 2)"),
+    ]
     if F["project"] is not None:
-        rows[1].append(("Unassigned namespaces (now)", "SUM(ns_u)", False))
-    for r, tiles in enumerate(rows):
-        widths = [48 // len(tiles)] * len(tiles)
-        for i in range(48 - sum(widths)):  # spread the rest over the last tiles
-            widths[-1 - i] += 1
-        x = 0
-        for (label, expr, bar), w in zip(tiles, widths):
-            stats = f"`{label}` = {expr}" + ("\n| EVAL max = 100" if bar else "")
-            panel("metric", label, q(summary + f"\n| STATS {stats}"), (x, 4 + r * TILE_H, w, TILE_H), value=label,
-                  bar=bar, hide_title=True)
-            x += w
+        checks.append(("Unassigned NS", "SUM(ns_u)"))
+    # one subtitle for the row: N+1 room and what is left (vCPU), usage P95, then containers, pending, namespaces now
+    tile_grid("N+1 room, usage and checks", summary, checks, (0, 4 + TILE_H, 48, TILE_H),
+              "N+1 · P95 · now")
 
     panel("bar_stacked", "Cluster capacity by requests (% of allocatable)", q(summary + REPORT_BY_RESOURCE + """
 | EVAL used = tn + sy + un,
@@ -510,6 +618,70 @@ def _build_report_panels(src):
        `Memory problems`, `CPU: max limit/request`, `CPU problems`, `Containers affected`, Pods, Containers,
        `CPU req`, `Mem req GiB`"""), (0, 5, 48, 22))
 
+    _BOARD[0] = "fit"
+    nodes = src + FIT_NODE_STAGE
+    clusters = nodes + FIT_CLUSTER
+    panel("markdown", "About", None, (0, 0, 48, 7), markdown=(
+        "**Will it fit?** Set the new deployment in the controls above (replicas, CPU and memory *request* per "
+        "replica, one replica per node or any, node failures to survive, ceiling), and pick a cluster or compare all. "
+        f"Requests are those of the last {NOW_WINDOW} of the range (running pods; pending pods count as demand); "
+        "usage is the nodes' P95 over the range (default: 24 hours). A cluster **FITS** when all three hold:\n\n"
+        "1. *now*: enough nodes each have room for a whole replica (CPU **and** memory free by requests: what the "
+        "scheduler checks);\n"
+        "2. *after node failures*: without the largest nodes it still has room for every replica, and running + "
+        "pending + new requests stay within the ceiling of what is left (the N+1 rule of the capacity dashboard);\n"
+        "3. *by usage*: the same with each node's usage where it is higher than its requests (pods using more than "
+        "they request leave less room than the requests say).\n\n"
+        "Taints, node selectors, affinity, quotas and cordoned nodes are not in the metrics: check those for the "
+        "target nodes. " + cp_note + "\n\n" + nav_links("fit")))
+    tight = '"fits by requests, tight by usage"'
+    tile_grid("Answer", clusters, [
+        ("Fits", 'COUNT(CASE(verdict == "FITS", 1))'),
+        ("Fits by requests only", f"COUNT(CASE(verdict == {tight}, 1))"),
+        ("Does not fit", f'COUNT(CASE(verdict != "FITS" AND verdict != {tight}, 1))'),
+        ("Needed vCPU", "ROUND(MAX(need_cpu), 2)"),
+        ("Needed GiB", "ROUND(MAX(need_mem) / {GIB}, 2)"),
+    ], (0, 7, 48, TILE_H), "clusters · needed for all replicas")
+
+    panel("table", "Does it fit? One row per cluster", q(clusters + """
+| EVAL Cluster = cluster, Verdict = verdict, Nodes = nodes, Replicas = replicas, `Fit now` = fit,
+       `Fit after failures` = fit_f, `Fit by usage, after failures` = fit_uf,
+       `Needed vCPU` = ROUND(need_cpu, 2), `vCPU left after failures` = ROUND(left_cpu, 2),
+       `vCPU left by usage` = ROUND(left_cpu_u, 2), `Needed GiB` = ROUND(need_mem / {GIB}, 2),
+       `GiB left after failures` = ROUND(left_mem / {GIB}, 2), `GiB left by usage` = ROUND(left_mem_u / {GIB}, 2),
+       `Most free vCPU on a node` = ROUND(max_fc, 2), `Most free GiB on a node` = ROUND(max_fm / {GIB}, 2),
+       `Pending vCPU` = ROUND(pc, 2), `Pending GiB` = ROUND(pm / {GIB}, 2)
+| SORT Cluster
+| KEEP Cluster, Verdict, Nodes, Replicas, `Fit now`, `Fit after failures`, `Fit by usage, after failures`,
+       `Needed vCPU`, `vCPU left after failures`, `vCPU left by usage`, `Needed GiB`, `GiB left after failures`,
+       `GiB left by usage`, `Most free vCPU on a node`, `Most free GiB on a node`, `Pending vCPU`, `Pending GiB`"""),
+          (0, 7 + TILE_H, 48, 9))
+
+    panel("bar_stacked", "Requests with the new deployment (% of allocatable)", q(clusters + """
+| EVAL res = ["CPU", "Memory"]
+| MV_EXPAND res
+| EVAL a = CASE(res == "CPU", a_cpu, a_mem), r = CASE(res == "CPU", rc, rm), p = CASE(res == "CPU", pc, pm),
+       n = CASE(res == "CPU", need_cpu, need_mem), cap = CASE(res == "CPU", cap_cpu, cap_mem)
+| EVAL Label = CONCAT(cluster, " · ", res), Requested = ROUND(r / a * 100, 1), Pending = ROUND(p / a * 100, 1),
+       `New deployment` = ROUND(n / a * 100, 1), Free = ROUND(GREATEST(cap - r - p - n, 0) / a * 100, 1),
+       `Reserve (failures, ceiling)` = ROUND(GREATEST(a - GREATEST(cap, r + p + n), 0) / a * 100, 1)
+| SORT cluster, res
+| KEEP Label, Requested, Pending, `New deployment`, Free, `Reserve (failures, ceiling)`"""),
+          (0, 16 + TILE_H, 48, 10), x="Label",
+          y=["Requested", "Pending", "New deployment", "Free", "Reserve (failures, ceiling)"])
+
+    panel("table", "Nodes: room and replicas per node", q(nodes + """
+| WHERE a_cpu IS NOT NULL
+| EVAL Cluster = cluster, Node = node, `Replicas fit` = fit, `Replicas fit by usage` = fit_u,
+       `Limited by` = CASE(fc / c <= fm / m, "CPU", "memory"),
+       `Alloc vCPU` = ROUND(a_cpu, 2), `Req vCPU` = ROUND(rc, 2), `Used P95 vCPU` = ROUND(uc, 2),
+       `Free vCPU` = ROUND(fc, 2), `Alloc GiB` = ROUND(a_mem / {GIB}, 2), `Req GiB` = ROUND(rm / {GIB}, 2),
+       `Used P95 GiB` = ROUND(um / {GIB}, 2), `Free GiB` = ROUND(fm / {GIB}, 2)
+| SORT Cluster, `Replicas fit` DESC, Node
+| LIMIT 1000
+| KEEP Cluster, Node, `Replicas fit`, `Replicas fit by usage`, `Limited by`, `Alloc vCPU`, `Req vCPU`,
+       `Used P95 vCPU`, `Free vCPU`, `Alloc GiB`, `Req GiB`, `Used P95 GiB`, `Free GiB`"""), (0, 26 + TILE_H, 48, 14))
+
 
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----
 
@@ -536,17 +708,18 @@ ALLOCATION_PALETTE = {"type": "palette", "name": "custom", "params": {
 
 def lens_attributes(p, index):
     kind = p["kind"]
-    if kind == "metric":
-        columns = [col("value", p["value"], "number")]
+    if kind == "metric_grid":
+        columns = [col("label", "label", "string"), col("value", p["subtitle"], "number")]
         vis_type = "lnsMetric"
-        vis = {"layerId": "layer_0", "layerType": "data", "metricAccessor": "value", "showBar": False}
+        vis = {"layerId": "layer_0", "layerType": "data", "metricAccessor": "value", "breakdownByAccessor": "label",
+               "maxCols": p["tiles"], "showBar": False}
         if p.get("bar"):
             columns.append(col("max", "max", "number"))
             vis.update(maxAccessor="max", showBar=True, progressDirection="horizontal", palette=ALLOCATION_PALETTE)
     elif kind == "table":
         columns = [col(f"c{i}", n) for i, n in enumerate(table_columns(p["esql"]))]
         vis_type = "lnsDatatable"
-        widths = {"Cluster": 150, "Namespace": 170, "Project": 130}
+        widths = {"Cluster": 150, "Namespace": 170, "Project": 130, "Verdict": 260, "Node": 230}
         vis = {"layerId": "layer_0", "layerType": "data",
                "columns": [{"columnId": c["columnId"], **({"width": widths[c["fieldName"]]}
                                                           if c["fieldName"] in widths else {})} for c in columns]}
@@ -641,16 +814,27 @@ def dashboard_panels(index, panels):
     return out
 
 
-def control_fields():
-    return [f for f in ("cluster", "project", "namespace") if F[f] is not None]
+def control_fields(board=None):
+    """Filter controls of a board. "Will it fit?" has only the cluster: a Project or namespace filter would drop the
+    nodes' allocatable from its queries."""
+    fields = ("cluster",) if board == "fit" else ("cluster", "project", "namespace")
+    return [f for f in fields if F[f] is not None]
 
 
-def control_group():
+def esql_controls():
+    """Static-value ES|QL controls that set the variables of the "Will it fit?" queries (?replicas, ?cpu, ...)."""
+    return {f"ctrl-{name}": {"type": "esqlControl", "width": "small", "grow": False, "explicitInput": {
+        "id": f"ctrl-{name}", "title": title, "variableName": name, "variableType": "values",
+        "controlType": "STATIC_VALUES", "esqlQuery": "", "availableOptions": values, "selectedOptions": [default]}}
+        for name, title, values, default in FIT_CONTROLS}
+
+
+def control_group(board=None):
     titles = {"cluster": "Cluster", "project": "Rancher Project ID", "namespace": "Namespace"}
     fields = dict(F)
     if NAME_FIELD[0] and F["project"] is not None:  # select Projects by name
         titles["project"], fields["project"] = "Rancher Project", NAME_FIELD[0]
-    controls = [(f, titles[f]) for f in control_fields()]
+    controls = [(f, titles[f]) for f in control_fields(board)]
     panels = {}
     for i, (field, title) in enumerate(controls):
         cid = f"ctrl-{field}"
@@ -658,6 +842,9 @@ def control_group():
                        "explicitInput": {"id": cid, "dataViewId": DATA_VIEW_ID, "fieldName": fields[field],
                                          "title": title, "searchTechnique": "prefix", "selectedOptions": [],
                                          "sort": {"by": "_key", "direction": "asc"}}}
+    if board == "fit":
+        for cid, control in esql_controls().items():
+            panels[cid] = {"order": len(panels), **control}
     return {"chainingSystem": "HIERARCHICAL", "controlStyle": "oneLine", "showApplySelections": False,
             "ignoreParentSettingsJSON": json.dumps({"ignoreFilters": False, "ignoreQuery": False,
                                                      "ignoreTimerange": False, "ignoreValidations": False}),
@@ -668,7 +855,7 @@ def saved_objects(index):
     data_view = {"type": "index-pattern", "id": DATA_VIEW_ID, "attributes": {
         "title": index, "name": "OTel metrics (cluster resources)", "timeFieldName": "@timestamp"},
         "references": [], "managed": False, "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "8.0.0"}
-    dashboards = [dashboard_object(did, title, description, board_panels(board), index)
+    dashboards = [dashboard_object(did, title, description, board_panels(board), index, board)
                   for board, did, title, description in REPORT_BOARDS if board_panels(board)]
     return [data_view] + dashboards
 
@@ -685,19 +872,19 @@ def saved_filters():
              "query": {"match_phrase": {CP_FIELD[0]: "true"}}, "$state": {"store": "appState"}}]
 
 
-def dashboard_object(dashboard_id, title, description, panels, index):
+def dashboard_object(dashboard_id, title, description, panels, index, board=None):
     return {"type": "dashboard", "id": dashboard_id, "attributes": {
         "title": title,
         "description": description + " Generated by kibana/build_dashboard.py in cluster-resource-allocation.",
-        "timeRestore": True, "timeFrom": TIME_FROM[0], "timeTo": "now", "refreshInterval": {"pause": True, "value": 0},
+        "timeRestore": True, "timeFrom": BOARD_TIME_FROM.get(board, TIME_FROM[0]), "timeTo": "now", "refreshInterval": {"pause": True, "value": 0},
         "optionsJSON": json.dumps({"useMargins": True, "syncColors": False, "syncCursor": True,
                                    "syncTooltips": False, "hidePanelTitles": False}),
         "panelsJSON": json.dumps(dashboard_panels(index, panels)),
-        "controlGroupInput": control_group(),
+        "controlGroupInput": control_group(board),
         "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps({"query": {"query": "", "language": "kuery"},
                                                                   "filter": saved_filters()})},
     }, "references": [{"type": "index-pattern", "id": DATA_VIEW_ID,
-                       "name": f"controlGroup_ctrl-{f}:optionsListDataView"} for f in control_fields()]
+                       "name": f"controlGroup_ctrl-{f}:optionsListDataView"} for f in control_fields(board)]
                      + ([{"type": "index-pattern", "id": DATA_VIEW_ID, "name": CP_FILTER_REF}] if CP_FIELD[0] else []),
         # Current versions (Kibana 9.x); without them Kibana runs legacy migrations that break ES|QL panels.
         "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "10.3.0"}
@@ -737,7 +924,10 @@ def run_checks(url, window, end=None, only=None):
             continue
         if only and only not in p["title"]:
             continue
-        body = {"query": p["esql"], "params": [{"_tstart": iso(start)}, {"_tend": iso(end)}],
+        # the "Will it fit?" variables as the dashboard opens (strings, as Kibana stores them)
+        params = [{"_tstart": iso(start)}, {"_tend": iso(end)}] + [
+            {k: v} for k, v in FIT_DEFAULTS.items() if re.search(rf"\?{k}\b", p["esql"])]
+        body = {"query": p["esql"], "params": params,
                 "filter": {"bool": {"filter": [{"range": {"@timestamp": {"gte": iso(start), "lte": iso(end)}}}],
                                     "must_not": [f["query"] for f in saved_filters()]}}}
         req = urllib.request.Request(url.rstrip("/") + "/_query?format=txt", json.dumps(body).encode(), headers)
@@ -775,8 +965,9 @@ def main():
                     help="Project names from this lookup index in Elasticsearch (LOOKUP JOIN, Elasticsearch 9.1+), "
                          "e.g. rancher-projects; fill it with publish_project_names.py. Every report panel fails "
                          "while the index does not exist")
-    ap.add_argument("--time-from", metavar="RANGE", default=TIME_FROM[0],
-                    help=f"start of the time range the dashboards open with, e.g. now-7d (default {TIME_FROM[0]})")
+    ap.add_argument("--time-from", metavar="RANGE",
+                    help=f"start of the time range every dashboard opens with, e.g. now-7d (default {TIME_FROM[0]}; "
+                         f"\"Will it fit?\" {BOARD_TIME_FROM['fit']})")
     ap.add_argument("--no-quota", action="store_true",
                     help=f"leave out the ResourceQuota metric ({F['rq_hard']}): no cluster has a quota yet, so "
                          "the field does not exist. Needs --out")
@@ -786,7 +977,7 @@ def main():
                     help=f"without the dashboard filter that leaves out nodes where {CP_FIELD[0]} is \"true\" "
                          "and the metrics of their pods (also for --check). Needs --out")
     ap.add_argument("--split", action="store_true",
-                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -limits), each with the "
+                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -limits, -fit), each with the "
                          "data view: smaller uploads, e.g. behind a proxy that limits the request size")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
@@ -814,9 +1005,11 @@ def main():
             ap.error(f"--project-lookup-index: an index other than {DEFAULT_LOOKUP_INDEX} needs --out "
                      "(the committed file is generated for that name)")
         LOOKUP_INDEX[0] = args.project_lookup_index
-    if not re.fullmatch(r"now-[1-9][0-9]*[mhdwMy]", args.time_from):
-        ap.error(f"--time-from: expected e.g. now-1d or now-12h, got {args.time_from}")
-    TIME_FROM[0] = args.time_from
+    if args.time_from:
+        if not re.fullmatch(r"now-[1-9][0-9]*[mhdwMy]", args.time_from):
+            ap.error(f"--time-from: expected e.g. now-1d or now-12h, got {args.time_from}")
+        TIME_FROM[0] = args.time_from
+        BOARD_TIME_FROM.clear()
     if args.no_project:
         F["project"] = None
     if (args.no_quota or args.no_hpa) and not args.out and not args.check:

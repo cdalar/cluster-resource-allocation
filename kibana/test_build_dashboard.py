@@ -17,6 +17,11 @@ FIELDS = dict(bd.F)
 CP_FIELD = bd.CP_FIELD[0]
 
 
+def report_panels():
+    """Panels about Projects: every board but "Will it fit?", which is about nodes and has no Project column."""
+    return [p for p in bd.REPORT_PANELS if p["board"] != "fit"]
+
+
 class BuildDashboardTest(unittest.TestCase):
     def setUp(self):
         self.rebuild()
@@ -69,7 +74,7 @@ class BuildDashboardTest(unittest.TestCase):
         data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
         self.assertEqual(data_view["type"], "index-pattern")
         self.assertEqual([d["id"] for d in dashboards],
-                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID])
+                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID, bd.FIT_ID])
         self.check_dashboards()
         ids = [d["id"] for d in dashboards]
         for d in dashboards:  # every About links the other dashboards
@@ -137,7 +142,7 @@ class BuildDashboardTest(unittest.TestCase):
                          'CASE(project == "p-9z9dv", "Sys \\"tem\\"", project == "p-bbjk7", "payments", project)')
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
         self.rebuild()
-        self.assertIn('"payments"', bd.REPORT_PANELS[-1]["esql"])
+        self.assertIn('"payments"', report_panels()[-1]["esql"])
 
     def test_add_project_names_matches_the_generator(self):
         projects = {"items": [
@@ -152,7 +157,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.PROJECT_NAMES.update(names)
         self.rebuild()
         self.assertEqual("".join(patched), self.generated())
-        self.assertEqual(changed, 2 * len([p for p in bd.REPORT_PANELS if p["esql"]]))
+        self.assertEqual(changed, 2 * len([p for p in report_panels() if p["esql"]]))
         # again, with other names and on a file that already has names: replaced, not nested
         again, _ = apn.add_names(patched, {"p-bbjk7": "billing"})
         bd.PROJECT_NAMES.clear()
@@ -189,14 +194,14 @@ class BuildDashboardTest(unittest.TestCase):
         bd.NAME_FIELD[0] = bd.DEFAULT_NAME_FIELD
         self.rebuild()
         field = "resource.attributes.rancher.project.name"
-        report = [p["esql"] for p in bd.REPORT_PANELS if p["esql"]]
+        report = [p["esql"] for p in report_panels() if p["esql"]]
         for q in report:  # the name is carried through both aggregations, then used
             self.assertIn(f"project_name = MAX({field})", q)
             self.assertIn("project_name = MAX(project_name)", q)
             self.assertIn("| EVAL pname = COALESCE(project_name, project)", q)
             self.assertNotIn("LOOKUP JOIN", q)
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
-        for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
+        for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:-1]:  # not "Will it fit?": no Project control
             control = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])["ctrl-project"]
             self.assertEqual(control["explicitInput"]["fieldName"], field)
             self.assertEqual(control["explicitInput"]["title"], "Rancher Project")
@@ -224,7 +229,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertNotIn("Control-plane", bd.REPORT_PANELS[0]["markdown"])
 
     def test_workload_ratio_table(self):
-        p = bd.REPORT_PANELS[-1]
+        p = report_panels()[-1]
         self.assertTrue(p["title"].startswith("Workloads vs. limit ≤ 2× request"))
         self.assertEqual(bd.table_columns(p["esql"])[:7],
                          ["Cluster", "Namespace", "Project", "Category", "Kind", "Workload", "Status"])
@@ -247,7 +252,7 @@ class BuildDashboardTest(unittest.TestCase):
         shown = [p for p in bd.REPORT_PANELS if p["esql"] and "Project = pname" in p["esql"]
                  or p["esql"] and "CONCAT(cluster, \" / \", pname)" in p["esql"]]
         self.assertEqual({p["board"] for p in shown}, {"projects", "limits"})
-        for p in bd.REPORT_PANELS:
+        for p in report_panels():
             if p["esql"]:
                 self.assertIn('project == "p-bbjk7", "payments"', p["esql"], p["title"])
             if p["kind"] == "table" and "Project" in bd.table_columns(p["esql"]):
@@ -285,7 +290,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual(bd.pname_stage(), "| LOOKUP JOIN rancher-projects ON project\n"
                                            "| EVAL pname = COALESCE(project_name, project)")
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
-        queries = [p["esql"] for p in bd.REPORT_PANELS if p["esql"]]
+        queries = [p["esql"] for p in report_panels() if p["esql"]]
         self.assertTrue(all(q.count("LOOKUP JOIN") == 1 for q in queries))
         for q in queries:  # the join comes after the Project ID column exists and before the name is used
             self.assertLess(q.index("project = COALESCE("), q.index("LOOKUP JOIN"))
@@ -293,6 +298,43 @@ class BuildDashboardTest(unittest.TestCase):
         self.check_dashboards()
         self.without_project()
         self.assertNotIn("LOOKUP JOIN", self.generated())
+
+    def test_tiles_share_one_query_per_row(self):
+        grids = [p for p in bd.REPORT_PANELS if p["kind"] == "metric_grid"]
+        self.assertEqual([(p["board"], p["tiles"]) for p in grids],
+                         [("capacity", 6), ("capacity", 2), ("capacity", 9), ("fit", 5)])
+        self.assertNotIn("metric", {p["kind"] for p in bd.REPORT_PANELS})
+        for p in grids:
+            self.assertTrue(p["esql"].endswith("| SORT ord\n| KEEP label, value" + (", max" if p["bar"] else "")
+                                               + f"\n| RENAME value AS `{p['subtitle']}`"))
+            self.assertEqual(p["esql"].count("TO_DOUBLE(v"), p["tiles"])
+        vis = bd.lens_attributes(grids[1], bd.DEFAULT_INDEX)["state"]["visualization"]
+        self.assertEqual((vis["breakdownByAccessor"], vis["maxAccessor"], vis["maxCols"]), ("label", "max", 2))
+
+    def test_fit_board(self):
+        fit = bd.board_panels("fit")
+        variables = {name for name, *_ in bd.FIT_CONTROLS}
+        for p in fit:
+            if p["esql"]:  # every query reads every control and none names a Project
+                self.assertEqual(set(re.findall(r"\?([a-z]+)\b", p["esql"])), variables, p["title"])
+                self.assertNotIn("rancher.project", p["esql"])
+        for name, _, values, default in bd.FIT_CONTROLS:
+            self.assertIn(default, values)
+        dashboard = next(d for d in bd.saved_objects(bd.DEFAULT_INDEX) if d["id"] == bd.FIT_ID)
+        self.assertEqual(dashboard["attributes"]["timeFrom"], "now-24h")
+        controls = json.loads(dashboard["attributes"]["controlGroupInput"]["panelsJSON"])
+        self.assertEqual(list(controls), ["ctrl-cluster"] + [f"ctrl-{n}" for n, *_ in bd.FIT_CONTROLS])
+        esql = controls["ctrl-replicas"]
+        self.assertEqual(esql["type"], "esqlControl")
+        self.assertEqual({k: esql["explicitInput"][k] for k in ("variableName", "variableType", "controlType",
+                                                                "selectedOptions")},
+                         {"variableName": "replicas", "variableType": "values", "controlType": "STATIC_VALUES",
+                          "selectedOptions": ["3"]})
+        self.assertEqual([r["name"] for r in dashboard["references"]],
+                         ["controlGroup_ctrl-cluster:optionsListDataView", bd.CP_FILTER_REF])
+        verdict = next(p for p in fit if p["title"].startswith("Does it fit"))["esql"]
+        self.assertIn('TOP(a_cpu, 2, "desc")', verdict)
+        self.assertIn("fails == 1, MV_MAX(top_fit)", verdict)
 
 
 class FakeElastic:

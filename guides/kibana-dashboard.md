@@ -3,11 +3,12 @@
 Kibana dashboards with the current situation of every cluster, built from the OpenTelemetry metrics the
 clusters already send to the central Elastic. They show the same report as the in-cluster dashboard, without
 installing anything in the clusters: capacity and N+1 per cluster, requests and usage per Rancher Project and
-namespace, the resource-standards gaps, and the workloads a limit ≤ 2× request rule would reject.
+namespace, the resource-standards gaps, the workloads a limit ≤ 2× request rule would reject, and whether a new
+deployment fits a cluster.
 
 | File | Content |
 |---|---|
-| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: three linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects* and *Workload limits* ([below](#cluster-resource-report)), and a data view (`metrics-*.otel-*`) for the filter controls |
+| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: four linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects*, *Workload limits* ([below](#cluster-resource-report)) and *Will it fit?* ([below](#will-it-fit)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resource-report-no-project.ndjson`](../kibana/cluster-resource-report-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
 | [`kibana/cluster-resource-report-project-names.ndjson`](../kibana/cluster-resource-report-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
@@ -25,9 +26,9 @@ mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.
 ## Cluster resource report
 
 The report follows the in-cluster dashboard of the [chart](../charts/cluster-resource-report/README.md) on the
-OTel metrics, for all clusters at once. It is three dashboards, and every About box links the others: *capacity*
-(tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and Namespaces tables) and *Workload
-limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
+OTel metrics, for all clusters at once. It is three dashboards, plus [*Will it fit?*](#will-it-fit), and every About
+box links the others: *capacity* (tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and
+Namespaces tables) and *Workload limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
 leaves out control-plane nodes ([below](#control-plane-nodes)); the selections do not carry over when following a
 link. Every panel is an ES|QL panel over the dashboard's time range (default: last 1 hour; `--time-from now-1d` for
 another). With Project names (any of the ways below), every Project column and chart shows the name.
@@ -35,12 +36,44 @@ another). With Project names (any of the ways below), every Project column and c
 
 | Panel | Content | As in the in-cluster report |
 |---|---|---|
-| Tiles | One value per tile, in two rows. Capacity and requests: clusters, nodes, allocatable vCPU and GiB, CPU and memory requested as % of allocatable with a bar (green to 80 %, amber to 100 %, red above), and in vCPU / GiB. Then: room for projects (N+1) and what is left after project requests, used (P95) vCPU and GiB, containers without CPU request and without memory limit (now), pending requests vCPU and GiB (now), unassigned namespaces (now). Every tile adds up all clusters in the selection | Same tiles, plus nodes |
+| Tiles | One value per tile, in two rows; each row of tiles is one query (a Lens metric grid), not one query per tile. Capacity and requests: clusters, nodes, allocatable vCPU and GiB, CPU and memory requested as % of allocatable with a bar (green to 80 %, amber to 100 %, red above), and in vCPU / GiB. Then: room for projects (N+1) and what is left after project requests, used (P95) vCPU and GiB, containers without CPU request and without memory limit (now), pending requests vCPU and GiB (now), unassigned namespaces (now). Every tile adds up all clusters in the selection | Same tiles, plus nodes |
 | Cluster capacity by requests | Per cluster and resource (with its node count), % of allocatable: Tenant, System (platform), Unassigned, free up to N+1, N+1 reserve (largest node) | The capacity bar with the N+1 line |
 | N+1 table | Nodes; allocatable − largest node − platform = for projects; projects request; left; fits | The N+1 note |
 | CPU / Memory by project | Top 15 projects by requests (without System), requested vs used (P95) | Same charts |
 | Projects, Namespaces | Requests, P95 use, efficiency, peak, memory limits, pods, pending, no CPU request, no memory limit, BestEffort; namespaces also quota and HPA counts | Same columns (LimitRange isn't in the metrics) |
 | Workloads vs. limit ≤ 2× request | Every Deployment, StatefulSet, DaemonSet, CronJob, Job and bare Pod (now), problems first: what a LimitRange `maxLimitRequestRatio: 2` ([10](../docs/10-implementation-plan.md), steps 2.1 and 5.4) would reject at the next pod creation, per resource. A container breaks it with limit > 2× request, or with a request but no limit (unless the LimitRange sets a default limit); without a request Kubernetes sets the request to the limit, so a limit alone passes. Columns: status, worst ratio and problems for memory and CPU, the containers affected, pods, containers, requests. Kind and name come from `k8s.deployment.name`, `k8s.statefulset.name`, `k8s.daemonset.name`, `k8s.job.name` (k8sattributes; a CronJob is its Job's name without the timestamp). The CPU column flags every container without a CPU limit: only relevant if the ratio is set for CPU too ([ADR-0003](../docs/adr/0003-cpu-limits.md) keeps CPU limits optional) | — (new) |
+
+### Will it fit?
+
+One question: does a new deployment fit a cluster? Choose it in the controls at the top: **replicas**, **CPU** and
+**memory request per replica**, **replicas per node** (any, or one per node for anti-affinity), **node failures to
+survive** (0, 1, 2) and a **ceiling** (% of allocatable the requests may reach). Pick a cluster, or compare all. To
+offer other values, edit a control in Kibana (pencil icon → values); the queries take any number.
+
+The dashboard opens with the last 24 hours (`--time-from` sets every dashboard): requests are those of the last
+10 minutes, usage is each node's P95 over the range, so a longer range catches the daily peak. A cluster **FITS**
+when all three hold:
+
+| Check | Rule |
+|---|---|
+| Now | Per node, free = allocatable − requests of running pods; a node holds ⌊min(free CPU / CPU, free memory / memory)⌋ replicas (at most 1 with one per node). The nodes together hold all replicas: what the scheduler checks |
+| After node failures | The same without the largest nodes (as many as *node failures*; the nodes with the most room for replicas and the largest allocatable are taken out, the worst case), **and** running + pending + new requests ≤ ceiling × allocatable of the nodes left: the N+1 rule of the capacity dashboard with the new deployment added |
+| By usage | Both again with each node's P95 usage where it is above its requests (pods that use more than they request leave less room) |
+
+Verdicts: *FITS*; *fits by requests, tight by usage* (schedulable and N+1-safe, but the nodes are busier than their
+requests say); *fits now, not N+x / ceiling* (schedulable today, but not after a node failure or above the
+ceiling); *DOES NOT FIT*.
+
+| Panel | Content |
+|---|---|
+| Answer | Number of clusters per verdict, and the vCPU and GiB the deployment needs in total |
+| Does it fit? | One row per cluster: verdict, nodes, replicas that fit now / after failures / by usage after failures, needed and left vCPU and GiB (after failures, and by usage), most free vCPU and GiB on one node (the largest replica that still fits), pending requests |
+| Requests with the new deployment | Per cluster and resource, % of allocatable: requested, pending, the new deployment, free, and the reserve for node failures and the ceiling |
+| Nodes | Per node: replicas that fit (by requests and by usage), which resource limits it, allocatable, requested, used (P95) and free vCPU and GiB |
+
+Not in the metrics, so not checked: taints and tolerations, node selectors and affinity to particular nodes,
+ResourceQuotas of the target namespace, cordoned nodes, and DaemonSets that a new node would need. The node
+failures are the largest nodes, not a particular zone or rack.
 
 Definitions:
 
@@ -223,7 +256,7 @@ and import them one by one; each holds the data view, so the order does not matt
 
 ```bash
 ./kibana/build_dashboard.py <options> --split --out cluster-resources.ndjson
-# cluster-resource-report.ndjson, -capacity, -projects, -limits; the sizes are printed
+# cluster-resources-capacity.ndjson, -projects, -limits, -fit; the sizes are printed
 ```
 
 `--rancher-projects` adds about 2 KiB per Project to the capacity file (about 270 KiB without names); with several
@@ -270,6 +303,8 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 | Report: all nodes count as allocatable | Cordoned nodes are not excluded (the metrics don't say which nodes are unschedulable); control-plane nodes are left out by a saved filter ([above](#control-plane-nodes)) | discover.py counts schedulable nodes only |
 | Report: tested | All queries run against Elasticsearch 9.1.5 with `--check`; panels rendered with Kibana 9.1.5 reporting (PNG) on the test cluster | — |
 | About 60 buckets per time range; a container's value per bucket is its maximum, usage its average | Peaks and P95 are smoothed over long ranges; pods replaced within a bucket count twice for that bucket | discover.py uses Prometheus at a fixed resolution |
-| Query cost grows with containers × buckets | Wide ranges over many clusters are slow; filter by cluster first | — |
+| Query cost grows with containers × buckets | Wide ranges over many clusters are slow; filter by cluster first. Each panel runs its own query (Kibana does not share results between ES\|QL panels), so the tiles are grouped: one query per row of tiles | — |
+| Logic in the queries, not in runtime fields | ES\|QL panels cannot use data view runtime fields (Kibana sends them as `runtime_mappings`, which ES\|QL rejects). Runtime fields in the index mapping would work, but they need a change to the OTel index templates in Elasticsearch, cover only per-document logic (the category is computed after the aggregation, on a few rows) and run a script per document: slower, not faster | — |
+| *Will it fit?*: per-node arithmetic, not the scheduler | Replicas per node are counted by free requests only (no taints, affinity, topology spread or quotas); after node failures, the pods of the failed nodes are counted against the total (N+1 rule), not placed node by node | — |
 | No budgets or cost | The current situation only; the [allocation planner](allocation-planner.md) covers plans and money | — |
-| Filter controls | Import, migration and dashboard filters were tested. The controls themselves were not clicked through in a browser | — |
+| Filter controls | Import, migration and dashboard filters were tested, and the *Will it fit?* queries with the controls' default values (`--check` passes them) and with other values. The controls themselves were not clicked through in a browser | — |

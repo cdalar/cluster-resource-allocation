@@ -347,18 +347,34 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual([r["name"] for r in dashboard["references"]],
                          ["controlGroup_ctrl-cluster:optionsListDataView",
                           "controlGroup_ctrl-namespace:optionsListDataView", bd.CP_FILTER_REF])
-        for p in owner[1:]:  # the picked Project is kept before any aggregation, so one Project is aggregated
-            q = p["esql"]
-            self.assertLess(q.index('| WHERE ?project == "(all projects)" OR pname == ?project'), q.index("| STATS"))
+        # the picked Project's documents are kept right after FROM, by raw fields only (Elasticsearch turns the
+        # condition into an index query), so one Project is read and aggregated, not all of them
+        early = ('| WHERE resource.attributes.k8s.namespace.name IS NOT NULL\n'
+                 '| WHERE ?project == "(all projects)" OR resource.attributes.rancher.project.id == ?project\n')
+        for p in owner[1:]:
+            self.assertTrue(p["esql"].startswith(f"FROM {bd.DEFAULT_INDEX}\n" + early), p["title"])
+        # a name stands for its IDs: one Project name is a Project on several clusters
+        bd.PROJECT_NAMES.update({"p-1": "crm", "p-2": "billing", "p-3": "crm"})
+        self.rebuild()
+        self.assertIn('| WHERE ?project == "(all projects)" OR '
+                      '(?project == "billing" AND resource.attributes.rancher.project.id IN ("p-2")) OR '
+                      '(?project == "crm" AND resource.attributes.rancher.project.id IN ("p-1", "p-3")) OR '
+                      'resource.attributes.rancher.project.id == ?project\n', bd.board_panels("owner")[1]["esql"])
+        bd.PROJECT_NAMES.clear()
         # names in the control in every variant that has them
         bd.LOOKUP_INDEX[0] = bd.DEFAULT_LOOKUP_INDEX
         self.rebuild()
         self.assertIn("| LOOKUP JOIN rancher-projects ON project\n| EVAL pname = COALESCE(project_name, project)",
                       bd.OWNER_CONTROL[0])
         # the name comes from the join: no early filter, only the late one
-        self.assertNotIn("OR pname == ?project\n", bd.board_panels("owner")[1]["esql"])
+        self.assertNotIn("== ?project\n", bd.board_panels("owner")[1]["esql"])
+        self.assertIn('OR pname == ?project)', bd.board_panels("owner")[1]["esql"])
         bd.LOOKUP_INDEX[0], bd.NAME_FIELD[0] = None, bd.DEFAULT_NAME_FIELD
         self.rebuild()
+        # names on the metrics: the name field itself is filtered, the ID for documents without a name
+        self.assertIn('| WHERE ?project == "(all projects)" OR resource.attributes.rancher.project.name == ?project '
+                      'OR (resource.attributes.rancher.project.name IS NULL AND '
+                      'resource.attributes.rancher.project.id == ?project)\n', bd.board_panels("owner")[1]["esql"])
         self.assertIn("| STATS project_name = MAX(resource.attributes.rancher.project.name) "
                       "BY project = resource.attributes.rancher.project.id", bd.OWNER_CONTROL[0])
         self.assertIn("| EVAL pname = COALESCE(project_name, project)", bd.OWNER_CONTROL[0])

@@ -62,11 +62,14 @@ the Project attribute).
 | Clusters | One row per Project and cluster: namespaces (count and names) and the columns of the *Projects* table, plus the Project ID |
 | Namespaces | The *Namespaces* table of the projects dashboard for the Project: requests, P95 use, efficiency, limits, pods, standards, quota and HPA |
 
-Every panel keeps only the picked Project's rows right after `FROM`, before it aggregates anything, so it does the
-work of one Project. The label it compares is worked out from the raw fields as in the panels (ID, the
-`--rancher-projects` names, or `--project-name-field`). With names from a lookup index the name is only known after
-the join, so there each panel aggregates every Project of the time range first (as the projects dashboard does) and
-then keeps one: slower with many Projects.
+Every panel keeps only the picked Project's documents right after `FROM`, before it aggregates anything, with a
+condition on the raw fields only (the Project ID field, or the name field with `--project-name-field`, and "has a
+namespace"). Elasticsearch turns such a condition into an index query, so a panel reads and aggregates one Project's
+documents instead of every document of the time range; a condition on a computed column would be evaluated per
+document after reading all of them. With `--rancher-projects` the condition maps the picked name back to its IDs
+(one Project name is usually a Project on several clusters); `add_project_names.py` rewrites it too. With names from
+a lookup index the name is only known after the join, so there each panel aggregates every Project of the time range
+first (as the projects dashboard does) and then keeps one: slower with many Projects.
 
 ### Will it fit?
 

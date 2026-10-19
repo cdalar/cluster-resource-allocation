@@ -24,6 +24,9 @@ PNAME_RE = re.compile(r"\bpname = (?:project|CASE\(project == .*, project\))$", 
 # With names, Projects called System or ...platform... count as System, as in the in-cluster report.
 SYSTEM_PROJECTS = ' OR TO_LOWER(pname) RLIKE "system|.*platform.*"'
 CATEGORY_RE = re.compile(r'\)(?:' + re.escape(SYSTEM_PROJECTS) + r')?(, "System", project == )')
+# The "Project owner" panels keep the picked Project's documents right after FROM, with a condition on the raw
+# Project ID field that maps the picked name back to its IDs (one Project name can exist on several clusters).
+OWNER_RE = re.compile(r'^(\| WHERE \?project == "\(all projects\)" OR )(?:.* OR )?([A-Za-z0-9_.@]+) == \?project$', re.M)
 ABOUT_IDS = "Projects show their ID; regenerate with `--rancher-projects` for names and System projects."
 ABOUT_NAMES = "Project names from Rancher."
 
@@ -48,6 +51,15 @@ def pname_expr(names):
     return f"pname = CASE({cases}, project)"
 
 
+def owner_condition(field, names):
+    """The picked Project's IDs for its name, then the ID itself (a Project without a name is picked by ID)."""
+    ids = {}
+    for pid, name in sorted(names.items()):
+        ids.setdefault(name, []).append(pid)
+    return "".join(f"(?project == {esql_str(name)} AND {field} IN ({', '.join(map(esql_str, pids))})) OR "
+                   for name, pids in sorted(ids.items())) + f"{field} == ?project"
+
+
 def patch_text(text, names, count):
     """One query (or other text): put the names in, count the queries changed."""
     expr = pname_expr(names)
@@ -55,6 +67,8 @@ def patch_text(text, names, count):
     if n:
         count[0] += n
         text = CATEGORY_RE.sub(lambda m: ")" + SYSTEM_PROJECTS + m.group(1), text)
+    text, n = OWNER_RE.subn(lambda m: m.group(1) + owner_condition(m.group(2), names), text)
+    count[0] += n
     return text.replace(ABOUT_IDS, ABOUT_NAMES)
 
 
@@ -65,7 +79,7 @@ def patch(value, names, count):
         return {k: patch(v, names, count) for k, v in value.items()}
     if isinstance(value, list):
         return [patch(v, names, count) for v in value]
-    if not isinstance(value, str) or ("pname" not in value and ABOUT_IDS not in value):
+    if not isinstance(value, str) or ("pname" not in value and "?project" not in value and ABOUT_IDS not in value):
         return value
     if value[:1] in "[{":
         try:

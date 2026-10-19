@@ -102,13 +102,18 @@ and compare Σ quotas with `alloc_*_schedulable` × the headroom ratio for the e
   The script never reports a peak below the current effective requests, but a past peak may be slightly understated
   for pods with sidecars.
 - **Project-level P95/max** are sums of namespace-level values — slightly conservative (peaks may not coincide).
-- Windows and subqueries over large clusters can be heavy for Prometheus; use a coarser `--step` (e.g. `15m`) if
-  queries time out.
+- The usage history is four range queries per cluster (CPU and memory usage, CPU and memory requests, one value per
+  namespace and `--step`), run at the same time; avg / P95 / max are computed from the samples the way Prometheus'
+  `avg_over_time`, `quantile_over_time(0.95)` and `max_over_time` do. The window is read in several requests when
+  one response would hold more than 200,000 samples (steps × namespaces) or 11,000 steps. On a large cluster use a
+  coarser `--step` (e.g. `15m`) if the queries time out.
 
 ## In-cluster dashboard
 
 `server.py` runs the same collection on a schedule inside a cluster and serves a web dashboard, a JSON API and
-CSV downloads. Deploy it with the Helm chart in [`charts/cluster-resource-report`](../charts/cluster-resource-report/README.md),
+CSV downloads. The report is serialized once per collection; `/api/report` is gzip-compressed for clients that
+accept it and answers `304 Not Modified` to the dashboard's polls (every minute, with the last `ETag`) while
+nothing changed. Deploy it with the Helm chart in [`charts/cluster-resource-report`](../charts/cluster-resource-report/README.md),
 which uses the image built from this directory's `Dockerfile`.
 
 To look at a saved report locally without cluster access:

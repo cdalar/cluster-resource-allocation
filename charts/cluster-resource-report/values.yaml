@@ -22,7 +22,7 @@ clusterName: ""
 collection:
   interval: 30m      # time between collections
   window: 7d         # Prometheus usage history window (Rancher Monitoring keeps ~10d by default)
-  step: 5m           # Prometheus subquery resolution; use 15m on large clusters
+  step: 5m           # resolution of the Prometheus usage history; use 15m on large clusters
   projectLabel: ""   # namespace label to group by when there is no Rancher Project (e.g. non-Rancher AKS)
   # Namespaces counted as System (platform) rather than Tenant/Unassigned, whatever their Rancher Project.
   # Must match the whole name; add names with "|" before the closing ")$". The keyword entries at the end
@@ -166,7 +166,7 @@ resources:
     memory: 128Mi
   limits:
     cpu: 500m
-    memory: 512Mi    # raise for clusters with many thousands of pods
+    memory: 512Mi    # raise for clusters with many thousands of pods (a collection runs a few kubectl reads at once)
 
 podSecurityContext:
   runAsNonRoot: true

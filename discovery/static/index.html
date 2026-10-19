@@ -649,18 +649,25 @@ function render() {
 }
 
 // ---------- data loading ----------
-let lastCollected = null;
+let lastCollected = null, etag = null;
 async function load() {
   $("#app").classList.add("loading");
   try {
-    const res = await fetch("api/report", { cache: "no-store" });
-    const body = await res.json();
-    state.status = body.status;
-    if (body.report && body.report.collected_at !== lastCollected) {
-      state.data = body.report;
-      lastCollected = body.report.collected_at;
+    // the server answers 304 (no body) when nothing changed since the answer whose ETag we send back
+    const res = await fetch("api/report", { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
+    if (res.status === 304) {
+      renderMeta();   // "collected … ago" still moves
+    } else {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      etag = res.headers.get("ETag");
+      const body = await res.json();
+      state.status = body.status;
+      if (body.report && body.report.collected_at !== lastCollected) {
+        state.data = body.report;
+        lastCollected = body.report.collected_at;
+      }
+      render();
     }
-    render();
   } catch (e) {
     $("#meta").textContent = `Could not load report: ${e.message}`;
   } finally {

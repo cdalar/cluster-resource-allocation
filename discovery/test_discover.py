@@ -255,6 +255,109 @@ class NamesConfigMap(unittest.TestCase):
             discover.collect(args)
 
 
+class PrometheusHistory(unittest.TestCase):
+    """The usage history comes from one range query per series, summarized here like Prometheus would."""
+
+    def test_stats_match_prometheus_functions(self):
+        import discover
+        self.assertEqual(discover.series_stats([]), {"avg": 0.0, "p95": 0.0, "max": 0.0})
+        self.assertEqual(discover.series_stats([3.0]), {"avg": 3.0, "p95": 3.0, "max": 3.0})
+        st = discover.series_stats([5.0, 1.0, 4.0, 2.0, 3.0])
+        # quantile_over_time(0.95) of 1..5: rank 3.8 -> between 4 and 5
+        self.assertEqual(st["avg"], 3.0)
+        self.assertAlmostEqual(st["p95"], 4.8)
+        self.assertEqual(st["max"], 5.0)
+
+    def test_range_split_at_the_point_limit(self):
+        import discover
+        self.assertEqual(discover.range_chunks(0, 100, 10, 11000), [(0, 100)])
+        self.assertEqual(discover.range_chunks(0, 100, 10, 4), [(0, 30), (40, 70), (80, 100)])
+        self.assertEqual(discover.range_chunks(1000, 1000, 60, 4), [(1000, 1000)])
+        self.assertEqual(discover.range_chunks(0, 25, 10, 2), [(0, 10), (20, 20)])
+
+    def test_range_query_per_namespace(self):
+        from unittest import mock
+        import discover
+        prom = discover.Prometheus(None, service="monitoring/prometheus:9090")
+        calls = []
+
+        def fake_api(endpoint, params):
+            calls.append((endpoint, params))
+            return [{"metric": {"namespace": "a"}, "values": [[params["start"], "1"], [params["end"], "2"]]},
+                    {"metric": {"namespace": "b"}, "values": [[params["start"], "0.5"]]}]
+
+        with mock.patch.object(prom, "_api", side_effect=fake_api):
+            out = prom.range_by_namespace("sum by (namespace) (x)", 0, 30, 10, max_points=2)
+        self.assertEqual([c[0] for c in calls], ["query_range", "query_range"])
+        self.assertEqual([(c[1]["start"], c[1]["end"], c[1]["step"]) for c in calls], [(0, 10, 10), (20, 30, 10)])
+        self.assertEqual(out, {"a": [1.0, 2.0, 1.0, 2.0], "b": [0.5, 0.5]})
+        with mock.patch.object(prom, "_api", side_effect=fake_api) as api:   # never above Prometheus' own limit
+            prom.range_by_namespace("x", 0, 20000 * 10, 10, max_points=10**6)
+        self.assertEqual(api.call_count, 2)
+
+    def test_columns_from_series(self):
+        import discover
+        cols = [c for stats in discover.PROM_COLUMNS.values() for _, c in stats]
+        self.assertEqual(set(cols), {"cpu_usage_avg", "cpu_usage_p95", "cpu_usage_max", "mem_usage_avg_gib",
+                                     "mem_usage_p95_gib", "mem_usage_max_gib", "cpu_requests_peak",
+                                     "mem_requests_peak_gib"})
+        self.assertTrue(set(cols) <= set(discover.NS_NUMERIC))
+        self.assertEqual(set(discover.PROM_COLUMNS), set(discover.PROM_SERIES))
+
+    def test_durations(self):
+        import discover
+        self.assertEqual(discover.duration_seconds("7d"), 7 * 86400)
+        self.assertEqual(discover.duration_seconds("2w"), 14 * 86400)
+        self.assertEqual(discover.window_days("12h"), 0.5)
+        for bad in ("7", "5 m", "", "1x"):
+            with self.assertRaises(ValueError):
+                discover.duration_seconds(bad)
+        args = discover.build_parser().parse_args(["--window", "7days"])
+        with self.assertRaises(ValueError):
+            discover.collect(args)
+
+
+class Parallel(unittest.TestCase):
+    def test_results_in_order_and_logs_captured(self):
+        import discover
+        lines = []
+        discover._log_local.sink = lines
+        try:
+            def work(i):
+                discover.log(f"job {i}")
+                return i * i
+            self.assertEqual(discover.parallel([lambda i=i: work(i) for i in range(5)], limit=2), [0, 1, 4, 9, 16])
+        finally:
+            discover._log_local.sink = None
+        self.assertEqual(sorted(lines), [f"job {i}" for i in range(5)])
+
+    def test_exception_propagates(self):
+        import discover
+
+        def boom():
+            raise discover.KubectlError("nope")
+        with self.assertRaises(discover.KubectlError):
+            discover.parallel([lambda: 1, boom])
+
+    def test_clusters_collected_concurrently(self):
+        import threading
+        from unittest import mock
+        import discover
+        args = discover.build_parser().parse_args(["--context", "a", "--context", "b", "--context", "c"])
+        gate = threading.Barrier(3, timeout=5)   # only passes if all three scans run at the same time
+
+        def fake_collect(ctx, a, projects, clusters):
+            gate.wait()
+            if ctx == "b":
+                raise discover.KubectlError("unreachable")
+            return [{"cluster": ctx, "category": "tenant", "project": "", "namespace": "n", "project_id": "",
+                     **{k: 0.0 for k in discover.NS_NUMERIC}}], {"cluster": ctx}
+        with mock.patch.object(discover, "collect_cluster", side_effect=fake_collect):
+            report = discover.collect(args)
+        self.assertEqual([c["cluster"] for c in report["clusters"]], ["a", "c"])
+        self.assertIn("[b] FAILED: unreachable", report["log"])
+
+
 class LogCapture(unittest.TestCase):
     def test_collect_captures_only_its_own_thread(self):
         import threading

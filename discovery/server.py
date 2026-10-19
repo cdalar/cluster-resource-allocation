@@ -3,7 +3,8 @@
 
 Endpoints (all relative, so the app also works behind the Rancher/API server service proxy):
   GET  /                    dashboard
-  GET  /api/report          latest report (JSON) + collector status
+  GET  /api/report          latest report (JSON) + collector status; gzip-compressed when the client accepts it,
+                            and 304 Not Modified when If-None-Match carries the ETag of the last answer
   POST /api/refresh         trigger a collection now
   GET  /download/<name>.csv clusters / projects / namespaces
   GET  /healthz             liveness/readiness
@@ -22,6 +23,8 @@ The planners only write their own plan files in --data-dir, never to a cluster.
 """
 
 import copy
+import gzip
+import hashlib
 import json
 import os
 import re
@@ -59,6 +62,8 @@ class Collector:
         self.interval = parse_duration(args.interval)
         self.lock = threading.Lock()
         self.report = None
+        self.report_json = b"null"   # the report serialized once per collection, not once per request
+        self._encoded = (None, None, None)  # (response body, ETag, gzip of it) of the last /api/report answer
         self.state = "idle"
         self.last_error = None
         self.next_run = None
@@ -71,10 +76,28 @@ class Collector:
     def _load_saved(self):
         try:
             with open(self._path("report.json")) as f:
-                self.report = json.load(f)
+                self.set_report(json.load(f))
             discover.log(f"loaded previous report from {self._path('report.json')}")
         except (OSError, json.JSONDecodeError):
             pass
+
+    def set_report(self, report):
+        data = json.dumps(report).encode()
+        with self.lock:
+            self.report, self.report_json, self.last_error = report, data, None
+
+    def encoded(self, body):
+        """(ETag, gzip body) for a /api/report response body; computed once per distinct body, so the polling
+        pages don't cost a hash and a compression each."""
+        with self.lock:
+            cached_body, etag, gz = self._encoded
+            if cached_body == body:
+                return etag, gz
+        etag = '"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+        gz = gzip.compress(body, compresslevel=6, mtime=0)
+        with self.lock:
+            self._encoded = (body, etag, gz)
+        return etag, gz
 
     def status(self):
         with self.lock:
@@ -105,8 +128,7 @@ class Collector:
             with open(tmp, "w") as f:
                 json.dump(report, f)
             os.replace(tmp, self._path("report.json"))
-            with self.lock:
-                self.report, self.last_error = report, None
+            self.set_report(report)
             discover.log(f"collection done in {report['duration_s']}s")
         except Exception as e:  # keep serving the previous report whatever went wrong
             discover.log(f"collection failed: {e}")
@@ -265,9 +287,7 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                 self._send(200, data, "application/yaml; charset=utf-8",
                            {"Content-Disposition": 'attachment; filename="allocations.yaml"'})
             elif path == "/api/report":
-                with collector.lock:
-                    report = collector.report
-                self._json(200, {"status": collector.status(), "report": report})
+                self._report()
             elif path == "/healthz":
                 self._send(200, "ok", "text/plain")
             elif path.startswith("/download/") and path.endswith(".csv"):
@@ -283,6 +303,21 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                            {"Content-Disposition": f'attachment; filename="{name}.csv"'})
             else:
                 self._send(404, "not found", "text/plain")
+
+        def _report(self):
+            with collector.lock:
+                report_json = collector.report_json
+            body = b'{"status": ' + json.dumps(collector.status()).encode() + b', "report": ' + report_json + b"}"
+            etag, gz = collector.encoded(body)
+            headers = {"ETag": etag, "Vary": "Accept-Encoding"}
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                for k, v in {"Cache-Control": "no-store", **headers}.items():
+                    self.send_header(k, v)
+                return self.end_headers()
+            if "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                body, headers["Content-Encoding"] = gz, "gzip"
+            self._send(200, body, "application/json", headers)
 
         def _page(self, name):
             with open(os.path.join(STATIC_DIR, name), "rb") as f:
@@ -348,6 +383,11 @@ def main():
                          "cluster; needs get/update on them) instead of files in --data-dir")
     args = ap.parse_args()
     parse_duration(args.interval)
+    for opt in ("window", "step"):
+        try:
+            discover.duration_seconds(getattr(args, opt))
+        except ValueError as e:
+            ap.error(f"--{opt}: {e}")
     if args.plan_configmaps and "/" not in args.plan_configmaps:
         ap.error("--plan-configmaps must be NAMESPACE/PREFIX")
     if (args.planner or args.capacity_planner) and not (

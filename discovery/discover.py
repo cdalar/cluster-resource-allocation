@@ -14,6 +14,7 @@ Outputs CSVs (namespaces, projects, clusters) into --out.
 """
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import os
@@ -63,6 +64,19 @@ def log(msg):
     sink = getattr(_log_local, "sink", None)
     if sink is not None:
         sink.append(msg)
+
+
+def parallel(fns, limit=8):
+    """Run the callables concurrently (at most `limit` threads) and return their results in call order; the first
+    exception is re-raised. The workers log into the calling thread's capture."""
+    sink = getattr(_log_local, "sink", None)
+
+    def run(fn):
+        _log_local.sink = sink
+        return fn()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(limit, len(fns)))) as pool:
+        return list(pool.map(run, fns))
 
 
 # ---------------------------------------------------------------------------
@@ -146,56 +160,94 @@ def kget(context, resource, all_namespaces=True, kubeconfig=None):
 
 
 class Prometheus:
-    """Instant queries against Prometheus, via the API server service proxy or a direct URL."""
+    """Instant and range queries against Prometheus, via the API server service proxy or a direct URL."""
+
+    MAX_POINTS = 11000  # Prometheus refuses a range query with more points than this per series
 
     def __init__(self, context, service=None, url=None, token=None):
         self.context, self.service, self.url, self.token = context, service, url, token
 
-    def query(self, promql):
-        params = urllib.parse.urlencode({"query": promql})
+    def _api(self, endpoint, params):
+        params = urllib.parse.urlencode(params)
         if self.url:
-            req = urllib.request.Request(f"{self.url.rstrip('/')}/api/v1/query?{params}")
+            req = urllib.request.Request(f"{self.url.rstrip('/')}/api/v1/{endpoint}?{params}")
             if self.token:
                 req.add_header("Authorization", f"Bearer {self.token}")
             with urllib.request.urlopen(req, timeout=300) as r:
                 body = json.load(r)
         else:
             ns, svc = self.service.split("/", 1)
-            path = f"/api/v1/namespaces/{ns}/services/{svc}/proxy/api/v1/query?{params}"
+            path = f"/api/v1/namespaces/{ns}/services/{svc}/proxy/api/v1/{endpoint}?{params}"
             body = json.loads(kubectl(self.context, ["get", "--raw", path], timeout=300))
         if body.get("status") != "success":
-            raise KubectlError(f"prometheus query failed: {body.get('error')}")
+            raise KubectlError(f"prometheus {endpoint} failed: {body.get('error')}")
         return body["data"]["result"]
 
-    def by_namespace(self, promql):
-        return {r["metric"].get("namespace", ""): float(r["value"][1]) for r in self.query(promql)}
+    def query(self, promql):
+        return self._api("query", {"query": promql})
 
     def scalar(self, promql):
         res = self.query(promql)
         return float(res[0]["value"][1]) if res else None
 
+    def range_by_namespace(self, promql, start, end, step, max_points=MAX_POINTS):
+        """{namespace: [sample, ...]} of a `sum by (namespace)` expression evaluated every `step` seconds from
+        `start` to `end` (epoch seconds), in several requests of at most max_points steps each (never more than
+        MAX_POINTS)."""
+        out = {}
+        for s, e in range_chunks(start, end, step, min(max_points, self.MAX_POINTS)):
+            for r in self._api("query_range", {"query": promql, "start": s, "end": e, "step": step}):
+                out.setdefault(r["metric"].get("namespace", ""), []).extend(float(v[1]) for v in r["values"])
+        return out
 
-def prom_queries(window, step):
-    cpu = ('sum by (namespace) (rate(container_cpu_usage_seconds_total'
-           '{container!="",container!="POD",image!=""}[5m]))')
-    mem = ('sum by (namespace) (container_memory_working_set_bytes'
-           '{container!="",container!="POD",image!=""})')
-    active = '(kube_pod_status_phase{phase=~"Running|Pending"} == 1)'
-    cpu_req = (f'sum by (namespace) (kube_pod_container_resource_requests{{resource="cpu"}} '
-               f'and on(namespace, pod) {active})')
-    mem_req = (f'sum by (namespace) (kube_pod_container_resource_requests{{resource="memory"}} '
-               f'and on(namespace, pod) {active})')
-    sub = f"[{window}:{step}]"
-    return {
-        "cpu_usage_avg": f"avg_over_time({cpu}{sub})",
-        "cpu_usage_p95": f"quantile_over_time(0.95, {cpu}{sub})",
-        "cpu_usage_max": f"max_over_time({cpu}{sub})",
-        "mem_usage_avg": f"avg_over_time({mem}{sub})",
-        "mem_usage_p95": f"quantile_over_time(0.95, {mem}{sub})",
-        "mem_usage_max": f"max_over_time({mem}{sub})",
-        "cpu_requests_peak": f"max_over_time({cpu_req}{sub})",
-        "mem_requests_peak": f"max_over_time({mem_req}{sub})",
-    }
+
+def range_chunks(start, end, step, max_points):
+    """Split [start, end] into consecutive (start, end) ranges of at most max_points evaluation steps each, on the
+    same step grid as one query over the whole range."""
+    points = int((end - start) // step) + 1
+    chunks = []
+    for first in range(0, points, max_points):
+        last = min(first + max_points, points) - 1
+        chunks.append((start + first * step, start + last * step))
+    return chunks
+
+
+# Per-namespace series read from Prometheus over --window at --step (one range query each, so Prometheus evaluates
+# every expression once per step) and the report columns computed from the samples. A subquery per statistic
+# (avg_over_time, quantile_over_time, max_over_time of the same expression) made Prometheus evaluate the usage
+# expressions three times over and was the slow part of a collection.
+PROM_SERIES = {
+    "cpu_usage": ('sum by (namespace) (rate(container_cpu_usage_seconds_total'
+                  '{container!="",container!="POD",image!=""}[5m]))'),
+    "mem_usage": ('sum by (namespace) (container_memory_working_set_bytes'
+                  '{container!="",container!="POD",image!=""})'),
+    "cpu_requests": ('sum by (namespace) (kube_pod_container_resource_requests{resource="cpu"} '
+                     'and on(namespace, pod) (kube_pod_status_phase{phase=~"Running|Pending"} == 1))'),
+    "mem_requests": ('sum by (namespace) (kube_pod_container_resource_requests{resource="memory"} '
+                     'and on(namespace, pod) (kube_pod_status_phase{phase=~"Running|Pending"} == 1))'),
+}
+# Samples (steps x namespaces) per range request: bounds the size of one response, and the memory to parse it, on
+# a cluster with hundreds of namespaces (about 150 bytes per sample once parsed); the window is read in several
+# requests when it holds more.
+PROM_SAMPLES_PER_REQUEST = 200_000
+PROM_COLUMNS = {  # series -> [(statistic, namespace column)]; memory series are bytes, columns GiB
+    "cpu_usage": [("avg", "cpu_usage_avg"), ("p95", "cpu_usage_p95"), ("max", "cpu_usage_max")],
+    "mem_usage": [("avg", "mem_usage_avg_gib"), ("p95", "mem_usage_p95_gib"), ("max", "mem_usage_max_gib")],
+    "cpu_requests": [("max", "cpu_requests_peak")],
+    "mem_requests": [("max", "mem_requests_peak_gib")],
+}
+
+
+def series_stats(samples):
+    """avg, p95 and max of the samples, as Prometheus computes avg_over_time, quantile_over_time(0.95) and
+    max_over_time (the quantile interpolates linearly between the two nearest ranks)."""
+    if not samples:
+        return {"avg": 0.0, "p95": 0.0, "max": 0.0}
+    s = sorted(samples)
+    rank = 0.95 * (len(s) - 1)
+    lo = int(rank)
+    hi = min(lo + 1, len(s) - 1)
+    return {"avg": sum(s) / len(s), "p95": s[lo] + (s[hi] - s[lo]) * (rank - lo), "max": s[-1]}
 
 
 def load_rancher_projects(local_context=None, local_kubeconfig=None):
@@ -261,15 +313,31 @@ def context_label(context):
 def collect_cluster(context, args, rancher_projects, rancher_clusters):
     label = context_label(context)
     log(f"[{label}] collecting")
-    nodes = kget(context, "nodes", all_namespaces=False)
-    namespaces = kget(context, "namespaces", all_namespaces=False)
-    pods = kget(context, "pods")
-    quotas = kget(context, "resourcequotas")
-    limitranges = kget(context, "limitranges")
-    try:
-        hpas = kget(context, "horizontalpodautoscalers.autoscaling")
-    except KubectlError:
-        hpas = []
+
+    def hpas_or_none():
+        try:
+            return kget(context, "horizontalpodautoscalers.autoscaling")
+        except KubectlError:
+            return []
+
+    def metrics_snapshot():
+        try:
+            return json.loads(kubectl(context, ["get", "--raw", "/apis/metrics.k8s.io/v1beta1/pods"]))
+        except (KubectlError, json.JSONDecodeError) as e:
+            log(f"[{label}] metrics-server unavailable, skipping usage snapshot: {first_line(e)}")
+            return None
+
+    # independent reads, so they run at the same time (the pod list dominates on a large cluster); a few at a time,
+    # as every read is a kubectl process in the dashboard pod's memory
+    nodes, namespaces, pods, quotas, limitranges, hpas, metrics = parallel(limit=4, fns=[
+        lambda: kget(context, "nodes", all_namespaces=False),
+        lambda: kget(context, "namespaces", all_namespaces=False),
+        lambda: kget(context, "pods"),
+        lambda: kget(context, "resourcequotas"),
+        lambda: kget(context, "limitranges"),
+        hpas_or_none,
+        metrics_snapshot,
+    ])
 
     system_re = re.compile(args.system_ns_regex)
     system_project_re = re.compile(args.system_project_regex, re.IGNORECASE)
@@ -334,17 +402,13 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                 row[key] += 1
 
     # metrics-server snapshot
-    try:
-        metrics = json.loads(kubectl(context, ["get", "--raw", "/apis/metrics.k8s.io/v1beta1/pods"]))
-        for pm in metrics.get("items", []):
-            row = ns_rows.get(pm["metadata"]["namespace"])
-            if row is None:
-                continue
-            for c in pm.get("containers", []):
-                row["cpu_usage_now"] += parse_quantity(c["usage"].get("cpu"))
-                row["mem_usage_now_gib"] += parse_quantity(c["usage"].get("memory")) / GIB
-    except (KubectlError, json.JSONDecodeError) as e:
-        log(f"[{label}] metrics-server unavailable, skipping usage snapshot: {first_line(e)}")
+    for pm in (metrics or {}).get("items", []):
+        row = ns_rows.get(pm["metadata"]["namespace"])
+        if row is None:
+            continue
+        for c in pm.get("containers", []):
+            row["cpu_usage_now"] += parse_quantity(c["usage"].get("cpu"))
+            row["mem_usage_now_gib"] += parse_quantity(c["usage"].get("memory")) / GIB
 
     # Prometheus history
     prom_coverage_days = ""
@@ -357,12 +421,18 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
                 log(f"[{label}] prometheus has {prom_coverage_days} days of data (window {args.window})")
                 if prom_coverage_days < window_days(args.window):
                     log(f"[{label}] WARNING: less history than --window; P95/max cover only available data")
-            for key, q in prom_queries(args.window, args.step).items():
-                col = key + ("_gib" if key.startswith("mem_") else "")
-                div = GIB if key.startswith("mem_") else 1
-                for ns, v in prom.by_namespace(q).items():
+            end = datetime.now(timezone.utc).timestamp()
+            start, step = end - duration_seconds(args.window), duration_seconds(args.step)
+            max_points = max(1, PROM_SAMPLES_PER_REQUEST // max(1, len(ns_rows)))
+            results = parallel([lambda q=q: prom.range_by_namespace(q, start, end, step, max_points)
+                                for q in PROM_SERIES.values()])
+            for name, by_ns in zip(PROM_SERIES, results):
+                div = GIB if name.startswith("mem_") else 1
+                for ns, samples in by_ns.items():
                     if ns in ns_rows:
-                        ns_rows[ns][col] = v / div
+                        stats = series_stats(samples)
+                        for stat, col in PROM_COLUMNS[name]:
+                            ns_rows[ns][col] = stats[stat] / div
         except (KubectlError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
             log(f"[{label}] prometheus unavailable, skipping history: {first_line(e)}")
 
@@ -376,10 +446,16 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
     return list(ns_rows.values()), cluster_row
 
 
+def duration_seconds(s):
+    """Seconds in a duration like 5m, 7d or 2w (the units Prometheus accepts for --window and --step)."""
+    m = re.fullmatch(r"(\d+)([smhdwy])", s or "")
+    if not m:
+        raise ValueError(f"invalid duration: {s} (use e.g. 15m, 7d, 2w)")
+    return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}[m.group(2)]
+
+
 def window_days(w):
-    units = {"s": 1 / 86400, "m": 1 / 1440, "h": 1 / 24, "d": 1, "w": 7, "y": 365}
-    m = re.fullmatch(r"(\d+)([smhdwy])", w)
-    return int(m.group(1)) * units[m.group(2)] if m else 0
+    return duration_seconds(w) / 86400
 
 
 def first_line(e):
@@ -579,7 +655,7 @@ def build_parser():
                     help=f"Prometheus service for API server proxy as ns/[scheme:]name:port (default: {DEFAULT_PROM_SERVICE})")
     ap.add_argument("--prom-url", help="direct Prometheus URL instead of the service proxy (token in $PROM_TOKEN)")
     ap.add_argument("--window", default="7d", help="usage history window (default: 7d; Rancher Monitoring keeps ~10d)")
-    ap.add_argument("--step", default="5m", help="subquery resolution (default: 5m)")
+    ap.add_argument("--step", default="5m", help="resolution of the usage history (default: 5m)")
     ap.add_argument("--system-ns-regex", default=DEFAULT_SYSTEM_NS_REGEX,
                     help="namespaces treated as platform/system")
     ap.add_argument("--system-project-regex", default=DEFAULT_SYSTEM_PROJECT_REGEX,
@@ -601,6 +677,11 @@ def collect(args):
 
         if args.rancher_names_configmap and args.rancher_names_configmap.count("/") != 1:
             raise ValueError("--rancher-names-configmap: expected NAMESPACE/NAME")
+        for opt in ("window", "step"):
+            try:
+                duration_seconds(getattr(args, opt))
+            except ValueError as e:
+                raise ValueError(f"--{opt}: {e}")
         local_context = args.rancher_local_context
         if args.rancher_local_self:
             if local_context or local_kubeconfig or len(args.context) > 1:
@@ -616,8 +697,7 @@ def collect(args):
             except KubectlError as e:
                 log(f"could not read Rancher projects: {first_line(e)}")
 
-        all_ns, all_clusters = [], []
-        for ctx in args.context or [None]:
+        def one_cluster(ctx):
             projects, clusters = rancher_projects, rancher_clusters
             if args.rancher_names_configmap:
                 try:
@@ -628,12 +708,18 @@ def collect(args):
                 except (KubectlError, ValueError) as e:
                     log(f"[{ctx or 'current'}] could not read {args.rancher_names_configmap}: {first_line(e)}")
             try:
-                ns_rows, cluster_row = collect_cluster(ctx, args, projects, clusters)
+                return collect_cluster(ctx, args, projects, clusters)
             except KubectlError as e:
                 log(f"[{ctx or 'current'}] FAILED: {first_line(e)}")
-                continue
-            all_ns.extend(ns_rows)
-            all_clusters.append(cluster_row)
+                return None
+
+        all_ns, all_clusters = [], []
+        # clusters are independent too: scan a few at a time (each scan runs several kubectl processes), results
+        # in --context order
+        for result in parallel([lambda c=c: one_cluster(c) for c in args.context or [None]], limit=4):
+            if result:
+                all_ns.extend(result[0])
+                all_clusters.append(result[1])
     finally:
         _log_local.sink = None
 

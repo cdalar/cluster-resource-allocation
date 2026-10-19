@@ -232,7 +232,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `imagePullSecrets` | `[]` | For a private registry |
 | `clusterName` | `""` | Display name; default is the Rancher cluster name (with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`) or `in-cluster` |
 | `collection.interval` | `30m` | Time between collections; the dashboard also has a "Collect now" button |
-| `collection.window` / `collection.step` | `7d` / `5m` | Prometheus usage window and resolution; use `step: 15m` on large clusters |
+| `collection.window` / `collection.step` | `7d` / `5m` | Prometheus usage history window and resolution (one range query per series); use `step: 15m` on large clusters |
 | `collection.projectLabel` | `""` | Namespace label to group by when there are no Rancher Projects (e.g. AKS outside Rancher) |
 | `collection.systemNamespaceRegex` | `kube-.*`, `cattle-.*`, … `.*storage.*`, `.*system.*`, `.*ingress.*` (see `values.yaml`) | Namespaces counted as System (platform), whatever their Rancher Project; must match the whole name. See the [installation guide](../../guides/installation.md#mark-more-namespaces-as-system) |
 | `collection.systemProjectRegex` | `^(system|.*platform.*)$` | Rancher Project names (ignoring case) whose namespaces count as System: Rancher's System project and any name containing `platform`. The planner hides these projects like System / Default |
@@ -287,7 +287,7 @@ ConfigMaps.
 | Path | |
 |---|---|
 | `/` | Dashboard |
-| `/api/report` | Latest report plus collector status (JSON) |
+| `/api/report` | Latest report plus collector status (JSON; gzip when accepted, `304` for an unchanged `ETag`) |
 | `POST /api/refresh` | Trigger a collection |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/healthz` | Liveness and readiness |

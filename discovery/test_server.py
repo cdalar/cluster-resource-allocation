@@ -35,8 +35,8 @@ class Server(unittest.TestCase):
         cls.httpd.shutdown()
         cls.tmp.cleanup()
 
-    def get(self, path, method="GET"):
-        req = urllib.request.Request(self.base + path, method=method)
+    def get(self, path, method="GET", headers=None):
+        req = urllib.request.Request(self.base + path, method=method, headers=headers or {})
         try:
             with urllib.request.urlopen(req) as r:
                 return r.status, r.headers, r.read()
@@ -55,6 +55,27 @@ class Server(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(data["report"]["clusters"][0]["cluster"], "c1")
         self.assertFalse(data["status"]["collect_enabled"])
+
+    def test_report_gzip_and_not_modified(self):
+        import gzip
+        code, headers, body = self.get("/api/report")
+        etag = headers["ETag"]
+        self.assertTrue(etag.startswith('"') and len(etag) > 10)
+        self.assertEqual(headers["Vary"], "Accept-Encoding")
+        self.assertIsNone(headers.get("Content-Encoding"))
+        # same content compressed, same ETag
+        code, headers, gz = self.get("/api/report", headers={"Accept-Encoding": "gzip, deflate"})
+        self.assertEqual((code, headers["Content-Encoding"], headers["ETag"]), (200, "gzip", etag))
+        self.assertEqual(gzip.decompress(gz), body)
+        # the page polls with the last ETag and gets no body while nothing changed
+        code, headers, body = self.get("/api/report", headers={"If-None-Match": etag})
+        self.assertEqual((code, headers["ETag"], body), (304, etag, b""))
+        # a different collector state changes the ETag (the page shows "collecting now")
+        with mock.patch.object(server.Collector, "status", return_value={"state": "collecting"}):
+            code, headers, body = self.get("/api/report", headers={"If-None-Match": etag})
+        self.assertEqual(code, 200)
+        self.assertNotEqual(headers["ETag"], etag)
+        self.assertEqual(json.loads(body)["status"], {"state": "collecting"})
 
     def test_versions_from_the_chart(self):
         with mock.patch.dict(os.environ, {"CHART_VERSION": "0.5.2", "IMAGE_TAG": "sha-abc1234"}):

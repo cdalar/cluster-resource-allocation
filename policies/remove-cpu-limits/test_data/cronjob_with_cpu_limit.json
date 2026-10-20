@@ -1,0 +1,35 @@
+{
+  "uid": "4c9f6e3a-2f9d-4a5c-9e74-8b3d4f5a6c7d",
+  "kind": {"group": "batch", "kind": "CronJob", "version": "v1"},
+  "resource": {"group": "batch", "version": "v1", "resource": "cronjobs"},
+  "requestKind": {"group": "batch", "version": "v1", "kind": "CronJob"},
+  "requestResource": {"group": "batch", "version": "v1", "resource": "cronjobs"},
+  "name": "report",
+  "namespace": "team-alpha-dev",
+  "operation": "CREATE",
+  "userInfo": {"username": "kubernetes-admin", "groups": ["system:masters", "system:authenticated"]},
+  "object": {
+    "apiVersion": "batch/v1",
+    "kind": "CronJob",
+    "metadata": {"name": "report", "namespace": "team-alpha-dev"},
+    "spec": {
+      "schedule": "0 3 * * *",
+      "jobTemplate": {
+        "spec": {
+          "template": {
+            "spec": {
+              "restartPolicy": "Never",
+              "containers": [
+                {
+                  "name": "report",
+                  "image": "registry.example.com/team-alpha/report:4",
+                  "resources": {"limits": {"cpu": "1", "memory": "1Gi"}}
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

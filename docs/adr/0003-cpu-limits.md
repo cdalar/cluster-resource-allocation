@@ -28,3 +28,5 @@ mandatory and are quota'd.
 - A misbehaving workload can use idle CPU on a node, but never steals *requested* CPU from others.
 - Workloads will mostly be `Burstable` QoS rather than `Guaranteed`; acceptable for classic services.
 - If the req/lmt initiative has standardised on CPU limits, revisit this ADR.
+- Charts that set CPU limits anyway can be corrected at admission: the Kubewarden policy
+  [remove-cpu-limits](../../policies/remove-cpu-limits/README.md) removes `limits.cpu` (opt-out by image or annotation).

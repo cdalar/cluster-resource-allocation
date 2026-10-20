@@ -1,0 +1,79 @@
+name: policy
+
+# Tests and builds the Kubewarden policy in policies/remove-cpu-limits (Go, TinyGo, kwctl).
+#   push to main                  -> unit tests, build, annotate, end-to-end tests
+#   tag remove-cpu-limits-vX.Y.Z  -> same, then pushes ghcr.io/<owner>/policies/remove-cpu-limits:vX.Y.Z
+#                                    (the tag must match io.kubewarden.policy.version in metadata.yml)
+on:
+  push:
+    branches: [main]
+    tags: ["remove-cpu-limits-v*"]
+    paths:
+      - "policies/remove-cpu-limits/**"
+      - ".github/workflows/policy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: policy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OCI_TARGET: ghcr.io/${{ github.repository_owner }}/policies/remove-cpu-limits
+
+defaults:
+  run:
+    working-directory: policies/remove-cpu-limits
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: policies/remove-cpu-limits/go.mod
+
+      - uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: "0.39.0"
+
+      # kwctl, bats, cosign
+      - uses: kubewarden/github-actions/policy-gh-action-dependencies@v8.0.0
+
+      - name: Unit tests
+        run: make test
+
+      - name: Build and annotate
+        run: make annotated-policy.wasm
+
+      - name: End-to-end tests
+        run: make e2e-tests
+
+      - name: Tag matches the policy version
+        if: startsWith(github.ref, 'refs/tags/remove-cpu-limits-v')
+        run: |
+          version=$(sed -n 's/^ *io\.kubewarden\.policy\.version: *//p' metadata.yml)
+          if [ "remove-cpu-limits-v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match io.kubewarden.policy.version ${version}"
+            exit 1
+          fi
+
+      - uses: docker/login-action@v3
+        if: startsWith(github.ref, 'refs/tags/remove-cpu-limits-v')
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the policy
+        if: startsWith(github.ref, 'refs/tags/remove-cpu-limits-v')
+        run: |
+          version=${GITHUB_REF_NAME#remove-cpu-limits-}
+          kwctl push annotated-policy.wasm "registry://${OCI_TARGET}:${version}"

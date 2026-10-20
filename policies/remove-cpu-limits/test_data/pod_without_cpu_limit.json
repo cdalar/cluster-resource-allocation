@@ -1,0 +1,28 @@
+{
+  "uid": "2a9f4c1e-0d7b-4e3a-9c52-6f1b2d3e4a5b",
+  "kind": {"group": "", "kind": "Pod", "version": "v1"},
+  "resource": {"group": "", "version": "v1", "resource": "pods"},
+  "requestKind": {"group": "", "version": "v1", "kind": "Pod"},
+  "requestResource": {"group": "", "version": "v1", "resource": "pods"},
+  "name": "app",
+  "namespace": "team-alpha-dev",
+  "operation": "CREATE",
+  "userInfo": {"username": "kubernetes-admin", "groups": ["system:masters", "system:authenticated"]},
+  "object": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {"name": "app", "namespace": "team-alpha-dev"},
+    "spec": {
+      "containers": [
+        {
+          "name": "app",
+          "image": "registry.example.com/team-alpha/app:1.2",
+          "resources": {
+            "requests": {"cpu": "250m", "memory": "128Mi"},
+            "limits": {"memory": "256Mi"}
+          }
+        }
+      ]
+    }
+  }
+}

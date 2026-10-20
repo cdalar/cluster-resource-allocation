@@ -1,0 +1,54 @@
+{
+  "uid": "1299d386-525b-4032-98ae-1949f69f9cfc",
+  "kind": {"group": "", "kind": "Pod", "version": "v1"},
+  "resource": {"group": "", "version": "v1", "resource": "pods"},
+  "requestKind": {"group": "", "version": "v1", "kind": "Pod"},
+  "requestResource": {"group": "", "version": "v1", "resource": "pods"},
+  "name": "app",
+  "namespace": "team-alpha-dev",
+  "operation": "CREATE",
+  "userInfo": {"username": "kubernetes-admin", "groups": ["system:masters", "system:authenticated"]},
+  "object": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+      "name": "app",
+      "namespace": "team-alpha-dev",
+      "labels": {"app": "app"}
+    },
+    "spec": {
+      "initContainers": [
+        {
+          "name": "init",
+          "image": "registry.example.com/team-alpha/init:1.0",
+          "resources": {
+            "requests": {"cpu": "100m", "memory": "64Mi"},
+            "limits": {"cpu": "200m"}
+          }
+        }
+      ],
+      "containers": [
+        {
+          "name": "app",
+          "image": "registry.example.com/team-alpha/app:1.2",
+          "resources": {
+            "requests": {"cpu": "250m", "memory": "128Mi"},
+            "limits": {"cpu": 1, "memory": "256Mi"}
+          }
+        },
+        {
+          "name": "sidecar",
+          "image": "registry.example.com/platform/sidecar:3",
+          "resources": {
+            "limits": {"cpu": "500m", "memory": "64Mi"}
+          }
+        },
+        {
+          "name": "pause",
+          "image": "registry.k8s.io/pause"
+        }
+      ],
+      "terminationGracePeriodSeconds": 30
+    }
+  }
+}

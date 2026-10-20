@@ -128,6 +128,7 @@ flowchart LR
 | [Capacity planner](guides/allocation-planner.md#capacity-planner-without-money) | The allocation planner without money: a CPU and memory envelope per project, split into quota per cluster, with the same cluster checks |
 | [allocation/generate.py](guides/allocation-as-code.md) | Checks the allocation files in Git (vCPU and memory per project and namespace, against cluster capacity) and generates a ResourceQuota + LimitRange per namespace (writes files, applies nothing); `--discover` reads the clusters' capacity (N+1, platform, headroom) into `settings.yaml`; `--import-projects` starts the project files from Rancher Projects and current requests |
 | [publish_rancher_names.py](discovery/README.md#project-names-on-downstream-clusters-without-a-token) | Publishes Rancher Project names from the local cluster to downstream clusters (Fleet Bundle with a ConfigMap), so their dashboards show names without a Rancher token |
+| [remove-cpu-limits](policies/remove-cpu-limits/README.md) | Kubewarden policy that removes `limits.cpu` from containers at admission ([ADR-0003](docs/adr/0003-cpu-limits.md)); memory limits and CPU requests stay, opt-out by image or annotation; `ghcr.io/cdalar/policies/remove-cpu-limits` |
 
 ## Repository layout
 
@@ -137,6 +138,7 @@ guides/      user guides for the tools
 discovery/   discover.py (CLI), server.py + static/ (dashboard, planners), publish_rancher_names.py, tests
 allocation/  generate.py (allocation files -> quotas), examples/, tests
 charts/      Helm chart cluster-resource-report
+policies/    Kubewarden policies (Go, TinyGo): remove-cpu-limits
 ```
 
 ## Development
@@ -145,6 +147,7 @@ charts/      Helm chart cluster-resource-report
 cd discovery && python3 -m unittest -v test_discover test_server test_planner
 cd allocation && python3 -m unittest -v test_generate
 helm lint charts/cluster-resource-report
+cd policies/remove-cpu-limits && make test      # Go; make e2e-tests needs tinygo, kwctl, bats
 ```
 
 The code uses only the Python standard library and `kubectl`. Releases are `vX.Y.Z` tags matching `version` and

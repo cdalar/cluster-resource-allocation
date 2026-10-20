@@ -1,0 +1,65 @@
+# Values overlay for the opentelemetry-kube-stack Helm chart (written for 0.20.1): Kubernetes events in
+# Elasticsearch with the fields the "Rejected pods" dashboard reads (guides/kibana-dashboard.md).
+#
+#   helm upgrade ... -f <your values>.yaml -f otel-kube-stack-values.yaml -f otel-kube-stack-events.yaml
+#
+# The chart's kubernetesEvents preset (on by default for the daemon collector; leader election, so one pod
+# watches) sends every event as one log record per watch update: the Event object is the record body. The
+# Elasticsearch exporter (mapping mode otel) writes such a body as body.structured, a `flattened` field that
+# ES|QL cannot read before Elasticsearch 9.5. The transform processor below copies the fields the dashboard
+# needs into log attributes, which Elasticsearch maps as keywords: attributes.k8s.event.reason, .note, .type,
+# .regarding.kind, .regarding.name, .count, .reporting_controller, .uid. It reads both event schemas:
+# events.k8s.io/v1 (the preset's group: note, regarding, series.count, deprecatedCount) and core v1 (message,
+# involvedObject, count). The body stays as it is.
+#
+# Records then land in logs-k8sobjectsreceiver.otel-<namespace> (the exporter names the data stream after the
+# receiver); the dashboard reads logs-*.otel-*. The daemon's k8s_attributes processor runs on the logs pipeline
+# too and adds the namespace labels (rancher.project.id from otel-kube-stack-values.yaml) to the event records:
+# it falls back to the record's k8s.namespace.name when no pod matches. Set the cluster name on the logs
+# pipeline as on the metrics one (the same resource processor).
+#
+# Helm replaces lists: the processors list below is the chart default plus transform/k8s_events. If your logs
+# pipeline lists other processors, copy your list and insert transform/k8s_events after k8s_attributes.
+
+collectors:
+  daemon:
+    presets:
+      kubernetesEvents:
+        enabled: true
+    config:
+      processors:
+        transform/k8s_events:
+          error_mode: ignore
+          log_statements:
+            - context: log
+              conditions:
+                - attributes["k8s.resource.name"] == "events"
+              statements:
+                # events.k8s.io/v1
+                - set(attributes["k8s.event.reason"], body["object"]["reason"]) where body["object"]["reason"] != nil
+                - set(attributes["k8s.event.type"], body["object"]["type"]) where body["object"]["type"] != nil
+                - set(attributes["k8s.event.note"], body["object"]["note"]) where body["object"]["note"] != nil
+                - set(attributes["k8s.event.regarding.kind"], body["object"]["regarding"]["kind"]) where body["object"]["regarding"]["kind"] != nil
+                - set(attributes["k8s.event.regarding.name"], body["object"]["regarding"]["name"]) where body["object"]["regarding"]["name"] != nil
+                - set(attributes["k8s.event.reporting_controller"], body["object"]["reportingController"]) where body["object"]["reportingController"] != nil
+                - set(attributes["k8s.event.count"], Int(body["object"]["series"]["count"])) where body["object"]["series"]["count"] != nil
+                - set(attributes["k8s.event.count"], Int(body["object"]["deprecatedCount"])) where attributes["k8s.event.count"] == nil and body["object"]["deprecatedCount"] != nil
+                # core v1 (a k8sobjects receiver configured without group: events.k8s.io)
+                - set(attributes["k8s.event.note"], body["object"]["message"]) where attributes["k8s.event.note"] == nil and body["object"]["message"] != nil
+                - set(attributes["k8s.event.regarding.kind"], body["object"]["involvedObject"]["kind"]) where attributes["k8s.event.regarding.kind"] == nil and body["object"]["involvedObject"]["kind"] != nil
+                - set(attributes["k8s.event.regarding.name"], body["object"]["involvedObject"]["name"]) where attributes["k8s.event.regarding.name"] == nil and body["object"]["involvedObject"]["name"] != nil
+                - set(attributes["k8s.event.reporting_controller"], body["object"]["source"]["component"]) where attributes["k8s.event.reporting_controller"] == nil and body["object"]["source"]["component"] != nil
+                - set(attributes["k8s.event.count"], Int(body["object"]["count"])) where attributes["k8s.event.count"] == nil and body["object"]["count"] != nil
+                # both
+                - set(attributes["k8s.event.uid"], body["object"]["metadata"]["uid"]) where body["object"]["metadata"]["uid"] != nil
+                # Elasticsearch indexes keywords up to 1024 characters (ignore_above); a longer note would be lost
+                - truncate_all(attributes, 1000)
+      service:
+        pipelines:
+          logs:
+            processors:
+              - k8s_attributes
+              - transform/k8s_events
+              - resource_detection/env
+              - resource/hostname
+              - batch

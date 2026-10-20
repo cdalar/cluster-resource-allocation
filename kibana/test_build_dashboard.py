@@ -36,6 +36,7 @@ class BuildDashboardTest(unittest.TestCase):
         bd.LOOKUP_INDEX[0] = None
         bd.NAME_FIELD[0] = None
         bd.CP_FIELD[0] = CP_FIELD
+        bd.EVENTS_INDEX[0] = bd.DEFAULT_EVENTS_INDEX
 
     def generated(self):
         return "".join(json.dumps(obj, separators=(",", ":")) + "\n" for obj in bd.saved_objects(bd.DEFAULT_INDEX))
@@ -71,14 +72,14 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertEqual(len([r for r in dashboard["references"] if r["name"].startswith("controlGroup_")]), 2)
         # no "Project owner" dashboard without Projects, and no link to it
         ids = [d["id"] for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]]
-        self.assertEqual(ids, [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID, bd.FIT_ID])
+        self.assertEqual(ids, [bd.REPORT_ID, bd.PROJECTS_ID, bd.LIMITS_ID, bd.REJECT_ID, bd.FIT_ID])
         self.assertNotIn(bd.OWNER_ID, text)
 
     def test_saved_objects(self):
         data_view, *dashboards = bd.saved_objects(bd.DEFAULT_INDEX)
         self.assertEqual(data_view["type"], "index-pattern")
         self.assertEqual([d["id"] for d in dashboards],
-                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.OWNER_ID, bd.LIMITS_ID, bd.FIT_ID])
+                         [bd.REPORT_ID, bd.PROJECTS_ID, bd.OWNER_ID, bd.LIMITS_ID, bd.REJECT_ID, bd.FIT_ID])
         self.check_dashboards()
         ids = [d["id"] for d in dashboards]
         for d in dashboards:  # every About links the other dashboards
@@ -201,10 +202,15 @@ class BuildDashboardTest(unittest.TestCase):
         bd.NAME_FIELD[0] = bd.DEFAULT_NAME_FIELD
         self.rebuild()
         field = "resource.attributes.rancher.project.name"
-        report = [p["esql"] for p in report_panels() if p["esql"]]
-        for q in report:  # the name is carried through both aggregations, then used
-            self.assertIn(f"project_name = MAX({field})", q)
-            self.assertIn("project_name = MAX(project_name)", q)
+        for p in report_panels():
+            q = p["esql"]
+            if not q:
+                continue
+            if "k8s.event" in q:  # the event panels keep raw rows: the field is read as a column
+                self.assertIn(f", project_name = {field}\n", q, p["title"])
+            else:  # the name is carried through both aggregations, then used
+                self.assertIn(f"project_name = MAX({field})", q, p["title"])
+                self.assertIn("project_name = MAX(project_name)", q, p["title"])
             self.assertIn("| EVAL pname = COALESCE(project_name, project)", q)
             self.assertNotIn("LOOKUP JOIN", q)
         self.assertIn("TO_LOWER(pname) RLIKE", bd.category_expr())
@@ -224,6 +230,10 @@ class BuildDashboardTest(unittest.TestCase):
             self.assertNotIn("control_plane", p["esql"] or "", p["title"])
         for dashboard in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
             search = json.loads(dashboard["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])
+            if dashboard["id"] == bd.REJECT_ID:  # DaemonSet pods on control-plane nodes count, events have no node
+                self.assertEqual(search["filter"], [])
+                self.assertNotIn("searchSourceJSON", json.dumps(dashboard["references"]))
+                continue
             [f] = search["filter"]
             self.assertTrue(f["meta"]["negate"])
             self.assertEqual(f["query"], {"match_phrase": {field: "true"}})
@@ -238,7 +248,7 @@ class BuildDashboardTest(unittest.TestCase):
         self.assertNotIn("Control-plane", bd.REPORT_PANELS[0]["markdown"])
 
     def test_workload_ratio_table(self):
-        p = report_panels()[-1]
+        p = next(p for p in bd.board_panels("limits") if p["kind"] == "table")
         self.assertTrue(p["title"].startswith("Workloads vs. limit ≤ 2× request"))
         self.assertEqual(bd.table_columns(p["esql"])[:7],
                          ["Cluster", "Namespace", "Project", "Category", "Kind", "Workload", "Status"])
@@ -253,14 +263,15 @@ class BuildDashboardTest(unittest.TestCase):
         for d in bd.saved_objects(bd.DEFAULT_INDEX)[1:]:
             search = json.loads(d["attributes"]["kibanaSavedObjectMeta"]["searchSourceJSON"])
             self.assertEqual([(f["meta"]["negate"], f["query"]) for f in search["filter"]],
-                             [(True, {"match_phrase": {bd.CP_FIELD[0]: "true"}})], d["id"])
+                             [] if d["id"] == bd.REJECT_ID else [(True, {"match_phrase": {bd.CP_FIELD[0]: "true"}})],
+                             d["id"])
 
     def test_every_project_column_shows_names(self):
         bd.PROJECT_NAMES["p-bbjk7"] = "payments"
         self.rebuild()
         shown = [p for p in bd.REPORT_PANELS if p["esql"] and "Project = pname" in p["esql"]
                  or p["esql"] and "CONCAT(cluster, \" / \", pname)" in p["esql"]]
-        self.assertEqual({p["board"] for p in shown}, {"projects", "owner", "limits"})
+        self.assertEqual({p["board"] for p in shown}, {"projects", "owner", "limits", "rejections"})
         for p in report_panels():
             if p["esql"]:
                 self.assertIn('project == "p-bbjk7", "payments"', p["esql"], p["title"])
@@ -312,7 +323,7 @@ class BuildDashboardTest(unittest.TestCase):
         grids = [p for p in bd.REPORT_PANELS if p["kind"] == "metric_grid"]
         self.assertEqual([(p["board"], p["tiles"]) for p in grids],
                          [("capacity", 6), ("capacity", 2), ("capacity", 9), ("owner", 8), ("owner", 5),
-                          ("fit", 5)])
+                          ("rejections", 7), ("rejections", 3), ("fit", 5)])
         self.assertNotIn("metric", {p["kind"] for p in bd.REPORT_PANELS})
         for p in grids:
             self.assertTrue(p["esql"].endswith("| SORT ord\n| KEEP label, value" + (", max" if p["bar"] else "")
@@ -406,6 +417,60 @@ class BuildDashboardTest(unittest.TestCase):
         verdict = next(p for p in fit if p["title"].startswith("Does it fit"))["esql"]
         self.assertIn('TOP(a_cpu, 2, "desc")', verdict)
         self.assertIn("fails == 1, MV_MAX(top_fit)", verdict)
+
+
+    def test_rejections_board(self):
+        board = bd.board_panels("rejections")
+        self.assertEqual([p["kind"] for p in board], ["markdown", "metric_grid", "metric_grid", "bar_time",
+                                                      "bar_stacked", "table", "table", "table"])
+        events = [p for p in board if p["esql"] and "k8s.event" in p["esql"]]
+        self.assertEqual(len(events), 5)
+        for p in events:  # the metrics index is read too, so the Project field is known when no event carries it
+            self.assertTrue(p["esql"].startswith(
+                f"FROM {bd.DEFAULT_EVENTS_INDEX}, {bd.DEFAULT_INDEX}\n"
+                '| WHERE attributes.k8s.event.reason == "FailedCreate"\n'), p["title"])
+            self.assertIn('okind == "ReplicaSet", "Deployment"', p["esql"])
+        cause = bd.cause_expr()
+        self.assertTrue(cause.startswith('CASE(note LIKE "*max limit to request ratio*" OR note LIKE'))
+        self.assertTrue(cause.endswith('note LIKE "*is forbidden*", "Other admission", "Other")'))
+        rejected = next(p for p in board if p["title"].startswith("Rejected workloads:"))
+        self.assertEqual(bd.table_columns(rejected["esql"])[:8],
+                         ["Cluster", "Namespace", "Project", "Category", "Kind", "Workload", "Cause", "Rejected creates"])
+        self.assertIn("| STATS attempts = SUM(n), events = COUNT(*)", rejected["esql"])
+        short = next(p for p in board if p["title"].startswith("Workloads short of pods"))
+        self.assertNotIn("k8s.event", short["esql"])
+        self.assertTrue(short["esql"].startswith(f"FROM {bd.DEFAULT_INDEX}\n| WHERE @timestamp >= TO_DATETIME(?_tend) - 10 minutes\n"))
+        self.assertIn("BY t = BUCKET(@timestamp, 1 minute)", short["esql"])
+        self.assertEqual(bd.table_columns(short["esql"])[-2:], ["Missing", "Short all 10 minutes"])
+        over_time = next(p for p in board if p["kind"] == "bar_time")
+        self.assertEqual(over_time["y"], ["LimitRange", "ResourceQuota", "Other admission", "Other"])
+        state = bd.lens_attributes(over_time, bd.DEFAULT_INDEX)["state"]
+        self.assertEqual(state["visualization"]["layers"][0]["seriesType"], "bar_stacked")
+        self.assertEqual(state["datasourceStates"]["textBased"]["layers"]["layer_0"]["columns"][0]["meta"]["type"],
+                         "date")
+        self.assertEqual(len(state["visualization"]["layers"][0]["yConfig"]), 4)
+        dashboard = next(d for d in bd.saved_objects(bd.DEFAULT_INDEX) if d["id"] == bd.REJECT_ID)
+        self.assertEqual(dashboard["attributes"]["timeFrom"], "now-24h")
+        self.assertEqual([r["name"] for r in dashboard["references"]],
+                         ["controlGroup_ctrl-cluster:optionsListDataView",
+                          "controlGroup_ctrl-project:optionsListDataView",
+                          "controlGroup_ctrl-namespace:optionsListDataView"])
+        # the collector overlay sets every event attribute the queries read
+        with open(os.path.join(os.path.dirname(bd.default_out()), "otel-kube-stack-events.yaml")) as f:
+            overlay = f.read()
+        for key in ("ev_reason", "ev_note", "ev_kind", "ev_name", "ev_count", "ev_controller", "ev_uid"):
+            self.assertIn(f'set(attributes["{bd.F[key][len("attributes."):]}"]', overlay, key)
+        self.assertIn("- transform/k8s_events", overlay)
+        # --no-events: the metrics panels only, and no event field or index anywhere
+        bd.EVENTS_INDEX[0] = None
+        self.rebuild()
+        board = bd.board_panels("rejections")
+        self.assertEqual([p["kind"] for p in board], ["markdown", "metric_grid", "table"])
+        text = self.generated()
+        self.assertNotIn("k8s.event", text)
+        self.assertNotIn("logs-*", text)
+        self.assertIn("--no-events", board[0]["markdown"])
+        self.check_dashboards()
 
 
 class FakeElastic:

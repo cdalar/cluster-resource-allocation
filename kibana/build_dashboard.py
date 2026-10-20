@@ -6,11 +6,14 @@ the in-cluster dashboard of the cluster-resource-report chart: "capacity" (tiles
 "projects" (CPU and memory by project, Projects and Namespaces tables) and "Workload limits" (every workload against
 limit <= 2x request); "Project owner" shows one Project (chosen in a control) on every cluster that has it: its
 namespaces, requests and usage, now and over time; "Will it fit?" answers whether a new deployment (replicas x CPU and memory per replica, chosen
-in controls) fits a cluster, node by node, after node failures and by usage. Control-plane nodes are left out by a
-filter saved in each dashboard. Every panel is an
+in controls) fits a cluster, node by node, after node failures and by usage; "Rejected pods" lists the pods the
+controllers could not create because a LimitRange, a ResourceQuota or another admission check refused them
+(FailedCreate events) and the workloads short of pods. Control-plane nodes are left out by a
+filter saved in each dashboard (not in "Rejected pods"). Every panel is an
 ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch exporter (mapping mode `otel`):
-`metrics-k8sclusterreceiver.otel-*` (requests, limits, allocatable, pod phase) and
-`metrics-kubeletstatsreceiver.otel-*` (usage).
+`metrics-k8sclusterreceiver.otel-*` (requests, limits, allocatable, pod phase, workload status),
+`metrics-kubeletstatsreceiver.otel-*` (usage) and, for the events, `logs-k8sobjectsreceiver.otel-*` with the
+event fields copied into attributes by the collector (otel-kube-stack-events.yaml).
 
   ./build_dashboard.py                        # writes cluster-resource-report.ndjson next to this script
   ./build_dashboard.py --index 'metrics-*'    # other index pattern
@@ -30,6 +33,10 @@ ES|QL Lens panel on the OTel-native data streams written by the Elasticsearch ex
   ./build_dashboard.py --include-control-plane --out with-control-plane.ndjson
       # without the dashboard filter that leaves control-plane nodes out (resource.attributes.k8s.node.role.
       # control_plane = "true", set by the collector: otel-kube-stack-node-roles.yaml)
+  ./build_dashboard.py --no-events --out no-events.ndjson
+      # "Rejected pods" without the Kubernetes event panels: no collector sends events with the k8s.event.*
+      # attributes yet (otel-kube-stack-events.yaml), so ES|QL rejects the fields; the metrics panels stay
+  ./build_dashboard.py --events-index 'logs-*.otel-prod' --out events-prod.ndjson   # other index for the events
   ./build_dashboard.py --check http://localhost:9200 --window 1h
       # runs every panel query against Elasticsearch (API key in $ES_API_KEY) and prints the first rows
 
@@ -52,9 +59,14 @@ PROJECTS_ID = "cra-cluster-resource-projects"
 OWNER_ID = "cra-project-owner"
 LIMITS_ID = "cra-workload-limits"
 FIT_ID = "cra-deployment-fit"
+REJECT_ID = "cra-rejected-pods"
 DATA_VIEW_ID = "cra-otel-metrics"
 ADHOC_ID = "cra-otel-metrics-esql"
 DEFAULT_INDEX = "metrics-*.otel-*"
+# Kubernetes events as log records (k8sobjects receiver; the exporter names the data stream after the receiver,
+# logs-k8sobjectsreceiver.otel-<namespace>). None = --no-events: the "Rejected pods" board without its event panels.
+DEFAULT_EVENTS_INDEX = "logs-*.otel-*"
+EVENTS_INDEX = [DEFAULT_EVENTS_INDEX]
 BUCKETS = 60  # time buckets per range; bigger = finer but heavier queries
 
 # Field names (OTel-native mapping). Change here if the central Elastic uses other attribute names.
@@ -89,14 +101,30 @@ F = {
     "statefulset": "resource.attributes.k8s.statefulset.name",
     "daemonset": "resource.attributes.k8s.daemonset.name",
     "job": "resource.attributes.k8s.job.name",
+    # Workload status (k8s_cluster): the pods a Deployment / StatefulSet / DaemonSet wants and has ready
+    "dep_desired": "metrics.k8s.deployment.desired",
+    "dep_ready": "metrics.k8s.deployment.available",
+    "sts_desired": "metrics.k8s.statefulset.desired_pods",
+    "sts_ready": "metrics.k8s.statefulset.ready_pods",
+    "ds_desired": "metrics.k8s.daemonset.desired_scheduled_nodes",
+    "ds_ready": "metrics.k8s.daemonset.ready_nodes",
+    # Kubernetes events (log records of the k8sobjects receiver), with the Event fields copied into attributes by the
+    # transform processor of otel-kube-stack-events.yaml: the body itself is a `flattened` field ES|QL cannot read
+    "ev_reason": "attributes.k8s.event.reason",
+    "ev_note": "attributes.k8s.event.note",
+    "ev_kind": "attributes.k8s.event.regarding.kind",
+    "ev_name": "attributes.k8s.event.regarding.name",
+    "ev_count": "attributes.k8s.event.count",
+    "ev_controller": "attributes.k8s.event.reporting_controller",
+    "ev_uid": "attributes.k8s.event.uid",
 }
 # Metrics the k8s_cluster receiver only sends while such objects exist. When no cluster has any, no index has the
 # field and ES|QL rejects every query that names it ("Unknown column"): --no-quota / --no-hpa leave them out.
 OPTIONAL_FIELDS = {"quota": ("rq_uid", "rq_hard"), "hpa": ("hpa_uid", "hpa_max")}
 TIME_FROM = ["now-1h"]  # time range the dashboards open with (to now); --time-from
-# Boards that open with a longer range: "Will it fit?" checks usage too, and a P95 over one hour misses daily peaks.
-# --time-from sets every board.
-BOARD_TIME_FROM = {"fit": "now-24h"}
+# Boards that open with a longer range: "Will it fit?" checks usage too, and a P95 over one hour misses daily peaks;
+# "Rejected pods" looks for rollouts that failed, which happen a few times a day. --time-from sets every board.
+BOARD_TIME_FROM = {"fit": "now-24h", "rejections": "now-24h"}
 GIB = "1073741824.0"  # a double, so byte sums (longs) are not integer-divided
 NO_PROJECT = '"(no project)"'
 
@@ -121,7 +149,15 @@ def q(text):
     return "\n".join(lines).format(**{**fields, "project": project_expr()}, BUCKETS=BUCKETS, GIB=GIB,
                                     category=category_expr(), pname_stage=pname_stage(),
                                     name_agg_raw=name_agg(True),
-                                    name_agg=name_agg(False))
+                                    name_agg=name_agg(False), name_col=name_col(), cause=cause_expr())
+
+
+def name_col():
+    """Extra EVAL column of the stages that keep raw rows (no STATS before pname_stage): the Project name field
+    under the name pname_stage reads."""
+    if not NAME_FIELD[0] or F["project"] is None:
+        return ""
+    return f", {LOOKUP_NAME} = {NAME_FIELD[0]}"
 
 
 REPORT_PANELS = []  # filled by panel() below, in layout order; each panel's "board" says its dashboard
@@ -139,6 +175,10 @@ REPORT_BOARDS = [
      "P95 usage, over time, from OpenTelemetry metrics."),
     ("limits", LIMITS_ID, "Workload limits: limit ≤ 2× request",
      "Every workload checked against a LimitRange maxLimitRequestRatio of 2, from OpenTelemetry metrics."),
+    ("rejections", REJECT_ID, "Rejected pods: LimitRange and ResourceQuota admission",
+     "Pods the controllers could not create because a LimitRange, a ResourceQuota or another admission check "
+     "refused them (FailedCreate events, by cause), and the Deployments, StatefulSets and DaemonSets short of "
+     "pods, from OpenTelemetry events and metrics."),
     ("fit", FIT_ID, "Will it fit? New deployment vs. cluster capacity",
      "Does a new deployment (replicas x CPU and memory per replica) fit each cluster: per node, after node "
      "failures and by usage, from OpenTelemetry metrics."),
@@ -210,6 +250,7 @@ FIELD_NAME_RE = r"[A-Za-z_@][A-Za-z0-9_@]*(\.[A-Za-z_@][A-Za-z0-9_@]*)*"
 # a filter saved in both dashboards leaves them out of every panel. It is a dashboard filter, not a query change, so
 # where no collector sets the field nothing is excluded and no query fails. None = no filter (--include-control-plane).
 CP_FIELD = ["resource.attributes.k8s.node.role.control_plane"]
+UNFILTERED_BOARDS = {"rejections"}  # a DaemonSet's pods on control-plane nodes count there, and events have no node
 NOW_WINDOW = "10 minutes"  # "now" values (pods, pending, standards) = the last 10 minutes of the time range
 
 
@@ -373,7 +414,8 @@ COLORS = {"Tenant": "#1d4ed8", "System": "#94a3b8", "Unassigned": "#f59e0b", "Fr
           "N+1 reserve": "#fca5a5", "Requested": "#1d4ed8", "Used (P95)": "#0d9488", "Pending": "#f59e0b",
           "New deployment": "#7c3aed", "Free": "#e2e8f0", "Reserve (failures, ceiling)": "#fca5a5",
           "Requested and used": "#1d4ed8", "Requested, unused": "#93c5fd", "Used above requests": "#dc2626",
-          "Used": "#0d9488", "Limit": "#64748b"}
+          "Used": "#0d9488", "Limit": "#64748b",
+          "LimitRange": "#dc2626", "ResourceQuota": "#f59e0b", "Other admission": "#7c3aed", "Other": "#94a3b8"}
 
 
 def build_report_panels(index):
@@ -414,6 +456,81 @@ WORKLOAD_RATIO = """
   BY cluster, project, namespace, kind, workload
 {pname_stage}
 | EVAL category = {category}""".replace("NOW_WINDOW", NOW_WINDOW).replace("RATIO", str(LIMIT_RATIO))
+
+# ---- "Rejected pods": FailedCreate events by cause, and workloads short of pods ----
+
+# How the admission plugins word a refusal, as the controllers quote it in their FailedCreate events
+# (`Error creating: pods "x-" is forbidden: ...`): LimitRange (plugin/pkg/admission/limitranger: min / max per
+# Container or Pod, maxLimitRequestRatio), ResourceQuota (plugin/pkg/admission/resourcequota), then any other
+# admission refusal (webhooks, other plugins). What matches none is "Other" (the controller's own errors).
+REJECT_CAUSES = [
+    ("LimitRange", ["*max limit to request ratio*", "*maximum * usage per *", "*minimum * usage per *"]),
+    ("ResourceQuota", ["*exceeded quota*", "*failed quota*"]),
+    ("Other admission", ["*admission webhook*", "*denied the request*", "*is forbidden*"]),
+]
+
+
+def cause_expr():
+    """The cause of a FailedCreate event from its message, as a CASE on the note column."""
+    arms = ", ".join(" OR ".join(f"note LIKE {esql_str(p)}" for p in patterns) + f", {esql_str(cause)}"
+                     for cause, patterns in REJECT_CAUSES)
+    return f'CASE({arms}, "Other")'
+
+
+# One row per FailedCreate event record (one per watch update of an Event; its count is the controller's attempts so
+# far). The regarding object is the controller's: a ReplicaSet stands for its Deployment (name without the pod
+# template hash), a Job with a timestamp suffix for its CronJob. The metrics index is read too (nothing matches
+# there) so that ES|QL knows the Project and name fields even when no event carries them.
+EVENTS_STAGE = """
+| WHERE {ev_reason} == "FailedCreate"
+| EVAL cluster = COALESCE({cluster}, "(unknown)"), project = {project}, namespace = COALESCE({namespace}, ""),
+       note = COALESCE({ev_note}, ""), okind = COALESCE({ev_kind}, ""), oname = COALESCE({ev_name}, ""),
+       n = COALESCE({ev_count}, 1), controller = COALESCE({ev_controller}, ""){name_col}
+| EVAL uid = COALESCE({ev_uid}, CONCAT(okind, "/", oname)), object = CONCAT(okind, "/", oname), cause = {cause},
+       kind = CASE(okind == "ReplicaSet", "Deployment", okind == "Job" AND oname RLIKE ".*-[0-9]{{8,}}", "CronJob",
+                   okind),
+       workload = CASE(okind == "ReplicaSet", REPLACE(oname, "-[bcdfghjklmnpqrstvwxz2456789]{{5,10}}$", ""),
+                       okind == "Job", REPLACE(oname, "-[0-9]{{8,}}$", ""), oname)
+{pname_stage}
+| EVAL category = {category}"""
+
+# One row per workload and cause: the events' counts added up (a count is per Event, so first the latest per Event),
+# first and last record, the messages.
+REJECTED_WORKLOADS = """
+| STATS n = MAX(n), note = MAX(note), first = MIN(@timestamp), last = MAX(@timestamp)
+  BY cluster, project, pname, category, namespace, kind, workload, cause, object, controller, uid
+| STATS attempts = SUM(n), events = COUNT(*), first = MIN(first), last = MAX(last), notes = VALUES(note),
+        objects = VALUES(object), controllers = VALUES(controller)
+  BY cluster, project, pname, category, namespace, kind, workload, cause
+| EVAL key = CONCAT(cluster, "/", namespace, "/", kind, "/", workload)"""
+
+# One row per Deployment, StatefulSet and DaemonSet: per minute of the last NOW_WINDOW the pods it wants (the
+# workload metrics of k8s_cluster) and the pods it has (Pending or Running pods that carry its name, from the pod
+# metrics), then the latest minute (each value is encoded with its minute since the epoch, so MAX picks the latest
+# and the sum stays exact even as a double) and the fewest pods short over the window. A controller refused its pods has fewer than desired and nothing pending; a rollout or crash loop keeps
+# the pod count.
+WORKLOAD_PODS = """
+| WHERE @timestamp >= TO_DATETIME(?_tend) - NOW_WINDOW
+| WHERE {dep_desired} IS NOT NULL OR {sts_desired} IS NOT NULL OR {ds_desired} IS NOT NULL OR {phase} IS NOT NULL
+| EVAL cluster = COALESCE({cluster}, "(unknown)"), project = {project}, namespace = COALESCE({namespace}, ""),
+       kind = CASE({dep_desired} IS NOT NULL OR ({phase} IS NOT NULL AND {deployment} IS NOT NULL), "Deployment",
+                   {sts_desired} IS NOT NULL OR ({phase} IS NOT NULL AND {statefulset} IS NOT NULL), "StatefulSet",
+                   {ds_desired} IS NOT NULL OR ({phase} IS NOT NULL AND {daemonset} IS NOT NULL), "DaemonSet"),
+       workload = COALESCE({deployment}, {statefulset}, {daemonset}),
+       desired = COALESCE({dep_desired}, {sts_desired}, {ds_desired}), ready = COALESCE({dep_ready}, {sts_ready}, {ds_ready}),
+       pod = CASE({phase} == 1 OR {phase} == 2, {pod_uid})
+| WHERE kind IS NOT NULL AND workload IS NOT NULL
+| STATS desired = MAX(desired), ready = MAX(ready), pods = COUNT_DISTINCT(pod){name_agg_raw}
+  BY t = BUCKET(@timestamp, 1 minute), cluster, project, namespace, kind, workload
+| WHERE desired IS NOT NULL
+| EVAL missing = desired - pods, tv = TO_LONG(t) / 60000 * 100000
+| STATS missing = MIN(missing), minutes = COUNT(*), last_desired = MAX(tv + desired), last_pods = MAX(tv + pods),
+        last_ready = MAX(tv + ready), last_missing = MAX(tv + GREATEST(missing, 0)){name_agg}
+  BY cluster, project, namespace, kind, workload
+| EVAL desired = last_desired % 100000, pods = last_pods % 100000, ready = last_ready % 100000,
+       missing_now = last_missing % 100000, short_all = missing > 0 AND minutes >= MINUTES
+{pname_stage}
+| EVAL category = {category}""".replace("NOW_WINDOW", NOW_WINDOW).replace("MINUTES", "5")
 
 # ---- "Will it fit?": a new deployment against each cluster ----
 
@@ -635,6 +752,8 @@ def _build_report_panels(src):
        `Memory problems`, `CPU: max limit/request`, `CPU problems`, `Containers affected`, Pods, Containers,
        `CPU req`, `Mem req GiB`"""), (0, 5, 48, 22))
 
+    build_rejection_panels(src, names)
+
     _BOARD[0] = "fit"
     nodes = src + FIT_NODE_STAGE
     clusters = nodes + FIT_CLUSTER
@@ -834,6 +953,96 @@ def build_owner_panels(src, base, cp_note, names):
 | KEEP Cluster, Namespace, Project, """ + REPORT_COLUMNS + ", Quota, HPA"), (0, top + 29, 48, 14))
 
 
+def build_rejection_panels(src, names):
+    """"Rejected pods": the FailedCreate events of the range by cause (LimitRange, ResourceQuota, other), per
+    workload, over time and as they came; and, from the metrics, every Deployment, StatefulSet and DaemonSet with
+    fewer pods than it wants as of the last minutes. Without EVENTS_INDEX (--no-events) only the metrics panels."""
+    _BOARD[0] = "rejections"
+    events = EVENTS_INDEX[0] is not None
+    causes = [c for c, _ in REJECT_CAUSES] + ["Other"]
+    panel("markdown", "About", None, (0, 0, 48, 6), markdown=(
+        "**Rejected pods: LimitRange and ResourceQuota admission.** When a LimitRange, a ResourceQuota or a webhook "
+        "refuses a pod, nothing is scheduled and nothing is pending: the controller (ReplicaSet, StatefulSet, "
+        "DaemonSet, Job) records a *FailedCreate* event with the admission message, retries with backoff, and the "
+        "workload runs short of pods. "
+        + ("*Events*: the FailedCreate events of the time range (default: 24 hours), with the cause read from the "
+           "message: *LimitRange* (`maximum`/`minimum … usage per Container`, `max limit to request ratio`), "
+           "*ResourceQuota* (`exceeded quota`, `failed quota`), *Other admission* (webhooks, other `forbidden`), "
+           "*Other*. *Rejected creates* adds up the events' counts (Kubernetes rate-limits the updates, so a lower "
+           "bound). A ReplicaSet stands for its Deployment. " if events else
+           "Generated with `--no-events`: no event panels. ")
+        + f"*Short of pods*: from the metrics, every Deployment, StatefulSet and DaemonSet with fewer Pending + "
+        f"Running pods than it wants in the last minute of the range (any cause), and whether it was short for the "
+        f"whole last {NOW_WINDOW}. Pods applied directly, not by a controller, are refused at `kubectl apply` and "
+        "leave no event. "
+        + ("Events need the collector overlay `otel-kube-stack-events.yaml` (fields `attributes.k8s.event.*`); until "
+           "then the event panels fail with *Unknown column*. " if events else "")
+        + f"{names}\n\n" + nav_links("rejections")))
+    top = 6
+    pods = src + WORKLOAD_PODS
+    if events:
+        esrc = f"FROM {EVENTS_INDEX[0]}, {src[len('FROM '):]}"
+        workloads = esrc + EVENTS_STAGE + REJECTED_WORKLOADS
+        tile_grid("Rejected creates", workloads, [
+            ("Rejected workloads", "COUNT_DISTINCT(key)"),
+            ("LimitRange", 'COUNT_DISTINCT(CASE(cause == "LimitRange", key))'),
+            ("ResourceQuota", 'COUNT_DISTINCT(CASE(cause == "ResourceQuota", key))'),
+            ("Other cause", 'COUNT_DISTINCT(CASE(cause != "LimitRange" AND cause != "ResourceQuota", key))'),
+            ("Rejected creates", "SUM(attempts)"),
+            ("Clusters", "COUNT_DISTINCT(cluster)"),
+            ("Namespaces", 'COUNT_DISTINCT(CONCAT(cluster, "/", namespace))'),
+        ], (0, top, 36, TILE_H), "FailedCreate events over the range")
+    tile_grid("Short of pods", pods, [
+        ("Short of pods now", "COUNT(CASE(missing_now > 0, 1))"),
+        (f"Short all {NOW_WINDOW}", "COUNT(CASE(short_all, 1))"),
+        ("Pods missing now", "SUM(missing_now)"),
+    ], (36, top, 12, TILE_H) if events else (0, top, 18, TILE_H), "workloads · now")
+    top += TILE_H
+    if events:
+        counts = ", ".join(f"{esql_col(c)} = COUNT(CASE(cause == {esql_str(c)}, 1))" for c in causes)
+        panel("bar_time", "FailedCreate events over time, by cause", q(esrc + EVENTS_STAGE + f"""
+| STATS {counts} BY t = BUCKET(@timestamp, {{BUCKETS}}, ?_tstart, ?_tend)
+| SORT t
+| KEEP t, {", ".join(esql_col(c) for c in causes)}"""), (0, top, 30, 9), x="t", y=causes)
+        distinct = ", ".join(f"{esql_col(c)} = COUNT_DISTINCT(CASE(cause == {esql_str(c)}, key))" for c in causes)
+        panel("bar_stacked", "Rejected workloads by cluster, by cause", q(workloads + f"""
+| STATS {distinct} BY Cluster = cluster
+| SORT Cluster
+| KEEP Cluster, {", ".join(esql_col(c) for c in causes)}"""), (30, top, 18, 9), x="Cluster", y=causes)
+        top += 9
+        panel("table", "Rejected workloads: FailedCreate events by workload and cause", q(workloads + """
+| EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category, Kind = kind,
+       Workload = workload, Cause = cause, `Rejected creates` = attempts, Events = events, `First seen` = first,
+       `Last seen` = last, Messages = notes, Objects = objects, Controller = controllers
+| SORT last DESC
+| LIMIT 1000
+| KEEP Cluster, Namespace, Project, Category, Kind, Workload, Cause, `Rejected creates`, Events, `First seen`,
+       `Last seen`, Messages, Objects, Controller"""), (0, top, 48, 12))
+        top += 12
+    panel("table", f"Workloads short of pods (now, and for the whole last {NOW_WINDOW})", q(pods + f"""
+| WHERE missing_now > 0
+| EVAL Cluster = cluster, Namespace = namespace, Project = pname, Category = category, Kind = kind,
+       Workload = workload, Desired = desired, Pods = pods, Ready = ready, Missing = missing_now,
+       `Short all {NOW_WINDOW}` = CASE(short_all, "yes", "no")
+| SORT short_all DESC, Missing DESC, Cluster, Namespace, Workload
+| LIMIT 500
+| KEEP Cluster, Namespace, Project, Category, Kind, Workload, Desired, Pods, Ready, Missing,
+       `Short all {NOW_WINDOW}`"""), (0, top, 48, 10))
+    top += 10
+    if events:
+        panel("table", "Latest FailedCreate events", q(esrc + EVENTS_STAGE + """
+| EVAL Time = @timestamp, Cluster = cluster, Namespace = namespace, Project = pname, Kind = kind,
+       Workload = workload, Object = object, Cause = cause, Count = n, Message = note
+| SORT Time DESC
+| LIMIT 200
+| KEEP Time, Cluster, Namespace, Project, Kind, Workload, Object, Cause, Count, Message"""), (0, top, 48, 12))
+
+
+def esql_col(name):
+    """A column name as ES|QL writes it: backticks when it has a space."""
+    return f"`{name}`" if " " in name else name
+
+
 # ---- Lens / dashboard saved-object structure (as built by Kibana's lens-embeddable-utils config_builder) ----
 
 def adhoc_data_view(index):
@@ -870,15 +1079,17 @@ def lens_attributes(p, index):
     elif kind == "table":
         columns = [col(f"c{i}", n) for i, n in enumerate(table_columns(p["esql"]))]
         vis_type = "lnsDatatable"
-        widths = {"Cluster": 150, "Namespace": 170, "Project": 130, "Verdict": 260, "Node": 230}
+        widths = {"Cluster": 150, "Namespace": 170, "Project": 130, "Verdict": 260, "Node": 230, "Workload": 180,
+                  "Cause": 120, "Messages": 420, "Message": 420, "Objects": 200, "Object": 200}
         vis = {"layerId": "layer_0", "layerType": "data",
                "columns": [{"columnId": c["columnId"], **({"width": widths[c["fieldName"]]}
                                                           if c["fieldName"] in widths else {})} for c in columns]}
-    else:  # line / bar
-        columns = [col("x", p["x"], "date" if kind == "line" else "string")]
+    else:  # line / bar / bar_time (vertical stacked bars over time)
+        columns = [col("x", p["x"], "date" if kind in ("line", "bar_time") else "string")]
         columns += [col(f"y{i}", y, "number") for i, y in enumerate(p["y"])]
         vis_type = "lnsXY"
-        series = {"line": "line", "bar": "bar_horizontal", "bar_stacked": "bar_horizontal_stacked"}[kind]
+        series = {"line": "line", "bar": "bar_horizontal", "bar_stacked": "bar_horizontal_stacked",
+                  "bar_time": "bar_stacked"}[kind]
         vis = {
             "legend": {"isVisible": True, "position": "bottom"},
             "valueLabels": "hide", "fittingFunction": "Linear", "preferredSeriesType": series,
@@ -1023,9 +1234,10 @@ def saved_objects(index):
 CP_FILTER_REF = "kibanaSavedObjectMeta.searchSourceJSON.filter[0].meta.index"
 
 
-def saved_filters():
-    """Dashboard filter "NOT <role field>: true" (a negated phrase filter, as Kibana saves one)."""
-    if not CP_FIELD[0]:
+def saved_filters(board=None):
+    """Dashboard filter "NOT <role field>: true" (a negated phrase filter, as Kibana saves one); none on the
+    boards of UNFILTERED_BOARDS."""
+    if not CP_FIELD[0] or board in UNFILTERED_BOARDS:
         return []
     return [{"meta": {"alias": "Control-plane nodes", "negate": True, "disabled": False, "type": "phrase",
                       "key": CP_FIELD[0], "params": {"query": "true"}, "indexRefName": CP_FILTER_REF},
@@ -1042,10 +1254,11 @@ def dashboard_object(dashboard_id, title, description, panels, index, board=None
         "panelsJSON": json.dumps(dashboard_panels(index, panels)),
         "controlGroupInput": control_group(board),
         "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps({"query": {"query": "", "language": "kuery"},
-                                                                  "filter": saved_filters()})},
+                                                                  "filter": saved_filters(board)})},
     }, "references": [{"type": "index-pattern", "id": DATA_VIEW_ID,
                        "name": f"controlGroup_ctrl-{f}:optionsListDataView"} for f in control_fields(board)]
-                     + ([{"type": "index-pattern", "id": DATA_VIEW_ID, "name": CP_FILTER_REF}] if CP_FIELD[0] else []),
+                     + ([{"type": "index-pattern", "id": DATA_VIEW_ID, "name": CP_FILTER_REF}]
+                        if saved_filters(board) else []),
         # Current versions (Kibana 9.x); without them Kibana runs legacy migrations that break ES|QL panels.
         "coreMigrationVersion": "8.8.0", "typeMigrationVersion": "10.3.0"}
 
@@ -1091,7 +1304,7 @@ def run_checks(url, window, end=None, only=None):
             {k: v} for k, v in CHECK_PARAMS.items() if re.search(rf"\?{k}\b", p["esql"])]
         body = {"query": p["esql"], "params": params,
                 "filter": {"bool": {"filter": [{"range": {"@timestamp": {"gte": iso(start), "lte": iso(end)}}}],
-                                    "must_not": [f["query"] for f in saved_filters()]}}}
+                                    "must_not": [f["query"] for f in saved_filters(p.get("board"))]}}}
         req = urllib.request.Request(url.rstrip("/") + "/_query?format=txt", json.dumps(body).encode(), headers)
         print(f"== {p['title']}")
         try:
@@ -1129,7 +1342,14 @@ def main():
                          "while the index does not exist")
     ap.add_argument("--time-from", metavar="RANGE",
                     help=f"start of the time range every dashboard opens with, e.g. now-7d (default {TIME_FROM[0]}; "
-                         f"\"Will it fit?\" {BOARD_TIME_FROM['fit']})")
+                         f"\"Will it fit?\" and \"Rejected pods\" {BOARD_TIME_FROM['fit']})")
+    ap.add_argument("--events-index", metavar="PATTERN", default=DEFAULT_EVENTS_INDEX,
+                    help=f"index pattern of the Kubernetes events for \"Rejected pods\" (default "
+                         f"{DEFAULT_EVENTS_INDEX}); another pattern needs --out")
+    ap.add_argument("--no-events", action="store_true",
+                    help="\"Rejected pods\" without its event panels: no collector sends events with the "
+                         f"{F['ev_reason']} attributes yet (otel-kube-stack-events.yaml), so ES|QL rejects the "
+                         "fields. The metrics panels (workloads short of pods) stay. Needs --out")
     ap.add_argument("--no-quota", action="store_true",
                     help=f"leave out the ResourceQuota metric ({F['rq_hard']}): no cluster has a quota yet, so "
                          "the field does not exist. Needs --out")
@@ -1139,8 +1359,9 @@ def main():
                     help=f"without the dashboard filter that leaves out nodes where {CP_FIELD[0]} is \"true\" "
                          "and the metrics of their pods (also for --check). Needs --out")
     ap.add_argument("--split", action="store_true",
-                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -owner, -limits, -fit), each with the "
-                         "data view: smaller uploads, e.g. behind a proxy that limits the request size")
+                    help="one file per dashboard (<out>-capacity.ndjson, -projects, -owner, -limits, -rejections, "
+                         "-fit), each with the data view: smaller uploads, e.g. behind a proxy that limits the "
+                         "request size")
     ap.add_argument("--project-name-field", metavar="FIELD", nargs="?", const=DEFAULT_NAME_FIELD,
                     help=f"Project names from this field of the metrics (default {DEFAULT_NAME_FIELD}), which the "
                          "collector sets (build_collector_values.py). The Project filter control then lists names. "
@@ -1160,6 +1381,14 @@ def main():
         if not args.out and not args.check:
             ap.error("--include-control-plane needs --out (the committed files are generated without it)")
         CP_FIELD[0] = None
+    if args.no_events:
+        if not args.out and not args.check:
+            ap.error("--no-events needs --out (the committed files are generated with the event panels)")
+        EVENTS_INDEX[0] = None
+    elif args.events_index != DEFAULT_EVENTS_INDEX:
+        if not args.out and not args.check:
+            ap.error("--events-index needs --out (the committed files are generated for the default pattern)")
+        EVENTS_INDEX[0] = args.events_index
     if args.project_lookup_index:
         if not re.fullmatch(INDEX_NAME_RE, args.project_lookup_index):
             ap.error(f"--project-lookup-index: not an index name: {args.project_lookup_index}")

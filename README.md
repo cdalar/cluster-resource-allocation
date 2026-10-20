@@ -117,6 +117,7 @@ flowchart LR
 | [Installation](guides/installation.md) | Step by step: dashboard on every cluster, planners and name publisher on the Rancher local cluster, verification, upgrade, troubleshooting |
 | [Allocation planner](guides/allocation-planner.md) | Using the allocation and capacity planners, every parameter explained |
 | [Allocation as code](guides/allocation-as-code.md) | YAML format for vCPU and memory per project, cluster and namespace, checks, and the generated ResourceQuotas / LimitRanges |
+| [Project names in Kibana](guides/kibana-project-names.md) | OpenTelemetry collector config (from the chart, `otel.projects`) that ships Rancher Project IDs and names to an Elasticsearch lookup index, joined with ES\|QL `LOOKUP JOIN` |
 
 ## Tools
 

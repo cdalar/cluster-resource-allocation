@@ -243,7 +243,9 @@ Done when: PolicyReports per namespace are visible and shared with the project l
   the LimitRange: `kubectl get limitrange -A`.
 - Wave order: dev → test → acc → prod, one pilot project first in each.
 - Effect: only new pods. Existing pods get the defaults when they restart (next rollout, drain, crash).
-- Watch for 1 week per wave: OOMKills (alert 1.3), pods rejected by `max`, deploy failures.
+- Watch for 1 week per wave: OOMKills (alert 1.3), pods rejected by `max`, deploy failures (Kibana: the
+  *Rejected pods* dashboard lists the FailedCreate events by cause and the workloads short of pods,
+  [guide](../guides/kibana-dashboard.md#rejected-pods)).
 - Rollback: remove or raise the default for that namespace.
 
 **Step 2.4 Close the loop.** Owner: PL. Teams replace defaulted values with real requests (T3 shows *probably
@@ -429,7 +431,7 @@ Things to know:
 |---|---|---|---|
 | 0 | N+1 tile, *System* requests, baseline CSV | Environment and platform reserve per cluster; limits per cluster | Cross-cluster as-is view |
 | 1 | Standards gaps, unassigned namespaces, T3–T6 | Provisional showback (*Requests +25 %*, reference rates) | Same, shared with project leads |
-| 2 | T3, T4, OOMKills | – | Standards gaps over time |
+| 2 | T3, T4, OOMKills | – | Standards gaps over time; rejected pods (FailedCreate by cause) and workloads short of pods per wave |
 | 4 | T1 quota used, T2 sold vs. sellable, T8 | Soft quotas, envelopes, export to Git | Quota vs. requests per project |
 | 5 | T1, T2 | Budgets, rates, budget quotas, what-if for new applications | Showback |
 | 6 | Before upgrades, monthly review | Yearly cycle, node and licence purchases | Monthly and quarterly reports |

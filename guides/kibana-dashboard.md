@@ -4,15 +4,17 @@ Kibana dashboards with the current situation of every cluster, built from the Op
 clusters already send to the central Elastic. They show the same report as the in-cluster dashboard, without
 installing anything in the clusters: capacity and N+1 per cluster, requests and usage per Rancher Project and
 namespace, one Project on every cluster for its owner, the resource-standards gaps, the workloads a limit ≤ 2×
-request rule would reject, and whether a new deployment fits a cluster.
+request rule would reject, the pods a LimitRange or ResourceQuota did reject, and whether a new deployment fits a
+cluster.
 
 | File | Content |
 |---|---|
-| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: five linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects*, *Workload limits* ([below](#cluster-resource-report)), *Project owner* ([below](#project-owner)) and *Will it fit?* ([below](#will-it-fit)), and a data view (`metrics-*.otel-*`) for the filter controls |
+| [`kibana/cluster-resource-report.ndjson`](../kibana/cluster-resource-report.ndjson) | Saved objects to import: six linked dashboards, *Cluster resource report: capacity*, *Cluster resource report: projects*, *Workload limits* ([below](#cluster-resource-report)), *Project owner* ([below](#project-owner)), *Rejected pods* ([below](#rejected-pods)) and *Will it fit?* ([below](#will-it-fit)), and a data view (`metrics-*.otel-*`) for the filter controls |
 | [`kibana/cluster-resource-report-no-project.ndjson`](../kibana/cluster-resource-report-no-project.ndjson) | The same without the Rancher Project, for collectors that do not set `rancher.project.id` (see [Import](#import)) |
 | [`kibana/cluster-resource-report-project-names.ndjson`](../kibana/cluster-resource-report-project-names.ndjson) | The same with Rancher Project **names** in the report, joined from the lookup index `rancher-projects` in Elasticsearch. Import it only after filling that index ([Project names from a lookup index](#project-names-from-a-lookup-index)) |
 | [`kibana/cluster-resources-cra-elastic.ndjson`](../kibana/cluster-resources-cra-elastic.ndjson) | Export of the same objects from the Kibana of the `cra-elastic` test box (2026-10-07): the report as generated with `--rancher-projects`, so its queries carry the Project names of the test Rancher ([Project names](#cluster-resource-report)). An example of that variant; not generated or checked by the tests |
 | [`kibana/build_dashboard.py`](../kibana/build_dashboard.py) | Generates the `.ndjson`; all queries and field names live here. `--check` runs the queries against Elasticsearch |
+| [`kibana/otel-kube-stack-events.yaml`](../kibana/otel-kube-stack-events.yaml) | Values overlay for the same chart: Kubernetes events in Elasticsearch with their fields as attributes (`attributes.k8s.event.*`, a `transform` processor on the chart's `kubernetesEvents` preset), for the event panels of *Rejected pods* ([below](#rejected-pods)) |
 | [`kibana/otel-kube-stack-node-roles.yaml`](../kibana/otel-kube-stack-node-roles.yaml) | Values overlay for the same chart: RKE2 node role labels (`node-role.kubernetes.io/control-plane`, `etcd`) as `k8s.node.role.*` on the metrics, through a second `k8s_attributes` processor that sees all nodes (or in the existing one of a `deployment`-mode collector that runs `k8s_cluster`). Used by the dashboards' *NOT Control-plane nodes* filter ([below](#control-plane-nodes)); rendered with the chart, not run on a cluster |
 | [`kibana/build_collector_values.py`](../kibana/build_collector_values.py) | Values overlay for the `opentelemetry-kube-stack` chart that puts the Project **name** on the metrics (`rancher.project.name`), so the Project filter control lists names ([Project names on the metrics](#project-names-on-the-metrics)) |
 | [`kibana/add_project_names.py`](../kibana/add_project_names.py) | Writes the Rancher Project names into a dashboard `.ndjson` you already have (a file from here or a Kibana export), without regenerating it |
@@ -26,7 +28,7 @@ mapping mode `otel`) on a throwaway k3s cluster imported into Rancher.
 ## Cluster resource report
 
 The report follows the in-cluster dashboard of the [chart](../charts/cluster-resource-report/README.md) on the
-OTel metrics, for all clusters at once. It is three dashboards, plus [*Project owner*](#project-owner) and [*Will it fit?*](#will-it-fit), and every About
+OTel metrics, for all clusters at once. It is three dashboards, plus [*Project owner*](#project-owner), [*Rejected pods*](#rejected-pods) and [*Will it fit?*](#will-it-fit), and every About
 box links the others: *capacity* (tiles, capacity chart, N+1 table), *projects* (by-project charts, Projects and
 Namespaces tables) and *Workload limits* (the 2× table). Each has the same controls (cluster, Rancher Project, namespace) and the saved filter that
 leaves out control-plane nodes ([below](#control-plane-nodes)); the selections do not carry over when following a
@@ -102,6 +104,74 @@ ceiling); *DOES NOT FIT*.
 Not in the metrics, so not checked: taints and tolerations, node selectors and affinity to particular nodes,
 ResourceQuotas of the target namespace, cordoned nodes, and DaemonSets that a new node would need. The node
 failures are the largest nodes, not a particular zone or rack.
+
+### Rejected pods
+
+Did applying the LimitRanges (or the ResourceQuotas) to the downstream clusters break anything? When admission
+refuses a pod, nothing is scheduled and nothing is pending, so the capacity dashboards show nothing. The
+controller (the ReplicaSet of a Deployment, a StatefulSet, DaemonSet or Job) records a *FailedCreate* event with
+the admission message, retries with backoff, and the workload runs short of pods until its pod template is fixed.
+The dashboard shows both signs, for all clusters or the ones picked in the controls, and opens with the last 24
+hours ([10](../docs/10-implementation-plan.md), step 2.3: watch each wave for a week).
+
+| Panel | Content | From |
+|---|---|---|
+| Rejected creates (tiles) | Workloads with FailedCreate events in the range, of them by LimitRange, ResourceQuota and other cause; rejected creates (the events' counts added up); clusters and namespaces affected | Events |
+| Short of pods (tiles) | Deployments, StatefulSets and DaemonSets with fewer Pending + Running pods than desired in the last minute of the range; of them short for the whole last 10 minutes; pods missing | Metrics |
+| FailedCreate events over time | Event updates per time bucket, stacked by cause: when it happened (a rollout, a wave of defaults) | Events |
+| Rejected workloads by cluster | Workloads per cluster, stacked by cause | Events |
+| Rejected workloads | One row per workload and cause: rejected creates, events, first and last seen, the admission messages (the rule that refused the pod, e.g. `cpu max limit to request ratio per Container is 2, but provided ratio is 4.000000`), the controller's object (`ReplicaSet/<name>`, …) and the controller | Events |
+| Workloads short of pods | One row per Deployment, StatefulSet or DaemonSet with fewer pods than desired now: desired, pods (Pending + Running), ready, missing, and whether it was short for the whole last 10 minutes (a rollout or scale-up in progress is not) | Metrics |
+| Latest FailedCreate events | The last 200 event records as they came: time, workload, cause, count, message | Events |
+
+The cause is read from the message, which the controller quotes as `Error creating: pods "x-" is forbidden: …`:
+
+| Cause | Message (what the admission plugin says) |
+|---|---|
+| LimitRange | `maximum cpu usage per Container is 2, but limit is 4`; `minimum memory usage per Container is 64Mi, but request is 32Mi`; `cpu max limit to request ratio per Container is 2, but provided ratio is 4.000000`; `… ratio per Container is 2, but no limit is specified or limit is 0` (a request without a limit under `maxLimitRequestRatio`, [10](../docs/10-implementation-plan.md) step 2.1) |
+| ResourceQuota | `exceeded quota: …, requested: …, used: …, limited: …`; `failed quota: …: must specify limits.memory for: …` |
+| Other admission | Admission webhooks (`admission webhook "…" denied the request: …`) and other plugins (any other `… is forbidden: …`) |
+| Other | Anything else the controller could not create (`Error creating: …` without a refusal) |
+
+A ReplicaSet stands for its Deployment (its name without the pod-template hash) and a Job named
+`<cronjob>-<timestamp>` for its CronJob, as in *Workload limits*. A Job's own pods are not in the metrics panel
+(completions make "desired" ambiguous); its FailedCreate events are.
+
+**Events in the collector.** The metrics panels work with the collector of the report. The event panels need the
+Kubernetes events in Elasticsearch with their fields as attributes, which
+[`otel-kube-stack-events.yaml`](../kibana/otel-kube-stack-events.yaml) sets up on the `opentelemetry-kube-stack`
+chart:
+
+- the chart's `kubernetesEvents` preset (on by default for the `daemon` collector, with leader election so that
+  one pod watches): the `k8sobjects` receiver watches `events.k8s.io` and sends every event update as a log record
+  whose body is the Event object;
+- a `transform/k8s_events` processor copies the fields into log attributes: `k8s.event.reason`, `.note` (the
+  message), `.type`, `.regarding.kind` and `.regarding.name` (the controller's object), `.count`,
+  `.reporting_controller`, `.uid`. The Elasticsearch exporter writes a map body as `body.structured`, a `flattened`
+  field that ES|QL only reads from Elasticsearch 9.5 (technical preview); attributes become keywords;
+- the processor goes into the logs pipeline after `k8s_attributes`. Helm replaces lists, so the overlay sets the
+  whole list (the chart default plus the processor); with other processors in your logs pipeline, copy your list.
+
+The records land in `logs-k8sobjectsreceiver.otel-<namespace>` (the exporter names the data stream after the
+receiver); the dashboard reads `logs-*.otel-*` (`--events-index` for another pattern). Check in **Dev Tools**:
+
+```
+GET logs-*.otel-*/_field_caps?fields=attributes.k8s.event.reason,attributes.k8s.event.note,attributes.k8s.event.regarding.kind
+POST _query
+{"query": "FROM logs-*.otel-* | WHERE attributes.k8s.event.reason == \"FailedCreate\" | KEEP @timestamp, resource.attributes.k8s.namespace.name, attributes.k8s.event.regarding.name, attributes.k8s.event.note | LIMIT 5"}
+```
+
+| Point | Detail |
+|---|---|
+| Without the overlay | Every event panel fails with `Unknown column [attributes.k8s.event.reason]` (ES\|QL rejects a field no index has). Generate with `--no-events --out <file>` for the metrics panels alone; import the full file once the fields exist (same IDs) |
+| Project | Event records carry `rancher.project.id` like the metrics: `k8s_attributes` adds the namespace labels to a record that has `k8s.namespace.name` (the receiver sets it) even without a pod. Every event query also names the metrics index, so ES\|QL knows the Project field before any event carries it |
+| Cluster name | Set `k8s.cluster.name` on the logs pipeline as on the metrics one (the same `resource` processor); otherwise the events show as `(unknown)` |
+| Count | An Event's count is the controller's attempts so far. Kubernetes rate-limits event updates per object (a burst, then about one per 5 minutes), so *rejected creates* is a lower bound; the events over time are the updates that got through |
+| Direct pods | A pod applied directly (`kubectl apply`, a Helm hook with a bare Pod) is refused at the apply and leaves no event: the client sees the message |
+| Core v1 events | The transform reads both schemas (`events.k8s.io/v1`: `note`, `regarding`, `series.count`; core `v1`: `message`, `involvedObject`, `count`), so a `k8sobjects` receiver configured without `group: events.k8s.io` works too |
+| Control-plane nodes | Not filtered on this dashboard: a DaemonSet's pods on those nodes count towards its desired number, and events have no node |
+| RBAC | The preset gives the collector list and watch on `events` (core and `events.k8s.io`); check the rendered ClusterRole when the collector logs a forbidden error |
+| Tested | Unit tests on the generated objects and on the overlay (every attribute the queries read is set); not yet run against a cluster or imported into Kibana. Run `--check` (it runs the event queries too; they fail while no `logs-*.otel-*` data stream exists) before importing |
 
 Definitions:
 
@@ -242,6 +312,7 @@ GET metrics-*.otel-*/_field_caps?fields=metrics.k8s.container.cpu_request,metric
 | Usage | `metrics.k8s.pod.cpu.usage`, `metrics.k8s.pod.memory.working_set` | `kubeletstats` receiver | No usage or efficiency |
 | Cluster name | `resource.attributes.k8s.cluster.name` | `resource` processor, set per cluster | All clusters show as `(unknown)` and are added together |
 | Rancher Project | `resource.attributes.rancher.project.id` | `k8sattributes`: namespace label `field.cattle.io/projectId` as `rancher.project.id` | Panels fail with `Unknown column [resource.attributes.rancher.project.id]`; import the `-no-project` file instead |
+| Kubernetes events (*Rejected pods* only) | `attributes.k8s.event.*` on `logs-*.otel-*` | `k8sobjects` receiver (events, watch) + `transform/k8s_events` ([overlay](../kibana/otel-kube-stack-events.yaml), [above](#rejected-pods)) | The event panels fail with `Unknown column [attributes.k8s.event.reason]`; generate with `--no-events` |
 
 Two metrics exist only while such objects exist, so on an Elastic where no cluster has any yet the report fails
 with `Unknown column [metrics.k8s.resource_quota.hard_limit]` (or `metrics.k8s.hpa.max_replicas`):
@@ -284,7 +355,7 @@ and import them one by one; each holds the data view, so the order does not matt
 
 ```bash
 ./kibana/build_dashboard.py <options> --split --out cluster-resources.ndjson
-# cluster-resources-capacity.ndjson, -projects, -owner, -limits, -fit; the sizes are printed
+# cluster-resources-capacity.ndjson, -projects, -owner, -limits, -rejections, -fit; the sizes are printed
 ```
 
 `--rancher-projects` adds about 2 KiB per Project to the capacity file (about 270 KiB without names); with several
@@ -340,5 +411,6 @@ It prints the first rows of every panel and exits non-zero on a query error or a
 | Query cost grows with containers × buckets | Wide ranges over many clusters are slow; filter by cluster first. Each panel runs its own query (Kibana does not share results between ES\|QL panels), so the tiles are grouped: one query per row of tiles | — |
 | Logic in the queries, not in runtime fields | ES\|QL panels cannot use data view runtime fields (Kibana sends them as `runtime_mappings`, which ES\|QL rejects). Runtime fields in the index mapping would work, but they need a change to the OTel index templates in Elasticsearch, cover only per-document logic (the category is computed after the aggregation, on a few rows) and run a script per document: slower, not faster | — |
 | *Will it fit?*: per-node arithmetic, not the scheduler | Replicas per node are counted by free requests only (no taints, affinity, topology spread or quotas); after node failures, the pods of the failed nodes are counted against the total (N+1 rule), not placed node by node | — |
+| *Rejected pods*: events and pod counts, not the API server's audit log | Pods applied directly leave no event; rejected creates are a lower bound (event rate limit); a workload is "short of pods" for any reason, the events say which | — |
 | No budgets or cost | The current situation only; the [allocation planner](allocation-planner.md) covers plans and money | — |
 | Filter controls | Import, migration and dashboard filters were tested, and the *Will it fit?* queries with the controls' default values (`--check` passes them) and with other values. The controls themselves were not clicked through in a browser | — |

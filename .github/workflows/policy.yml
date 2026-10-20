@@ -22,6 +22,7 @@ concurrency:
 
 env:
   OCI_TARGET: ghcr.io/${{ github.repository_owner }}/policies/remove-cpu-limits
+  KWCTL_VERSION: v1.31.0
 
 defaults:
   run:
@@ -44,8 +45,15 @@ jobs:
         with:
           tinygo-version: "0.39.0"
 
-      # kwctl, bats, cosign
-      - uses: kubewarden/github-actions/policy-gh-action-dependencies@v8.0.0
+      # kwctl (Kubewarden's own installer action verifies a cosign identity that no longer matches since the
+      # kwctl repository was renamed; the release assets are still served) and bats for the end-to-end tests
+      - name: Install kwctl and bats
+        run: |
+          curl -fsSL -o /tmp/kwctl.zip "https://github.com/kubewarden/kwctl/releases/download/${KWCTL_VERSION}/kwctl-linux-x86_64.zip"
+          unzip -o /tmp/kwctl.zip -d /tmp/kwctl
+          sudo install -m 755 /tmp/kwctl/kwctl-linux-x86_64 /usr/local/bin/kwctl
+          kwctl --version
+          sudo apt-get install -y bats
 
       - name: Unit tests
         run: make test

@@ -1,0 +1,25 @@
+rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    operations: ["CREATE"]
+mutating: true
+contextAware: false
+executionMode: kubewarden-wapc
+# The audit scanner cannot apply mutations; running pods that still carry a CPU limit are visible on the
+# cluster-resource-report dashboard instead.
+backgroundAudit: false
+annotations:
+  io.artifacthub.displayName: Remove CPU limits
+  io.artifacthub.resources: Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet, ReplicationController, Job, CronJob
+  io.artifacthub.keywords: cpu, limits, resources, throttling
+  io.kubewarden.policy.ociUrl: ghcr.io/cdalar/policies/remove-cpu-limits
+  io.kubewarden.policy.title: remove-cpu-limits
+  io.kubewarden.policy.version: 0.1.0
+  io.kubewarden.policy.description: Removes limits.cpu from every container and init container at admission, keeping memory limits and CPU requests (ADR-0003, CPU limits optional)
+  io.kubewarden.policy.author: Cemal Y. Dalar
+  io.kubewarden.policy.url: https://github.com/cdalar/cluster-resource-allocation/tree/main/policies/remove-cpu-limits
+  io.kubewarden.policy.source: https://github.com/cdalar/cluster-resource-allocation
+  io.kubewarden.policy.license: Apache-2.0
+  io.kubewarden.policy.severity: low
+  io.kubewarden.policy.category: Resource validation

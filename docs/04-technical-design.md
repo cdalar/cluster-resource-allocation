@@ -157,9 +157,11 @@ tenancy hygiene.
 | Deny `PriorityClass` reserved for platform (e.g. `system-*`, `platform-critical`) in tenant namespaces | Enforce |
 | Tenant namespaces must belong to a Rancher Project / carry project labels | Audit → Enforce |
 | Warn if request > X (e.g. 8 vCPU / 32Gi per container) | Warn |
+| Remove `limits.cpu` from containers (S4, [ADR-0003](adr/0003-cpu-limits.md)), for teams that cannot change every chart | Mutate: monitor → protect, [Kubewarden policy](../policies/remove-cpu-limits/README.md) |
 
-Tool options: **Kyverno** (YAML policies, easy mutations/reporting, available in Rancher Apps) or
-**OPA Gatekeeper** (Rego, available in Rancher Apps). Recommendation: Kyverno for readability and
+Tool options: **Kyverno** (YAML policies, easy mutations/reporting, available in Rancher Apps),
+**OPA Gatekeeper** (Rego, available in Rancher Apps) or **Kubewarden** (SUSE, in Rancher Apps; policies are WebAssembly
+modules, [policies/](../policies/remove-cpu-limits/README.md) has one). Recommendation: Kyverno for readability and
 PolicyReports, unless Gatekeeper is already in use. (Open question Q5.)
 
 ### Priority classes

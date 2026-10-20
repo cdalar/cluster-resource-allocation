@@ -1,0 +1,35 @@
+{
+  "uid": "3b8e5d2f-1e8c-4f4b-8d63-7a2c3e4f5b6c",
+  "kind": {"group": "apps", "kind": "Deployment", "version": "v1"},
+  "resource": {"group": "apps", "version": "v1", "resource": "deployments"},
+  "requestKind": {"group": "apps", "version": "v1", "kind": "Deployment"},
+  "requestResource": {"group": "apps", "version": "v1", "resource": "deployments"},
+  "name": "app",
+  "namespace": "team-alpha-dev",
+  "operation": "UPDATE",
+  "userInfo": {"username": "kubernetes-admin", "groups": ["system:masters", "system:authenticated"]},
+  "object": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {"name": "app", "namespace": "team-alpha-dev", "generation": 7},
+    "spec": {
+      "replicas": 3,
+      "selector": {"matchLabels": {"app": "app"}},
+      "template": {
+        "metadata": {"labels": {"app": "app"}},
+        "spec": {
+          "containers": [
+            {
+              "name": "app",
+              "image": "registry.example.com/team-alpha/app:1.2",
+              "resources": {
+                "requests": {"cpu": "500m", "memory": "512Mi"},
+                "limits": {"cpu": "2", "memory": "512Mi"}
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

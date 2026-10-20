@@ -22,6 +22,7 @@ several namespaces each), plus some AKS clusters.
 | `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
 | `allocation/` | `generate.py` checks allocation files (`settings.yaml`, `projects/*.yaml`: vCPU and memory per project, cluster and namespace, no money) and writes a ResourceQuota + LimitRange per namespace (plain Kubernetes, no Rancher objects); applies nothing. `--discover` reads nodes and pods (read-only, `kubectl get`) and rewrites the `clusters:` section of `settings.yaml`; `--import-projects` writes starting `projects/*.yaml` from Rancher Projects (namespace annotation + `projects.json`) and never changes an existing allocation. `examples/` is the sample allocations directory |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
+| `policies/remove-cpu-limits/` | Kubewarden mutating policy (Go, TinyGo, waPC) that removes `limits.cpu` from containers at admission; `manifests/` holds the ClusterAdmissionPolicy, `test_data/` the admission requests for the Go and bats tests |
 
 ## Conventions
 
@@ -38,6 +39,10 @@ several namespaces each), plus some AKS clusters.
 - Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`;
   for `allocation/`: `cd allocation && python3 -m unittest -v test_generate`.
   After changing the chart: `helm lint charts/cluster-resource-report`.
+- `policies/remove-cpu-limits/` is Go built with TinyGo (`make test` for unit tests; `make e2e-tests` needs tinygo, kwctl, bats, jq).
+  It handles objects as plain JSON (no typed structs) so unknown fields survive mutation; keep it that way. Keep its README,
+  `metadata.yml` and `manifests/clusteradmissionpolicy.yaml` in sync with the settings. Releases are tags `remove-cpu-limits-vX.Y.Z`
+  matching `io.kubewarden.policy.version` in `metadata.yml`; `.github/workflows/policy.yml` pushes `ghcr.io/cdalar/policies/remove-cpu-limits`.
 - Keep `discovery/README.md`, `discovery/rbac.yaml` and the chart (values, RBAC, README) in sync with the code.
 - Test against a throwaway cluster, never against production kubeconfig contexts.
 - CI (`.github/workflows/image.yml`) builds the image on pushes to `main` that touch `discovery/` or `charts/`.

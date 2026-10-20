@@ -1,0 +1,48 @@
+# Removes CPU limits from new pods in tenant namespaces (ADR-0003: CPU limits optional).
+# Start in `monitor` mode (the policy server only logs what it would change), switch to `protect` to mutate.
+apiVersion: policies.kubewarden.io/v1
+kind: ClusterAdmissionPolicy
+metadata:
+  name: remove-cpu-limits
+spec:
+  module: registry://ghcr.io/cdalar/policies/remove-cpu-limits:v0.1.0
+  policyServer: default
+  mode: monitor
+  mutating: true
+  backgroundAudit: false
+  failurePolicy: Ignore   # a policy-server outage must not block pod creation
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE"]
+    # Also strip the limits from the workload objects themselves (CREATE and UPDATE). This keeps `kubectl get deploy`
+    # consistent with the pods, but GitOps tools then see a difference to Git for every workload with a CPU limit.
+    # - apiGroups: ["apps"]
+    #   apiVersions: ["v1"]
+    #   resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    #   operations: ["CREATE", "UPDATE"]
+    # - apiGroups: ["batch"]
+    #   apiVersions: ["v1"]
+    #   resources: ["jobs", "cronjobs"]
+    #   operations: ["CREATE", "UPDATE"]
+  # Tenant namespaces only: platform namespaces keep what their charts set.
+  namespaceSelector:
+    matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: NotIn
+        values:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - cattle-system
+          - cattle-fleet-system
+          - cattle-monitoring-system
+          - kubewarden
+          - resource-report
+  settings:
+    # The whole image, or a prefix ending with '*'
+    ignoreImages: []
+    # Pods or pod templates with this annotation set to "true" keep their CPU limits
+    # (e.g. workloads that need Guaranteed QoS for CPU pinning)
+    keepAnnotation: allocation.cluster-resource-allocation/keep-cpu-limits

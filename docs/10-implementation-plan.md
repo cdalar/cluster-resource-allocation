@@ -16,7 +16,7 @@ Numbers and rules live in those docs; this one says **what to do in which order*
 |---|---|---|
 | Design | Drafts 01–09 written. ADR-0001 (Rancher Project quotas via Terraform), ADR-0002 (pay for allocated quota) and ADR-0003 (no CPU limit quota) are *Proposed*. Operating principles not yet agreed | [docs](.), [ADRs](adr/) |
 | Open questions | 20 raised (Q20 by this plan), none answered, Q16 partly (Rancher licence counts CPU cores) | [open questions](open-questions.md) |
-| Tooling | Released and usable (v0.6.4): dashboard per cluster with *Room for projects (N+1)*, allocation and capacity planners with N+1 and headroom checks and a what-if calculator, Fleet install on downstream clusters. Since then (unreleased): the **namespace quotas page** on every cluster with T1, T2, T3, T4 and T8 of section 1.3, the proposed soft quota per namespace and the rollout steps ([guide](../guides/namespace-quotas.md)). Tested on the test Rancher only | [README](../README.md), [installation guide](../guides/installation.md) |
+| Tooling | Released and usable (v0.6.4): dashboard per cluster with *Room for projects (N+1)*, allocation and capacity planners with N+1 and headroom checks and a what-if calculator, Fleet install on downstream clusters. Tested on the test Rancher only | [README](../README.md), [installation guide](../guides/installation.md) |
 | Enforcement | **None**: no Rancher Project quotas, no container defaults (LimitRange), no admission policies, no tenant PriorityClasses | [04](04-technical-design.md) |
 | Allocation as code | File format proposed, planner exports it. `allocation/generate.py` checks the files (vCPU and memory per namespace, cluster capacity) and generates a ResourceQuota + LimitRange per namespace ([guide](../guides/allocation-as-code.md)); not yet applied to a cluster. No allocations repository, no CI pipeline (Q6, Q13) | [04.2](04-technical-design.md#42-allocation-as-code) |
 | Process | Designed (RACI, change requests, reviews, emergency increase), not running | [05](05-process.md) |
@@ -59,14 +59,14 @@ today, all read-only additions:
 
 | # | Missing view | Why | Where |
 |---|---|---|---|
-| T1 | ✅ (namespace quotas page, CSV) Quota hard / used per namespace and per Project (before: only the number of ResourceQuota objects) | *Quota vs. requests vs. usage* per project ([04.4](04-technical-design.md#44-visibility-and-showback)); reviews ([05](05-process.md#quarterly-review)) | Dashboard, CSV, Kibana |
-| T2 | ✅ (namespace quotas page) **Sold vs. sellable** per cluster: Σ project quota against room for projects (N+1) and the environment's max %, as a second line in *Cluster capacity* and a tile that turns amber at 70 %, red at 80 % or above N+1 | Capacity thresholds green / amber / red ([05](05-process.md#capacity-planning)) | Dashboard, Kibana |
-| T3 | ✅ (namespace quotas page) LimitRange per namespace: default request / limit values; containers whose values equal the defaults marked *probably defaulted* | Defaults hide missing requests ([discovery caveat](../discovery/README.md#caveats)) | Dashboard |
-| T4 | ✅ (namespace quotas page, with the metrics-server snapshot rather than P95) Containers **without a memory limit whose usage is above the planned default limit** | They are OOMKilled after the next restart once the default applies (step 2.2) | Dashboard, CSV |
+| T1 | Quota hard / used per namespace and per Project (today only the number of ResourceQuota objects) | *Quota vs. requests vs. usage* per project ([04.4](04-technical-design.md#44-visibility-and-showback)); reviews ([05](05-process.md#quarterly-review)) | Dashboard, CSV, Kibana |
+| T2 | **Sold vs. sellable** per cluster: Σ project quota against room for projects (N+1) and the environment's max %, as a second line in *Cluster capacity* and a tile that turns amber at 70 %, red at 80 % or above N+1 | Capacity thresholds green / amber / red ([05](05-process.md#capacity-planning)) | Dashboard, Kibana |
+| T3 | LimitRange per namespace: default request / limit values; containers whose values equal the defaults marked *probably defaulted* | Defaults hide missing requests ([discovery caveat](../discovery/README.md#caveats)) | Dashboard |
+| T4 | Containers **without a memory limit whose P95 usage is above the planned default limit** | They are OOMKilled after the next restart once the default applies (step 2.2) | Dashboard, CSV |
 | T5 | Largest pod per cluster against the free room after the largest node fails | A pod that fits no node after a failure can't be rescheduled ([09 C2](09-operating-principles.md#c2-replicas)) | Dashboard |
 | T6 | Workload HA checks: prod workloads with 1 replica, no PDB, a PDB that allows no disruption, no topology spread | [09 C2, C3](09-operating-principles.md#c3-workload-ha); drains must succeed (E1) | Dashboard (needs read on Deployments, StatefulSets, PDBs) |
 | T7 | N+1 by **failure domain**: group nodes by `topology.kubernetes.io/zone` (or a host label) and subtract the largest group | A hypervisor host with two node VMs is one failure ([09 A1](09-operating-principles.md#a1-n1-node-failure-tolerance), Q17) | Dashboard, planner |
-| T8 | ✅ (namespace quotas page: in the proposal's basis) HPA `maxReplicas × requests` against the namespace quota | An HPA that hits its quota stops scaling silently (A3) | Dashboard |
+| T8 | HPA `maxReplicas × requests` against the namespace quota | An HPA that hits its quota stops scaling silently (A3) | Dashboard |
 
 All of them stay within the read-only rule of the tools (new read permissions only, in `rbac.yaml` and the chart).
 
@@ -169,9 +169,7 @@ Done when: the checklist is green or has dated actions per cluster.
 **Step 1.1 Close the tooling gaps.** Owner: PT.
 
 - Build T1–T8 ([section 1.3](#13-gaps-in-the-capacity-planning-views)) in the dashboard (and T1, T2 in the Kibana
-  report), in this order: T1, T2, T4, T3 (needed before Phases 2 and 4), then T5–T8. T1–T4 and T8 are on the
-  **namespace quotas page** (`/quotas`, [guide](../guides/namespace-quotas.md)), which also computes the soft
-  quota of step 4.1 per namespace and lists steps 1.6–4.4 with the cluster's numbers; T5–T7 are open.
+  report), in this order: T1, T2, T4, T3 (needed before Phases 2 and 4), then T5–T8.
 - Keep the tools read-only; add read RBAC only. Release, upgrade through Fleet.
 - Done when: a release with T1–T4 runs on every cluster.
 

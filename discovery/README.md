@@ -79,11 +79,6 @@ Key columns:
 | `largest_node_cpu`, `largest_node_mem_gib` | Allocatable of the largest schedulable node (clusters.csv) |
 | `alloc_cpu_n1`, `alloc_mem_gib_n1` | N+1: schedulable allocatable minus the largest node, i.e. what is left if it fails |
 | `cpu_for_projects_n1`, `mem_gib_for_projects_n1` | N+1 capacity minus the `system` (platform component) requests on schedulable nodes: what projects can safely have. The dashboard shows it as the dashed line in *Cluster capacity*, the text under it and the *Room for projects (N+1)* tile |
-| `quota_names`, `quota_rancher`, `quota_{cpu,mem,mem_limit,cpu_limit,pods}_hard`, `quota_{cpu,mem,mem_limit,pods}_used` | The namespace's ResourceQuotas (namespaces.csv): their names (`(scoped)` for quotas with scopes, which are listed but not summed), whether Rancher created them (namespace annotation `field.cattle.io/resourceQuota` or Rancher's label on the quota), and per resource the tightest `hard` value with its `used`. Empty = not set |
-| `limitrange_names`, `limitrange_rancher`, `lr_default_{cpu,mem}_request`, `lr_default_{cpu,mem}_limit`, `lr_max_{cpu,mem}` | The namespace's LimitRanges: names, whether Rancher created them (annotation `field.cattle.io/containerDefaultResourceLimit`), and the Container defaults and maxima (the smallest value when there are several) |
-| `containers_defaulted` | Containers whose requests equal the LimitRange defaults: probably filled in at admission, not chosen (T3) |
-| `cpu_requests_hpa_max`, `mem_requests_hpa_max_gib` | Requests if every HPA scaled to `maxReplicas`: per HPA the average effective requests of its current pods × the replicas still to add (T8). Pods are matched to the scale target by owner (a Deployment's ReplicaSet `<name>-<hash>`, a StatefulSet by name); an HPA whose target has no pods adds nothing |
-| `nolimit_mem_max_now_gib`, `nolimit_mem_max_container` | The largest working set now (metrics-server) among containers without a memory limit, and which `pod/container` it is: what a default memory limit below it would OOMKill after the next restart (T4) |
 
 ## Deriving a first quota (Phase 2)
 
@@ -126,44 +121,6 @@ To look at a saved report locally without cluster access:
 ```bash
 python3 server.py --no-collect --data-dir <dir-with-report.json> --listen 127.0.0.1:8080
 ```
-
-## Namespace quotas page
-
-`server.py` also serves `/quotas` (`quotas.py`): everything needed to put a `ResourceQuota` and a `LimitRange` on
-each namespace of the cluster it scans. User guide: [guides/namespace-quotas.md](../guides/namespace-quotas.md).
-Computed from the latest report, read-only, nothing is applied:
-
-- **Per namespace:** what it has today (quota hard / used, LimitRange defaults, Rancher-managed or not), the
-  proposed soft quota of docs/10 step 4.1, and what stands in the way:
-
-  ```
-  basis         = max(requests now, peak requests over the window, requests with every HPA at maxReplicas)
-                  + the requests the LimitRange defaults add to containers that set none
-  requests.cpu / requests.memory = basis × headroom (1.3)        CPU up to 0.1 vCPU, memory to whole GiB
-  limits.memory = max(memory × memory limit factor, today's memory limits incl. defaults × headroom)
-  pods          = pods now × 2, up to a multiple of 10
-  ```
-
-  Status per namespace: *ready*, *needs defaults* (containers without requests or a memory limit would be refused
-  by the quota -- the LimitRange has to come first), *has quota* (compare with the proposal; a Rancher Project quota
-  is changed in Rancher / Terraform, never doubled with a second ResourceQuota), *blocked* (the current quota is
-  below today's requests: new pods are refused there). Plus warnings: unassigned namespace, container without a
-  memory limit above the planned default limit (OOMKill after restart, T4), quota ≥ 90 % used, memory limits far
-  above requests; and notes: pending and BestEffort pods, probably defaulted containers (T3), peak and HPA maximum
-  (T8) in the basis, idle namespace.
-- **Per project:** Σ of its namespaces = the Rancher Project limit; the namespace values are its overrides.
-- **Per cluster, sold vs. sellable (T2):** requests now, today's quotas and the proposed quotas against
-  *sellable* = min(room for projects after a node failure, max % × (allocatable − platform)); green below 70 %,
-  amber from 70 %, red above 100 %.
-- **Rollout steps** of docs/10 in order, each with this cluster's count and list.
-
-Settings (query parameters of `/api/quotas`, kept in the browser, not stored): `headroom`, `mem_limit_factor`,
-`default_cpu_request`, `default_mem_request_gib`, `default_mem_limit_gib`, `max_pct`, `pods_factor`,
-`include_system`, `cluster`. Exports with the same parameters: `/api/quotas/export.yaml` (allocation files of
-docs/04, one document per project with its namespaces, for `allocation/generate.py` and the Git flow),
-`/api/quotas/manifests.yaml` (plain `ResourceQuota` `allocation` + `LimitRange` `allocation-defaults` per namespace,
-same names and labels as `generate.py`, namespaces with a quota left out; for a trial on a test cluster) and
-`/download/quotas.csv`. No new permissions: the details come from the objects the collector already reads.
 
 ## Project names on downstream clusters without a token
 
@@ -236,7 +193,7 @@ envelope checked against its quota summed over all clusters. Its plan is the Con
 ## Tests
 
 ```bash
-python3 -m unittest -v test_discover test_server test_planner test_quotas
+python3 -m unittest -v test_discover test_server test_planner
 ```
 
 [`testdata/`](testdata/README.md) has a scenario file for a test cluster: one namespace per situation the dashboard

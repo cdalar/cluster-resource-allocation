@@ -20,28 +20,6 @@ spec:
     scheme: http
     port: {{ .Values.service.port | quote }}
     path: /
----
-# Namespace quotas: what each namespace has and needs before a ResourceQuota, the proposed quota, sold vs. sellable
-apiVersion: ui.cattle.io/v1
-kind: NavLink
-metadata:
-  name: {{ include "crr.fullname" . }}-quotas
-  labels:
-    {{- include "crr.labels" . | nindent 4 }}
-spec:
-  label: "Namespace quotas"
-  {{- with dig "navLink" "group" "" .Values.rancher }}
-  group: {{ . | quote }}
-  {{- end }}
-  iconSrc: {{ include "crr.navLinkIcon" (list . "quotas") | quote }}
-  description: Per namespace what a ResourceQuota and LimitRange need, the proposed soft quota and sold vs. sellable (read-only)
-  target: _blank
-  toService:
-    namespace: {{ .Release.Namespace }}
-    name: {{ include "crr.fullname" . }}
-    scheme: http
-    port: {{ .Values.service.port | quote }}
-    path: /quotas
 {{- if include "crr.planner" . }}
 ---
 apiVersion: ui.cattle.io/v1

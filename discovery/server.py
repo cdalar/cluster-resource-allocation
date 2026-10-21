@@ -8,13 +8,6 @@ Endpoints (all relative, so the app also works behind the Rancher/API server ser
   POST /api/refresh         trigger a collection now
   GET  /download/<name>.csv clusters / projects / namespaces
   GET  /healthz             liveness/readiness
-  GET  /quotas                     namespace quotas page (quotas.py): what each namespace has and needs before a
-                                   ResourceQuota + LimitRange, the proposed soft quota, sold vs. sellable
-  GET  /api/quotas                 the same as JSON; ?cluster=&headroom=&mem_limit_factor=&default_cpu_request=
-                                   &default_mem_request_gib=&default_mem_limit_gib=&max_pct=&pods_factor=&include_system=
-  GET  /api/quotas/export.yaml     the proposal as allocation files (docs/04), same parameters
-  GET  /api/quotas/manifests.yaml  the proposal as ResourceQuota + LimitRange manifests
-  GET  /download/quotas.csv        the namespace rows as CSV
 
 With --planner (Rancher local cluster only), also the allocation planner (planner.py):
   GET  /planner                  planner page
@@ -38,13 +31,11 @@ import re
 import sys
 import threading
 import time
-import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import discover
 import planner
-import quotas
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 CSV_NAMES = ("clusters", "projects", "namespaces")
@@ -261,40 +252,11 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
         def _json(self, code, obj):
             self._send(code, json.dumps(obj), "application/json")
 
-        def _quotas_view(self):
-            """The quotas view for the request's query string, or None (404 sent) without a report."""
-            query = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            with collector.lock:
-                report = collector.report
-            if not report or not report.get("clusters"):
-                self._send(404, "no report yet", "text/plain")
-                return None
-            cluster = (query.get("cluster") or [None])[0]
-            return quotas.evaluate(report, cluster, quotas.parse_settings(query))
-
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             backend, what = planner_route(path)
             if path in ("/", "/index.html"):
                 self._page("index.html")
-            elif path == "/quotas":
-                self._page("quotas.html")
-            elif path == "/api/quotas":
-                view = self._quotas_view()
-                if view is not None:
-                    self._json(200, view)
-            elif path in ("/api/quotas/export.yaml", "/api/quotas/manifests.yaml", "/download/quotas.csv"):
-                view = self._quotas_view()
-                if view is None:
-                    return
-                if path.endswith(".csv"):
-                    self._send(200, quotas.export_csv(view), "text/csv; charset=utf-8",
-                               {"Content-Disposition": 'attachment; filename="quotas.csv"'})
-                else:
-                    name = "quota-manifests.yaml" if "manifests" in path else "quota-allocations.yaml"
-                    data = quotas.export_manifests(view) if "manifests" in path else quotas.export_allocations(view)
-                    self._send(200, data, "application/yaml; charset=utf-8",
-                               {"Content-Disposition": f'attachment; filename="{name}"'})
             elif what == "page":
                 self._page("planner.html")
             elif what == "api":

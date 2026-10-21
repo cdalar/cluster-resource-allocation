@@ -17,6 +17,7 @@ import argparse
 import concurrent.futures
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -30,6 +31,11 @@ GIB = 2**30
 
 RANCHER_PROJECT_ANNOTATION = "field.cattle.io/projectId"  # "<cluster-id>:<project-id>"
 NAMES_CONFIGMAP = "rancher-project-names"  # written by publish_rancher_names.py, delivered by Fleet
+# Set by Rancher on a namespace whose Project has a resource quota / container default resource limit; Rancher then
+# creates the namespace's ResourceQuota (labelled) and LimitRange itself.
+RANCHER_QUOTA_ANNOTATION = "field.cattle.io/resourceQuota"
+RANCHER_LIMITS_ANNOTATION = "field.cattle.io/containerDefaultResourceLimit"
+RANCHER_QUOTA_LABEL = "resourcequota.management.cattle.io/default-resource-quota"
 
 # Same value as collection.systemNamespaceRegex in the chart's values.yaml (test_discover checks it).
 # Storage providers, then keywords: any name containing "storage", "system" or "ingress"
@@ -132,6 +138,128 @@ def long_running_containers(spec):
     """App containers plus sidecar init containers (the ones that consume resources for the pod's lifetime)."""
     sidecars = [c for c in (spec.get("initContainers") or []) if c.get("restartPolicy") == "Always"]
     return (spec.get("containers") or []) + sidecars
+
+
+# ---------------------------------------------------------------------------
+# ResourceQuota, LimitRange and HPA details (for the namespace quotas page)
+# ---------------------------------------------------------------------------
+
+# ResourceQuota resource name -> (hard field, used field or None, divisor). requests.cpu and cpu are the same resource.
+QUOTA_RESOURCES = {
+    "requests.cpu": ("quota_cpu_hard", "quota_cpu_used", 1), "cpu": ("quota_cpu_hard", "quota_cpu_used", 1),
+    "requests.memory": ("quota_mem_hard_gib", "quota_mem_used_gib", GIB), "memory": ("quota_mem_hard_gib", "quota_mem_used_gib", GIB),
+    "limits.cpu": ("quota_cpu_limit_hard", None, 1),
+    "limits.memory": ("quota_mem_limit_hard_gib", "quota_mem_limit_used_gib", GIB),
+    "pods": ("quota_pods_hard", "quota_pods_used", 1),
+}
+# "" = not set. Strings and numbers; the dashboards and quotas.py read them, the CSV prints them.
+NS_QUOTA_FIELDS = [
+    "quota_names", "quota_rancher",
+    "quota_cpu_hard", "quota_cpu_used", "quota_mem_hard_gib", "quota_mem_used_gib",
+    "quota_mem_limit_hard_gib", "quota_mem_limit_used_gib", "quota_cpu_limit_hard", "quota_pods_hard", "quota_pods_used",
+    "limitrange_names", "limitrange_rancher",
+    "lr_default_cpu_request", "lr_default_mem_request_gib", "lr_default_cpu_limit", "lr_default_mem_limit_gib",
+    "lr_max_cpu", "lr_max_mem_gib",
+    "nolimit_mem_max_container",
+]
+
+
+def quota_summary(quotas, ns_annotations=None):
+    """The ResourceQuotas of one namespace as flat fields: names, whether Rancher manages them, and per resource the
+    tightest hard value with its used value. Quotas with scopes (BestEffort, PriorityClass, ...) are listed but not
+    summed: they only count some pods."""
+    out = {k: "" for k in NS_QUOTA_FIELDS if k.startswith("quota_")}
+    names, rancher = [], RANCHER_QUOTA_ANNOTATION in (ns_annotations or {})
+    for q in sorted(quotas, key=lambda q: q["metadata"]["name"]):
+        spec, md = q.get("spec") or {}, q["metadata"]
+        scoped = bool(spec.get("scopes") or spec.get("scopeSelector"))
+        names.append(md["name"] + (" (scoped)" if scoped else ""))
+        if RANCHER_QUOTA_LABEL in (md.get("labels") or {}):
+            rancher = True
+        if scoped:
+            continue
+        used = (q.get("status") or {}).get("used") or {}
+        for res, value in (spec.get("hard") or {}).items():
+            if res not in QUOTA_RESOURCES:
+                continue
+            hard_field, used_field, div = QUOTA_RESOURCES[res]
+            hard = parse_quantity(value) / div
+            if out[hard_field] == "" or hard < out[hard_field]:
+                out[hard_field] = hard
+                if used_field:
+                    out[used_field] = parse_quantity(used.get(res, 0)) / div
+    out["quota_names"] = ", ".join(names)
+    out["quota_rancher"] = bool(names) and rancher
+    return out
+
+
+def limitrange_summary(limitranges, ns_annotations=None):
+    """The LimitRanges of one namespace as flat fields: the Container defaults (request and limit) and maxima. With
+    several LimitRanges the smallest value of each wins, as it does at admission for max."""
+    out = {k: "" for k in NS_QUOTA_FIELDS if k.startswith(("limitrange_", "lr_"))}
+    names = []
+    for lr in sorted(limitranges, key=lambda lr: lr["metadata"]["name"]):
+        names.append(lr["metadata"]["name"])
+        for item in (lr.get("spec") or {}).get("limits") or []:
+            if item.get("type") != "Container":
+                continue
+            for section, prefix in (("defaultRequest", "lr_default_%s_request"), ("default", "lr_default_%s_limit"),
+                                    ("max", "lr_max_%s")):
+                for res, key, div in (("cpu", "cpu", 1), ("memory", "mem", GIB)):
+                    if res not in (item.get(section) or {}):
+                        continue
+                    field = prefix % key + ("_gib" if key == "mem" else "")
+                    v = parse_quantity(item[section][res]) / div
+                    if out[field] == "" or v < out[field]:
+                        out[field] = v
+    out["limitrange_names"] = ", ".join(names)
+    out["limitrange_rancher"] = bool(names) and RANCHER_LIMITS_ANNOTATION in (ns_annotations or {})
+    return out
+
+
+def container_defaulted(container, lr):
+    """True when a container's requests equal the namespace LimitRange defaults: probably filled in at admission
+    rather than chosen by the team."""
+    for res, field, div in (("cpu", "lr_default_cpu_request", 1), ("memory", "lr_default_mem_request_gib", GIB)):
+        default = lr.get(field, "")
+        if default != "" and _has(container, "requests", res) and \
+                math.isclose(_res(container, "requests", res) / div, default, rel_tol=1e-9, abs_tol=1e-12):
+            return True
+    return False
+
+
+def pod_owner(pod):
+    refs = pod["metadata"].get("ownerReferences") or []
+    return (refs[0].get("kind", ""), refs[0].get("name", "")) if refs else ("", "")
+
+
+def hpa_targets_pod(hpa, owner):
+    """Does a pod with this owner (kind, name) belong to the HPA's scale target? A Deployment's pods are owned by a
+    ReplicaSet named <deployment>-<hash>; StatefulSet and ReplicaSet pods by the object itself. Other kinds (e.g.
+    Argo Rollouts) are matched like a Deployment."""
+    target = (hpa.get("spec") or {}).get("scaleTargetRef") or {}
+    kind, name = target.get("kind", ""), target.get("name", "")
+    okind, oname = owner
+    if not name or not oname:
+        return False
+    if kind in ("StatefulSet", "ReplicaSet", "ReplicationController"):
+        return okind == kind and oname == name
+    return okind == "ReplicaSet" and re.fullmatch(re.escape(name) + r"-[a-z0-9]+", oname) is not None
+
+
+def hpa_scaleout(hpas, pods):
+    """Extra (cpu, memory bytes) the namespace would request if every HPA scaled to maxReplicas: per HPA, the
+    average effective requests of its current pods times the replicas still to add. pods: [(owner, cpu, mem)]."""
+    extra_cpu = extra_mem = 0.0
+    for hpa in hpas:
+        mine = [(cpu, mem) for owner, cpu, mem in pods if hpa_targets_pod(hpa, owner)]
+        max_replicas = (hpa.get("spec") or {}).get("maxReplicas") or 0
+        if not mine or max_replicas <= len(mine):
+            continue
+        n = len(mine)
+        extra_cpu += (max_replicas - n) * sum(c for c, _ in mine) / n
+        extra_mem += (max_replicas - n) * sum(m for _, m in mine) / n
+    return extra_cpu, extra_mem
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +418,12 @@ NS_NUMERIC = [
     # part of the requests that sits on nodes that don't count as capacity (tainted control-plane / etcd nodes,
     # cordoned nodes): counted in requests and quota, but not against the schedulable nodes
     "cpu_requests_excluded_nodes", "mem_requests_excluded_nodes_gib",
+    # for the namespace quotas page: containers whose requests equal the LimitRange defaults (probably defaulted),
+    # requests if every HPA scaled to maxReplicas, and the largest working set now of a container without a
+    # memory limit (what a default memory limit would OOMKill after its next restart)
+    "containers_defaulted", "cpu_requests_hpa_max", "mem_requests_hpa_max_gib", "nolimit_mem_max_now_gib",
 ]
-NS_FIELDS = ["cluster", "category", "project_id", "project", "namespace"] + NS_NUMERIC
+NS_FIELDS = ["cluster", "category", "project_id", "project", "namespace"] + NS_NUMERIC + NS_QUOTA_FIELDS
 
 
 def classify(ns_name, project_name, has_project, system_re, system_project_re=DEFAULT_SYSTEM_PROJECT_RE):
@@ -341,12 +473,14 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
 
     system_re = re.compile(args.system_ns_regex)
     system_project_re = re.compile(args.system_project_regex, re.IGNORECASE)
+    quotas_by_ns, lrs_by_ns, hpas_by_ns = (_group_by_namespace(x) for x in (quotas, limitranges, hpas))
     ns_rows = {}
     rancher_cluster_id = None
     for ns in namespaces:
         md = ns["metadata"]
         name = md["name"]
-        project_ref = (md.get("annotations") or {}).get(RANCHER_PROJECT_ANNOTATION, "")
+        annotations = md.get("annotations") or {}
+        project_ref = annotations.get(RANCHER_PROJECT_ANNOTATION, "")
         project_id, project_name = "", ""
         if project_ref:
             rancher_cluster_id = project_ref.split(":", 1)[0]
@@ -358,7 +492,12 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
         row = {k: 0.0 for k in NS_NUMERIC}
         row.update(namespace=name, project_id=project_id, project=project_name,
                    category=classify(name, project_name, bool(project_id), system_re, system_project_re))
+        row.update(quota_summary(quotas_by_ns.get(name, []), annotations))
+        row.update(limitrange_summary(lrs_by_ns.get(name, []), annotations))
+        row["nolimit_mem_max_container"] = ""
         ns_rows[name] = row
+    pods_by_ns = {}       # namespace -> [(owner, cpu request, memory request)] of active pods, for the HPA scale-out
+    nolimit = set()       # (namespace, pod, container) without a memory limit, for the metrics-server snapshot
 
     excluded_nodes = {n["metadata"]["name"] for n in nodes if not node_schedulable(n)}
     cluster_name = args.cluster_name or rancher_clusters.get(rancher_cluster_id) or label
@@ -388,18 +527,26 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
             row["mem_requests_excluded_nodes_gib"] += mem_req
         row["cpu_limits"] += pod_effective(spec, "limits", "cpu")
         row["mem_limits_gib"] += pod_effective(spec, "limits", "memory") / GIB
+        pods_by_ns.setdefault(row["namespace"], []).append((pod_owner(p), cpu_req, mem_req))
         for c in long_running_containers(spec):
             row["containers"] += 1
             row["containers_no_cpu_request"] += not _has(c, "requests", "cpu")
             row["containers_no_mem_request"] += not _has(c, "requests", "memory")
             row["containers_no_mem_limit"] += not _has(c, "limits", "memory")
             row["containers_cpu_limit"] += _has(c, "limits", "cpu")
+            row["containers_defaulted"] += container_defaulted(c, row)
+            if not _has(c, "limits", "memory"):
+                nolimit.add((row["namespace"], p["metadata"]["name"], c.get("name", "")))
 
     for items, key in ((quotas, "resourcequotas"), (limitranges, "limitranges"), (hpas, "hpas")):
         for o in items:
             row = ns_rows.get(o["metadata"]["namespace"])
             if row:
                 row[key] += 1
+    for name, row in ns_rows.items():
+        extra_cpu, extra_mem = hpa_scaleout(hpas_by_ns.get(name, []), pods_by_ns.get(name, []))
+        row["cpu_requests_hpa_max"] = row["cpu_requests"] + extra_cpu
+        row["mem_requests_hpa_max_gib"] = row["mem_requests_gib"] + extra_mem
 
     # metrics-server snapshot
     for pm in (metrics or {}).get("items", []):
@@ -407,8 +554,12 @@ def collect_cluster(context, args, rancher_projects, rancher_clusters):
         if row is None:
             continue
         for c in pm.get("containers", []):
+            mem = parse_quantity(c["usage"].get("memory")) / GIB
             row["cpu_usage_now"] += parse_quantity(c["usage"].get("cpu"))
-            row["mem_usage_now_gib"] += parse_quantity(c["usage"].get("memory")) / GIB
+            row["mem_usage_now_gib"] += mem
+            if (row["namespace"], pm["metadata"]["name"], c.get("name", "")) in nolimit and mem > row["nolimit_mem_max_now_gib"]:
+                row["nolimit_mem_max_now_gib"] = mem
+                row["nolimit_mem_max_container"] = f"{pm['metadata']['name']}/{c.get('name', '')}"
 
     # Prometheus history
     prom_coverage_days = ""
@@ -452,6 +603,13 @@ def duration_seconds(s):
     if not m:
         raise ValueError(f"invalid duration: {s} (use e.g. 15m, 7d, 2w)")
     return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}[m.group(2)]
+
+
+def _group_by_namespace(items):
+    out = {}
+    for o in items:
+        out.setdefault(o["metadata"].get("namespace", ""), []).append(o)
+    return out
 
 
 def window_days(w):
@@ -571,7 +729,10 @@ def aggregate_projects(ns_rows):
         })
         a["namespaces"] += 1
         for k in PROJECT_NUMERIC:
-            a[k] += r[k]
+            if k == "nolimit_mem_max_now_gib":   # a maximum, not a sum
+                a[k] = max(a[k], r.get(k, 0.0))
+            else:
+                a[k] += r.get(k, 0.0)
     for a in agg.values():
         cpu_used = a["cpu_usage_p95"] or a["cpu_usage_now"]
         mem_used = a["mem_usage_p95_gib"] or a["mem_usage_now_gib"]

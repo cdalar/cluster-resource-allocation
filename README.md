@@ -21,6 +21,7 @@ per stream, several namespaces each) and AKS clusters.
 | | |
 |---|---|
 | 📊 **Resource dashboard** | Installed on every cluster. Shows requests, limits and P95 usage per cluster, Rancher Project and namespace. Also shows the room left for projects if the largest node fails (N+1), and containers that break the resource standards. CSV export. |
+| 🧾 **Namespace quotas** | Page of the dashboard on every cluster: per namespace what a ResourceQuota and LimitRange need (quota hard / used today, LimitRange defaults, containers without requests), a proposed soft quota from requests, peaks and HPA maxima, sold vs. sellable per cluster and the rollout steps. Exports allocation files or plain manifests; applies nothing. |
 | 🧮 **Allocation planner** | Runs on the Rancher local cluster. For each project you set a monthly budget and a CPU and memory quota per cluster. The planner prices the quotas with unit rates and checks them against the budget and each cluster's limit for projects. It also has a what-if calculator for new applications. |
 | 📦 **Capacity planner** | The same planner without money. Each project gets a CPU and memory envelope, which you split into a quota per cluster. |
 | 📐 **Design & process** | Resource standards, the allocation model (budget → quota), technical design, process (RACI), rollout and ADRs. |
@@ -117,6 +118,7 @@ flowchart LR
 | [Installation](guides/installation.md) | Step by step: dashboard on every cluster, planners and name publisher on the Rancher local cluster, verification, upgrade, troubleshooting |
 | [Allocation planner](guides/allocation-planner.md) | Using the allocation and capacity planners, every parameter explained |
 | [Allocation as code](guides/allocation-as-code.md) | YAML format for vCPU and memory per project, cluster and namespace, checks, and the generated ResourceQuotas / LimitRanges |
+| [Namespace quotas](guides/namespace-quotas.md) | Using the namespace quotas page: the proposal, each status and warning, the settings, and how to get from it to applied quotas |
 
 ## Tools
 
@@ -126,6 +128,7 @@ flowchart LR
 | [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster; chart `cluster-resource-report-chart` on Docker Hub (`cdalar/cluster-resource-report-chart`) and GHCR (`oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`), image `cdalar/cluster-resource-report` on both |
 | [Allocation planner](discovery/README.md#allocation-planner) ([user guide](guides/allocation-planner.md)) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing); with a what-if calculator for a new application (fits, or nodes and Rancher licences to add, with N+1 and platform overhead) |
 | [Capacity planner](guides/allocation-planner.md#capacity-planner-without-money) | The allocation planner without money: a CPU and memory envelope per project, split into quota per cluster, with the same cluster checks |
+| [Namespace quotas](discovery/README.md#namespace-quotas-page) ([user guide](guides/namespace-quotas.md)) | Page of the dashboard on every cluster: per namespace the current ResourceQuota and LimitRange, a proposed soft quota (max of requests, peak and HPA maximum × headroom), what blocks it (containers without requests, OOMKill risk, unassigned, quota below requests), sold vs. sellable, rollout steps; exports allocation files and manifests (applies nothing) |
 | [allocation/generate.py](guides/allocation-as-code.md) | Checks the allocation files in Git (vCPU and memory per project and namespace, against cluster capacity) and generates a ResourceQuota + LimitRange per namespace (writes files, applies nothing); `--discover` reads the clusters' capacity (N+1, platform, headroom) into `settings.yaml`; `--import-projects` starts the project files from Rancher Projects and current requests |
 | [publish_rancher_names.py](discovery/README.md#project-names-on-downstream-clusters-without-a-token) | Publishes Rancher Project names from the local cluster to downstream clusters (Fleet Bundle with a ConfigMap), so their dashboards show names without a Rancher token |
 | [remove-cpu-limits](policies/remove-cpu-limits/README.md) | Kubewarden policy that removes `limits.cpu` from containers at admission ([ADR-0003](docs/adr/0003-cpu-limits.md)); memory limits and CPU requests stay, opt-out by image or annotation; `ghcr.io/cdalar/policies/remove-cpu-limits` |
@@ -135,7 +138,7 @@ flowchart LR
 ```
 docs/        design and process docs, ADRs, screenshots (docs/images/)
 guides/      user guides for the tools
-discovery/   discover.py (CLI), server.py + static/ (dashboard, planners), publish_rancher_names.py, tests
+discovery/   discover.py (CLI), server.py + static/ (dashboard, quotas page, planners), publish_rancher_names.py, tests
 allocation/  generate.py (allocation files -> quotas), examples/, tests
 charts/      Helm chart cluster-resource-report
 policies/    Kubewarden policies (Go, TinyGo): remove-cpu-limits
@@ -144,7 +147,7 @@ policies/    Kubewarden policies (Go, TinyGo): remove-cpu-limits
 ## Development
 
 ```bash
-cd discovery && python3 -m unittest -v test_discover test_server test_planner
+cd discovery && python3 -m unittest -v test_discover test_server test_planner test_quotas
 cd allocation && python3 -m unittest -v test_generate
 helm lint charts/cluster-resource-report
 cd policies/remove-cpu-limits && make test      # Go; make e2e-tests needs tinygo, kwctl, bats

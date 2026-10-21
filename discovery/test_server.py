@@ -103,6 +103,25 @@ class Server(unittest.TestCase):
         self.assertEqual(self.get("/api/planner")[0], 404)
         self.assertFalse(json.loads(self.get("/api/report")[2])["status"]["planner"])
 
+    def test_quotas_page_and_api(self):
+        code, headers, body = self.get("/quotas")
+        self.assertEqual(code, 200)
+        self.assertIn(b"Namespace quotas", body)
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        code, _, body = self.get("/api/quotas?headroom=1.5&cluster=c1")
+        self.assertEqual(code, 200)
+        view = json.loads(body)
+        self.assertEqual((view["cluster"]["cluster"], view["settings"]["headroom"], view["namespaces"]), ("c1", 1.5, []))
+        self.assertEqual(len(view["steps"]), 7)
+        code, headers, body = self.get("/api/quotas/export.yaml")
+        self.assertEqual((code, headers["Content-Disposition"]), (200, 'attachment; filename="quota-allocations.yaml"'))
+        self.assertIn(b"Namespace quotas of cluster c1", body)
+        code, headers, body = self.get("/api/quotas/manifests.yaml?include_system=1")
+        self.assertEqual((code, headers["Content-Disposition"]), (200, 'attachment; filename="quota-manifests.yaml"'))
+        code, headers, body = self.get("/download/quotas.csv")
+        self.assertEqual((code, headers["Content-Type"]), (200, "text/csv; charset=utf-8"))
+        self.assertTrue(body.startswith(b"cluster,namespace,project,category,status,"))
+
     def test_parse_duration(self):
         self.assertEqual(server.parse_duration("15m"), 900)
         self.assertEqual(server.parse_duration("1h"), 3600)

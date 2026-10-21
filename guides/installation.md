@@ -396,7 +396,6 @@ In the Rancher UI, open a cluster. Its left-hand menu has:
 | **Resource report** | every cluster | That cluster's dashboard |
 | **Allocation planner** | local cluster, with `planner.enabled` | Budgets and quotas for all clusters |
 | **Capacity planner** | local cluster, with `capacityPlanner.enabled` | CPU / memory envelopes for all clusters |
-| **Namespace quotas** | every cluster | What each namespace of that cluster needs before a ResourceQuota, the proposed quota, sold vs. sellable ([guide](namespace-quotas.md)) |
 
 They open through Rancher's service proxy, so your Rancher login and permissions apply. The address is:
 
@@ -408,7 +407,7 @@ Without Rancher, or to test:
 
 ```bash
 kubectl -n resource-report port-forward svc/resource-report-cluster-resource-report 8080:80
-# http://localhost:8080/  (namespace quotas: /quotas; planners: /planner, /capacity)
+# http://localhost:8080/  (planners: /planner, /capacity)
 ```
 
 The pages have no login of their own, so the chart never exposes them outside the cluster: the Service is
@@ -425,7 +424,6 @@ the only ways in.
 | Enough history | Pod log: `prometheus has N days of data (window 7d)` | N reaches the window after that many days of Prometheus data |
 | N+1 | Cluster summary | **Room for projects (N+1)** tile and dashed line in the capacity bar |
 | Planner inventory | Planner, *Clusters* table | Every Rancher cluster with nodes, allocatable and largest node |
-| Namespace quotas | Namespace quotas page | Every tenant namespace with a status; namespaces with a Rancher Project quota show it under *Quota now* |
 | Planner storage | Planner, **Save plan** | Saved without error; still there after `kubectl -n resource-report rollout restart deploy/resource-report-cluster-resource-report`; `binaryData` of the planner ConfigMap holds `plan.json.gz` |
 
 ## Mark more namespaces as System

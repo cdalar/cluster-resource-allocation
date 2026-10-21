@@ -12,10 +12,6 @@ The dashboard shows:
 - **Sortable project and namespace tables:** efficiency, peak requests and standards violations. Click a project
   to see its namespaces.
 - **CSV downloads** of the same data. Light and dark mode are supported.
-- **Namespace quotas page** (`/quotas`, *Namespace quotas* in the Rancher menu): per namespace what a
-  `ResourceQuota` and `LimitRange` need (quota hard / used, LimitRange defaults, containers without requests),
-  a proposed soft quota from requests, peaks and HPA maxima, sold vs. sellable per cluster, the rollout steps,
-  and exports as allocation files or manifests. Read-only ([guide](../../guides/namespace-quotas.md)).
 
 The page is self-contained, with no CDN or external assets, so it works in air-gapped clusters.
 
@@ -259,7 +255,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `capacityPlanner.enabled` | `true` | Capacity planner at `/capacity`: the allocation planner without money, a CPU / memory envelope per project; same requirements |
 | `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `Resource Allocation` | Menu entries in the Rancher UI that open the dashboard (and the planners) through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists. With a group, the side menu shows one entry that opens a page with a card per link; `""` puts each link in the side menu directly |
-| `rancher.navLink.icons.report` / `.quotas` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
+| `rancher.navLink.icons.report` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
@@ -294,7 +290,6 @@ ConfigMaps.
 | `/api/report` | Latest report plus collector status (JSON; gzip when accepted, `304` for an unchanged `ETag`) |
 | `POST /api/refresh` | Trigger a collection |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
-| `/quotas`, `/api/quotas`, `/api/quotas/export.yaml`, `/api/quotas/manifests.yaml`, `/download/quotas.csv` | Namespace quotas page, its JSON (settings as query parameters), the proposal as allocation files or as ResourceQuota + LimitRange manifests, CSV |
 | `/healthz` | Liveness and readiness |
 | `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml`, `/api/planner/history[/<n>]` | Allocation planner, with `planner.enabled` |
 | `/capacity`, `/api/capacity` (`GET`, `PUT`), `/api/capacity/export.yaml`, `/api/capacity/history[/<n>]` | Capacity planner, with `capacityPlanner.enabled` |

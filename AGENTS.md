@@ -18,8 +18,8 @@ several namespaces each), plus some AKS clusters.
 |---|---|
 | `docs/` | Design and process docs (numbered), `open-questions.md`; `docs/images/` holds the README screenshots (synthetic demo data) |
 | `docs/adr/` | Architecture decision records; copy `0000-template.md` for new ones |
-| `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `allocation-as-code.md`, `namespace-quotas.md`), separate from the design docs |
-| `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `quotas.py` + `static/quotas.html` (namespace quotas page: current ResourceQuota / LimitRange per namespace, proposed soft quota, sold vs. sellable, exports; computed from the report); `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
+| `guides/` | User guides for the tools (`installation.md`, `allocation-planner.md`, `allocation-as-code.md`), separate from the design docs |
+| `discovery/` | `discover.py` (CLI) and `server.py` + `static/index.html` (in-cluster dashboard): read-only baseline of requests, limits and usage; `planner.py` + `static/planner.html` (allocation planner, plans only); `publish_rancher_names.py` publishes Rancher Project names to downstream clusters (Fleet Bundle) |
 | `allocation/` | `generate.py` checks allocation files (`settings.yaml`, `projects/*.yaml`: vCPU and memory per project, cluster and namespace, no money) and writes a ResourceQuota + LimitRange per namespace (plain Kubernetes, no Rancher objects); applies nothing. `--discover` reads nodes and pods (read-only, `kubectl get`) and rewrites the `clusters:` section of `settings.yaml`; `--import-projects` writes starting `projects/*.yaml` from Rancher Projects (namespace annotation + `projects.json`) and never changes an existing allocation. `examples/` is the sample allocations directory |
 | `charts/cluster-resource-report/` | Helm chart that runs `server.py` in a cluster; image from `discovery/Dockerfile` |
 | `policies/remove-cpu-limits/` | Kubewarden mutating policy (Go, TinyGo, waPC) that removes `limits.cpu` from containers at admission; `manifests/` holds the ClusterAdmissionPolicy, `test_data/` the admission requests for the Go and bats tests |
@@ -36,7 +36,7 @@ several namespaces each), plus some AKS clusters.
   (`rancher.deployDownstream`). Never other workloads, quotas or Rancher objects.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
 - `allocation/` uses the Python standard library and `kubectl get` only (its own YAML subset reader) and writes files only, never to a cluster.
-- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner test_quotas`;
+- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner`;
   for `allocation/`: `cd allocation && python3 -m unittest -v test_generate`.
   After changing the chart: `helm lint charts/cluster-resource-report`.
 - `policies/remove-cpu-limits/` is Go built with TinyGo (`make test` for unit tests; `make e2e-tests` needs tinygo, kwctl, bats, jq).

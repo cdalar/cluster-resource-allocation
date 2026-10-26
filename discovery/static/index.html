@@ -147,6 +147,7 @@ tr.selected { background: var(--hover); }
     <div class="actions">
       <select id="cluster" aria-label="Cluster" hidden></select>
       <button id="refresh" type="button">Collect now</button>
+      <a id="cluster-link" href="#" target="_blank" rel="noopener" hidden>Open this cluster's dashboard</a>
       <a id="planner-link" href="planner" hidden>Allocation planner</a>
       <a id="capacity-link" href="capacity" hidden>Capacity planner</a>
       <span class="sub">CSV:
@@ -164,13 +165,22 @@ tr.selected { background: var(--hover); }
 
   <div class="card section">
     <div class="section-head">
-      <div><h2>Cluster capacity by requests</h2><div class="sub">Scheduled requests vs. allocatable of schedulable nodes</div></div>
+      <div><h2 id="capTitle">Cluster capacity by requests</h2><div class="sub" id="capSub">Scheduled requests vs. allocatable of schedulable nodes</div></div>
       <div class="legend" id="capLegend"></div>
     </div>
     <div id="capacity"></div>
     <div class="sub" id="n1note" style="margin-top:8px"></div>
   </div>
 
+  <div class="card section" id="fleetSection" hidden>
+    <div class="section-head">
+      <div><h2>Clusters</h2><div class="sub">Each cluster's own report. Click a cluster to open its dashboard here.</div></div>
+    </div>
+    <div class="table-wrap"><table id="fleetTable"></table></div>
+    <div class="sub" id="fleetNote" style="margin-top:8px"></div>
+  </div>
+
+  <div id="perCluster">
   <div class="filters" role="group" aria-label="Filters">
     <label class="chip"><input type="checkbox" value="tenant" checked> Tenant</label>
     <label class="chip"><input type="checkbox" value="unassigned" checked> Unassigned</label>
@@ -230,6 +240,8 @@ tr.selected { background: var(--hover); }
     <div class="table-wrap"><table id="nsTable"></table></div>
   </div>
 
+  </div>
+
   <p class="sub">Requests are effective pod requests (incl. init/sidecar containers and overhead), as counted by the scheduler and ResourceQuota.
   "Used" is P95 over the window when Prometheus is available, otherwise the current metrics-server snapshot.
   Efficiency = used / requested. Quota = the tightest ResourceQuota of the namespace (requests.cpu / requests.memory, or cpu / memory);
@@ -241,7 +253,7 @@ tr.selected { background: var(--hover); }
 "use strict";
 const $ = (s) => document.querySelector(s);
 const state = { data: null, status: null, cluster: null, cats: new Set(["tenant", "unassigned"]), q: "", project: null,
-                sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1] },
+                sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1], fleet: ["cluster", 1] }, clusterChosen: false,
                 quota: { level: "ns", only: true, all: false } };
 const QUOTA_ROWS = 20;   // rows per quota chart before "Show all"
 
@@ -317,8 +329,69 @@ function attachTip(node, fn) {
 }
 
 // ---------- data selection ----------
+// ---------- fleet view: the downstream clusters' own reports through Rancher's proxy ----------
+// Opened through Rancher, the page lives under /k8s/clusters/<id>/api/v1/namespaces/<ns>/services/<svc>/proxy/.
+// The same path on another cluster id is that cluster's dashboard, reachable with the user's Rancher session, so
+// the page reads each downstream cluster's own /api/report there: no token, no network path between clusters.
+const FLEET = "*";
+const rancherPrefix = (() => { const m = location.pathname.match(/^(.*?)\/k8s\/clusters\/[^/]+\//); return m ? m[1] : null; })();
+const remote = { clusters: null, error: null, reports: {}, at: 0 };   // reports: Rancher cluster id -> entry
+let localReport = null;
+const fleetMode = () => state.cluster === FLEET;
+function downstreamUrl(id, path) {
+  const d = state.status.downstream;
+  return `${rancherPrefix}/k8s/clusters/${id}/api/v1/namespaces/${d.namespace}/services/http:${d.service}:${d.port}/proxy/${path}`;
+}
+async function loadRemote(force) {
+  const d = state.status && state.status.downstream;
+  if (!d || rancherPrefix === null) return;
+  if (!force && Date.now() - remote.at < 55000) return;   // the local poll is faster while it collects
+  remote.at = Date.now();
+  try {
+    const res = await fetch("api/clusters", { cache: "no-store" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    remote.clusters = body.clusters; remote.error = null;
+  } catch (e) { remote.error = e.message; return; }
+  const others = remote.clusters.filter((c) => !c.local);
+  for (const id of Object.keys(remote.reports)) if (!others.some((c) => c.id === id)) delete remote.reports[id];
+  await Promise.all(others.map(async (c) => {
+    const r = remote.reports[c.id] || (remote.reports[c.id] = { etag: null, report: null, status: null, error: null });
+    Object.assign(r, { id: c.id, name: c.name, ready: c.ready, provider: c.provider, url: downstreamUrl(c.id, "") });
+    if (!c.ready) { r.error = "cluster not ready in Rancher"; return; }
+    try {
+      const res = await fetch(downstreamUrl(c.id, "api/report"), { cache: "no-store", headers: r.etag ? { "If-None-Match": r.etag } : {} });
+      if (res.status === 304) return;
+      if (!res.ok) throw new Error(res.status === 404 || res.status === 503 ? `no dashboard on this cluster (HTTP ${res.status})` : `HTTP ${res.status}`);
+      r.etag = res.headers.get("ETag");
+      const body = await res.json();
+      r.status = body.status; r.report = body.report; r.error = null;
+    } catch (e) { r.error = e.message; }
+  }));
+}
+// one report out of the local one and the downstream ones; each cluster row carries its report's time and log
+function mergeReports() {
+  const out = { clusters: [], projects: [], namespaces: [], collected_at: null, settings: {}, log: [] };
+  const add = (rep, source, entry) => {
+    if (!rep || !rep.clusters) return;
+    // a downstream dashboard scans one cluster and may call it "in-cluster": use Rancher's name, also on its rows
+    const rename = source === "downstream" && rep.clusters.length === 1 && rep.clusters[0].cluster !== entry.name
+      ? { [rep.clusters[0].cluster]: entry.name } : {};
+    const fix = (row) => (rename[row.cluster] ? { ...row, cluster: rename[row.cluster] } : row);
+    for (const c of rep.clusters) out.clusters.push({ ...fix(c), collected_at: rep.collected_at, window: rep.settings && rep.settings.window,
+      source, log: rep.log || [], dashboard_url: entry && entry.url, versions: entry && entry.status && entry.status.versions, rancher_id: entry && entry.id });
+    out.projects.push(...rep.projects.map(fix));
+    out.namespaces.push(...rep.namespaces.map(fix));
+  };
+  add(localReport, "local", null);
+  if (localReport) { out.collected_at = localReport.collected_at; out.settings = localReport.settings; out.log = localReport.log; }
+  for (const r of Object.values(remote.reports).sort((a, b) => a.name.localeCompare(b.name))) add(r.report, "downstream", r);
+  return out.clusters.length || localReport ? out : null;
+}
+const unreachable = () => Object.values(remote.reports).filter((r) => !r.report);
+
 function currentClusterRow() {
-  if (!state.data) return null;
+  if (!state.data || fleetMode()) return null;
   return state.data.clusters.find((c) => c.cluster === state.cluster) || state.data.clusters[0];
 }
 function matchesQuery(...fields) {
@@ -349,14 +422,23 @@ function renderMeta() {
   const r = state.data, st = state.status;
   const parts = [];
   const c = currentClusterRow();
-  if (c) parts.push(c.cluster);
-  if (r) parts.push(`collected ${ago(r.collected_at)} (${new Date(r.collected_at).toLocaleString()})`);
-  if (r) parts.push(`window ${r.settings.window}`);
-  if (st && st.state === "collecting") parts.push("collecting now…");
-  else if (st && st.next_run) parts.push(`next ${new Date(st.next_run).toLocaleTimeString()}`);
+  const down = c && c.source === "downstream";
+  if (fleetMode() && r) {
+    const n = r.clusters.length, bad = unreachable().length;
+    parts.push("All clusters", `${n} reporting` + (bad ? `, ${bad} not reachable` : ""));
+  } else if (c) {
+    parts.push(c.cluster, `collected ${ago(c.collected_at)} (${new Date(c.collected_at).toLocaleString()})`, `window ${c.window}`);
+    if (down) parts.push("via Rancher's proxy");
+  }
+  if (!down && st && st.state === "collecting") parts.push("collecting now…");
+  else if (!down && !fleetMode() && st && st.next_run) parts.push(`next ${new Date(st.next_run).toLocaleTimeString()}`);
   $("#meta").textContent = parts.join(" · ") || "No report yet";
-  $("#version").textContent = versionText(st && st.versions);
-  $("#refresh").disabled = !st || !st.collect_enabled || st.state === "collecting";
+  $("#version").textContent = versionText(down ? c.versions : st && st.versions);
+  $("#refresh").disabled = !st || !st.collect_enabled || st.state === "collecting" || down;
+  $("#refresh").hidden = fleetMode();
+  $("#refresh").title = down ? "Collect now on the cluster's own dashboard" : "";
+  $("#cluster-link").hidden = !down;
+  if (down) $("#cluster-link").href = c.dashboard_url;
   $("#planner-link").hidden = !(st && st.planner);
   $("#capacity-link").hidden = !(st && st.capacity_planner);
 }
@@ -374,10 +456,18 @@ function renderBanners() {
   const st = state.status, r = state.data;
   if (st && st.last_error) out.push(statusBanner("critical", "Last collection failed — showing the previous report", [st.last_error]));
   if (!r && st && st.state === "collecting") out.push(statusBanner("warning", "First collection is running. This page refreshes automatically."));
-  if (r && r.log && r.log.length) {
-    const relevant = r.log.filter((w) => /unavailable|WARNING|FAILED|could not/.test(w));
+  const c = currentClusterRow(), log = c ? c.log : (r && !fleetMode() ? r.log : null);
+  if (log && log.length) {
+    const relevant = log.filter((w) => /unavailable|WARNING|FAILED|could not/.test(w));
     if (relevant.length) out.push(statusBanner("warning", "Collection warnings", relevant));
   }
+  if (fleetMode()) {
+    if (remote.error) out.push(statusBanner("warning", "Could not list the Rancher clusters", [remote.error]));
+    const bad = unreachable();
+    if (bad.length) out.push(statusBanner("warning", `${bad.length} cluster(s) without a report`, bad.map((x) => `${x.name}: ${x.error}`)));
+  }
+  if (st && st.downstream && rancherPrefix === null) out.push(statusBanner("warning", "Open this page through Rancher to see the downstream clusters",
+    ["Their reports are loaded through Rancher's proxy with your Rancher session; from a port-forward only this cluster is shown."]));
   $("#banners").replaceChildren(...out);
 }
 
@@ -390,7 +480,33 @@ function tile(label, value, unit, note, status) {
   } else if (n) n.textContent = note;
   return el("div", { class: "card tile" }, el("div", { class: "label", text: label }), v, n);
 }
+// All clusters: the same tiles summed over the reporting clusters
+function fleetTiles() {
+  const cs = state.data.clusters, sum = (k) => cs.reduce((a, c) => a + (Number(c[k]) || 0), 0);
+  const cpuSched = sum("cpu_requests_total") - sum("cpu_requests_pending") - sum("cpu_requests_excluded_nodes");
+  const memSched = sum("mem_requests_gib_total") - sum("mem_requests_pending_gib") - sum("mem_requests_excluded_nodes_gib");
+  const allocCpu = sum("alloc_cpu_schedulable"), allocMem = sum("alloc_mem_gib_schedulable");
+  const ns = state.data.namespaces;
+  const cpuU = ns.reduce((a, n) => a + ((n.cpu_usage_p95 || n.cpu_usage_now) || 0), 0), memU = ns.reduce((a, n) => a + ((n.mem_usage_p95_gib || n.mem_usage_now_gib) || 0), 0);
+  const noCpu = sum("containers_no_cpu_request"), containers = sum("containers");
+  const bad = unreachable().length;
+  const n1 = cs.map((c) => n1Numbers(c) && c.nodes_schedulable >= 2 && n1Numbers(c).cpuProjects <= c.cpu_for_projects_n1 + 1e-9 && n1Numbers(c).memProjects <= c.mem_gib_for_projects_n1 + 1e-9);
+  const n1Known = cs.filter((c) => n1Numbers(c)).length, n1Fit = n1.filter(Boolean).length;
+  return [
+    tile("Clusters reporting", f0.format(cs.length), "", bad ? `${bad} not reachable` : "all Rancher clusters", bad ? "warning" : "good"),
+    tile("Allocatable (schedulable nodes)", smart(allocCpu), "vCPU", `${smart(allocMem)} GiB · ${f0.format(sum("nodes_schedulable"))} of ${f0.format(sum("nodes"))} nodes`),
+    tile("CPU requested", allocCpu ? `${num(100 * cpuSched / allocCpu, 0)}%` : "–", "", `${smart(cpuSched)} of ${smart(allocCpu)} vCPU`),
+    tile("Memory requested", allocMem ? `${num(100 * memSched / allocMem, 0)}%` : "–", "", `${smart(memSched)} of ${smart(allocMem)} GiB`),
+    n1Known ? tile("Room for projects (N+1)", `${f0.format(n1Fit)} of ${f0.format(n1Known)}`, "clusters", n1Fit === n1Known ? "projects fit after a node failure" : `${f0.format(n1Known - n1Fit)} would not fit after a node failure`, n1Fit === n1Known ? "good" : "serious") : null,
+    tile("Used (P95 or now)", smart(cpuU), "vCPU", `${smart(memU)} GiB memory`),
+    tile("Containers without CPU request", f0.format(noCpu), "", noCpu ? `${containers ? Math.round(100 * noCpu / containers) : 0}% of ${f0.format(containers)} · ${f0.format(sum("containers_no_mem_limit"))} without memory limit` : `all ${f0.format(containers)} set`, noCpu ? "serious" : "good"),
+    tile("Pending requests", smart(sum("cpu_requests_pending")), "vCPU", `${smart(sum("mem_requests_pending_gib"))} GiB · not scheduled`, sum("cpu_requests_pending") > 0 ? "warning" : null),
+    tile("Unassigned namespaces", f0.format(sum("namespaces_unassigned")), "", "not in any Rancher Project", sum("namespaces_unassigned") > 0 ? "warning" : null),
+    quotaTile(ns),
+  ].filter(Boolean);
+}
 function renderTiles() {
+  if (fleetMode()) { $("#tiles").replaceChildren(...fleetTiles()); return; }
   const c = currentClusterRow();
   if (!c) { $("#tiles").replaceChildren(); return; }
   // requests on the schedulable nodes: not pending, not on excluded nodes (tainted control plane, cordoned)
@@ -413,13 +529,13 @@ function renderTiles() {
       c.cpu_requests_pending > 0 ? "warning" : null),
     tile("Unassigned namespaces", f0.format(c.namespaces_unassigned), "", "not in any Rancher Project",
       c.namespaces_unassigned > 0 ? "warning" : null),
-    quotaTile(c),
+    quotaTile(state.data.namespaces.filter((n) => n.cluster === c.cluster)),
   ].filter(Boolean));
 }
 
 // ResourceQuota coverage of the project namespaces (tenant + unassigned), and how full the quotas are
-function quotaTile(c) {
-  const ns = state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category !== "system");
+function quotaTile(rows) {
+  const ns = rows.filter((n) => n.category !== "system");
   if (!ns.length || ns[0].quota_names === undefined) return null;   // report from before these fields existed
   const withQ = ns.filter(hasQuota);
   const sum = (rows, k) => rows.reduce((a, n) => a + (Number(n[k]) || 0), 0);
@@ -487,32 +603,59 @@ function niceScale(maxv, n = 4) {
 }
 function widthOf(box, fallback) { return Math.max(280, Math.floor(box.clientWidth || fallback)); }
 
-function renderCapacity() {
-  const c = currentClusterRow();
-  const box = $("#capacity");
-  if (!c) { box.replaceChildren(); return; }
-  const colors = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
-  const names = ["Tenant", "System", "Unassigned"];
-  legend("#capLegend", [[colors[0], "Tenant"], [colors[1], "System (platform)"], [colors[2], "Unassigned"], ["var(--track)", "Free"]]);
-  if (c.alloc_cpu_n1 != null) $("#capLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border-left:2px dashed var(--text-primary);border-radius:0" }), "If the largest node fails"));
-  renderN1Note(c);
+const CAP_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+// the two capacity rows (CPU, memory) of one cluster: [label, unit, allocatable, [tenant, system, unassigned], %, N+1]
+function capacityRows(c, label) {
   // not on the schedulable nodes: pending, or on excluded nodes (tainted control plane, cordoned)
   const pend = (cat, res) => state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category === cat)
     .reduce((a, n) => a + (res === "cpu" ? n.cpu_requests_pending + (n.cpu_requests_excluded_nodes || 0)
                                          : n.mem_requests_pending_gib + (n.mem_requests_excluded_nodes_gib || 0)), 0);
-  const rows = [
-    ["CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable, c.alloc_cpu_n1],
-    ["Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable, c.alloc_mem_gib_n1],
+  return [
+    [label || "CPU", "vCPU", c.alloc_cpu_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`cpu_requests_${k}`] - pend(k, "cpu")), c.cpu_requests_pct_of_schedulable, c.alloc_cpu_n1, c],
+    [label || "Memory", "GiB", c.alloc_mem_gib_schedulable, ["tenant", "system", "unassigned"].map((k) => c[`mem_requests_gib_${k}`] - pend(k, "mem")), c.mem_requests_pct_of_schedulable, c.alloc_mem_gib_n1, c],
   ];
+}
+function renderCapacity() {
+  const box = $("#capacity");
+  const anyN1 = state.data.clusters.some((c) => c.alloc_cpu_n1 != null);
+  legend("#capLegend", [[CAP_COLORS[0], "Tenant"], [CAP_COLORS[1], "System (platform)"], [CAP_COLORS[2], "Unassigned"], ["var(--track)", "Free"]]);
+  if (anyN1) $("#capLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border-left:2px dashed var(--text-primary);border-radius:0" }), "If the largest node fails"));
+  if (fleetMode()) {
+    $("#capTitle").textContent = "Capacity by requests, all clusters";
+    $("#capSub").textContent = "Scheduled requests vs. allocatable of schedulable nodes, per cluster. Click a cluster to open it.";
+    $("#n1note").replaceChildren();
+    const cs = state.data.clusters.slice().sort((a, b) => (b.cpu_requests_pct_of_schedulable || 0) - (a.cpu_requests_pct_of_schedulable || 0));
+    const rows = cs.map((c) => capacityRows(c, c.cluster));
+    box.replaceChildren(
+      el("h2", { class: "sub", style: "font-weight:600;margin:4px 0 6px", text: "CPU · vCPU" }), drawCapacity(box, rows.map((r) => r[0]), true),
+      el("h2", { class: "sub", style: "font-weight:600;margin:12px 0 6px", text: "Memory · GiB" }), drawCapacity(box, rows.map((r) => r[1]), true));
+    return;
+  }
+  const c = currentClusterRow();
+  if (!c) { box.replaceChildren(); return; }
+  $("#capTitle").textContent = "Cluster capacity by requests";
+  $("#capSub").textContent = "Scheduled requests vs. allocatable of schedulable nodes";
+  renderN1Note(c);
+  box.replaceChildren(drawCapacity(box, capacityRows(c)));
+}
+function drawCapacity(box, rows, fleet) {
+  const colors = CAP_COLORS, names = ["Tenant", "System", "Unassigned"];
   const W = widthOf(box, 1000), narrow = W < 640;
-  const labelW = narrow ? 0 : 70, rightW = narrow ? 0 : 210, barH = 22;
+  const labelW = narrow ? 0 : fleet ? Math.min(200, Math.round(W * 0.22)) : 70, rightW = narrow ? 0 : 210, barH = 22;
   const rowH = narrow ? 64 : 40, barY = narrow ? 18 : 6;
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${rows.length * rowH}`, width: W, height: rows.length * rowH, role: "img", "aria-label": "Cluster capacity by requests" });
-  rows.forEach(([name, unit, alloc, parts, pctOfAlloc, n1], i) => {
+  const maxChars = Math.floor((labelW - 8) / 7.4);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${rows.length * rowH}`, width: W, height: rows.length * rowH, role: "img", "aria-label": "Capacity by requests" });
+  rows.forEach(([name, unit, alloc, parts, pctOfAlloc, n1, c], i) => {
     const y = i * rowH + barY, plotW = W - labelW - rightW;
     const total = parts.reduce((a, b) => a + Math.max(b, 0), 0);
     const scale = plotW / Math.max(alloc, total, 1e-9);
-    const t = sv("text", { x: 0, y: narrow ? y - 6 : y + barH / 2 + 4 }); t.textContent = name; svg.append(t);
+    const t = sv("text", { x: 0, y: narrow ? y - 6 : y + barH / 2 + 4 }); t.textContent = !narrow && name.length > maxChars ? name.slice(0, maxChars - 1) + "…" : name; svg.append(t);
+    if (fleet) {   // whole row: tooltip with the cluster, click opens it
+      const hit = sv("rect", { x: 0, y: i * rowH, width: W, height: rowH, class: "hit" });
+      attachTip(hit, (e) => showTip(e, c.cluster, [[null, "Requested", `${smart(total)} of ${smart(alloc)} ${unit}`], [null, "Collected", ago(c.collected_at)], [null, "Nodes", `${f0.format(c.nodes_schedulable)} schedulable of ${f0.format(c.nodes)}`]]));
+      hit.addEventListener("click", () => selectCluster(c.cluster));
+      svg.append(hit);
+    }
     svg.append(sv("rect", { x: labelW, y, width: Math.max(alloc, total) * scale, height: barH, rx: 4, fill: "var(--track)" }));
     let x = labelW;
     parts.forEach((v, k) => {
@@ -542,7 +685,49 @@ function renderCapacity() {
     lbl.textContent = `${num(pctOfAlloc, 0)}% · ` + (free >= 0 ? `${smart(free)} ${unit} free` : `over by ${smart(-free)} ${unit}`);
     svg.append(lbl);
   });
-  box.replaceChildren(svg);
+  return svg;
+}
+
+// ---------- fleet: the clusters table ----------
+function renderFleetTable() {
+  const n1Fits = (c) => { const n = n1Numbers(c); if (!n) return null; if (c.nodes_schedulable < 2) return false;
+    return n.cpuProjects <= c.cpu_for_projects_n1 + 1e-9 && n.memProjects <= c.mem_gib_for_projects_n1 + 1e-9; };
+  const quotaCov = (c) => { const ns = state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category !== "system");
+    return ns.length && ns[0].quota_names !== undefined ? [ns.filter(hasQuota).length, ns.length] : null; };
+  const rows = state.data.clusters.map((c) => ({ ...c, _ok: true }))
+    .concat(unreachable().map((r) => ({ cluster: r.name, _ok: false, _error: r.error, source: "downstream", dashboard_url: r.url })));
+  const dash = (v) => (v === undefined || v === null || v === "" ? "–" : v);
+  const cols = [
+    { k: "cluster", h: "Cluster", l: true },
+    { k: "status", h: "Report", l: true, v: (r) => (r._ok ? ago(r.collected_at) : r._error), cell: (r) => { const td = el("td", { class: "l" });
+      if (r._ok) td.textContent = `collected ${ago(r.collected_at)}` + (r.source === "local" ? " (this cluster)" : "");
+      else td.append(el("span", { class: "flag" }, el("span", { class: "dot", style: "background:var(--status-serious)" }), r._error)); return td; } },
+    { k: "nodes_schedulable", h: "Nodes", title: "Schedulable / all", fmt: (r) => r._ok ? `${f0.format(r.nodes_schedulable)} / ${f0.format(r.nodes)}` : "–" },
+    { k: "alloc_cpu_schedulable", h: "vCPU", title: "Allocatable of schedulable nodes", fmt: (r) => r._ok ? smart(r.alloc_cpu_schedulable) : "–" },
+    { k: "alloc_mem_gib_schedulable", h: "GiB", title: "Allocatable memory of schedulable nodes", fmt: (r) => r._ok ? smart(r.alloc_mem_gib_schedulable) : "–" },
+    { k: "cpu_requests_pct_of_schedulable", h: "CPU req %", fmt: (r) => r._ok ? `${num(r.cpu_requests_pct_of_schedulable, 0)}%` : "–" },
+    { k: "mem_requests_pct_of_schedulable", h: "Mem req %", fmt: (r) => r._ok ? `${num(r.mem_requests_pct_of_schedulable, 0)}%` : "–" },
+    { k: "n1", h: "N+1", title: "Do the projects' requests fit if the largest node fails?", v: (r) => (r._ok ? (n1Fits(r) === null ? 0 : n1Fits(r) ? 2 : 1) : 0), cell: (r) => { const f = r._ok ? n1Fits(r) : null; const td = el("td");
+      if (f === null) td.textContent = "–"; else td.append(el("span", { class: "flag" }, el("span", { class: "dot", style: `background:var(--status-${f ? "good" : "serious"})` }), f ? "fits" : "does not fit")); return td; } },
+    { k: "cpu_requests_pending", h: "Pending vCPU", cell: (r) => r._ok ? countCell(r.cpu_requests_pending > 0 ? Math.round(r.cpu_requests_pending * 100) / 100 : 0, "warning") : el("td", { text: "–" }) },
+    { k: "containers_no_cpu_request", h: "No CPU req", title: "Containers without CPU request", cell: (r) => r._ok ? countCell(r.containers_no_cpu_request, "serious") : el("td", { text: "–" }) },
+    { k: "namespaces_unassigned", h: "Unassigned NS", cell: (r) => r._ok ? countCell(r.namespaces_unassigned, "warning") : el("td", { text: "–" }) },
+    { k: "quota", h: "Quota NS", title: "Project namespaces with a ResourceQuota", v: (r) => { const q = r._ok && quotaCov(r); return q && q[1] ? q[0] / q[1] : 0; }, fmt: (r) => { const q = r._ok && quotaCov(r); return q ? `${f0.format(q[0])} / ${f0.format(q[1])}` : "–"; } },
+    { k: "version", h: "Version", l: true, v: (r) => versionText(r.versions) || "", fmt: (r) => dash(r._ok ? (r.source === "local" ? versionText(state.status && state.status.versions) : versionText(r.versions)) || "" : "") },
+  ];
+  renderTable($("#fleetTable"), "fleet", cols, rows, (tr, r) => {
+    if (!r._ok) return;
+    tr.classList.add("clickable");
+    tr.addEventListener("click", () => selectCluster(r.cluster));
+  });
+  const d = state.status && state.status.downstream;
+  $("#fleetNote").textContent = d ? `Downstream reports are read from each cluster's own dashboard (${d.namespace}/${d.service}) through Rancher's proxy, with your Rancher session: you see the clusters you may access in Rancher. Collect on a cluster from its own dashboard.` : "";
+}
+function selectCluster(name) {
+  state.cluster = name; state.clusterChosen = true; state.project = null;
+  try { history.replaceState(null, "", name === FLEET ? "#" : "#cluster=" + encodeURIComponent(name)); } catch (e) { /* ignore */ }
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 // ---------- requests vs. ResourceQuota ----------
@@ -807,18 +992,24 @@ function selectProject(key) {
 function renderClusterSelect() {
   const sel = $("#cluster");
   const names = state.data ? state.data.clusters.map((c) => c.cluster) : [];
-  sel.hidden = names.length < 2;
-  if (!names.includes(state.cluster)) state.cluster = names[0] || null;
-  sel.replaceChildren(...names.map((n) => { const o = el("option", { value: n, text: n }); if (n === state.cluster) o.selected = true; return o; }));
+  const multi = names.length + unreachable().length > 1;
+  sel.hidden = !multi;
+  if (multi && !state.clusterChosen) state.cluster = FLEET;   // several clusters: start with the overview
+  else if (state.cluster === FLEET ? !multi : !names.includes(state.cluster)) state.cluster = names[0] || null;
+  const opts = (multi ? [[FLEET, `All clusters (${names.length})`]] : []).concat(names.map((n) => [n, n]));
+  sel.replaceChildren(...opts.map(([v, n]) => { const o = el("option", { value: v, text: n }); if (v === state.cluster) o.selected = true; return o; }));
 }
 
 function render() {
+  if (state.data) renderClusterSelect();
   renderMeta();
   renderBanners();
   if (!state.data) return;
-  renderClusterSelect();
   renderTiles();
   renderCapacity();
+  $("#fleetSection").hidden = !fleetMode();
+  $("#perCluster").hidden = fleetMode();
+  if (fleetMode()) { renderFleetTable(); return; }
   renderProjectChart("#cpuChart", "#cpuLegend", "cpu_requests", cpuUsed, "vCPU");
   renderProjectChart("#memChart", "#memLegend", "mem_requests_gib", memUsed, "GiB");
   renderQuota();
@@ -827,25 +1018,26 @@ function render() {
 }
 
 // ---------- data loading ----------
-let lastCollected = null, etag = null;
+let etag = null;
 async function load() {
   $("#app").classList.add("loading");
   try {
     // the server answers 304 (no body) when nothing changed since the answer whose ETag we send back
     const res = await fetch("api/report", { cache: "no-store", headers: etag ? { "If-None-Match": etag } : {} });
-    if (res.status === 304) {
-      renderMeta();   // "collected … ago" still moves
-    } else {
+    let changed = false;
+    if (res.status !== 304) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       etag = res.headers.get("ETag");
       const body = await res.json();
       state.status = body.status;
-      if (body.report && body.report.collected_at !== lastCollected) {
-        state.data = body.report;
-        lastCollected = body.report.collected_at;
-      }
-      render();
+      if (body.report) localReport = body.report;
+      changed = true;
     }
+    const before = JSON.stringify(Object.values(remote.reports).map((r) => [r.etag, r.error]));
+    await loadRemote(!remote.clusters);
+    changed = changed || before !== JSON.stringify(Object.values(remote.reports).map((r) => [r.etag, r.error]));
+    if (changed) { state.data = mergeReports(); render(); }
+    else renderMeta();   // "collected … ago" still moves
   } catch (e) {
     $("#meta").textContent = `Could not load report: ${e.message}`;
   } finally {
@@ -861,7 +1053,7 @@ $("#refresh").addEventListener("click", async () => {
   if (state.status) state.status.state = "collecting";
   renderMeta();
 });
-$("#cluster").addEventListener("change", (e) => { state.cluster = e.target.value; state.project = null; render(); });
+$("#cluster").addEventListener("change", (e) => selectCluster(e.target.value));
 document.querySelectorAll(".filters input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
   if (cb.checked) state.cats.add(cb.value); else state.cats.delete(cb.value);
   render();
@@ -878,6 +1070,7 @@ $("#theme").addEventListener("click", () => {
   try { localStorage.setItem("theme", root.dataset.theme); } catch (e) { /* storage unavailable */ }
 });
 try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+{ const m = location.hash.match(/^#cluster=(.+)$/); if (m) { state.cluster = decodeURIComponent(m[1]); state.clusterChosen = true; } }
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
 load();

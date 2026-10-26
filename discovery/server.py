@@ -8,6 +8,10 @@ Endpoints (all relative, so the app also works behind the Rancher/API server ser
   POST /api/refresh         trigger a collection now
   GET  /download/<name>.csv clusters / projects / namespaces
   GET  /healthz             liveness/readiness
+  GET  /api/clusters        Rancher local cluster with --downstream-report: the clusters Rancher manages (id, name,
+                            ready). The page then loads each downstream cluster's own dashboard report through
+                            Rancher's proxy (/k8s/clusters/<id>/...) with the browser's Rancher session -- this
+                            server never talks to downstream clusters and holds no token.
 
 With --planner (Rancher local cluster only), also the allocation planner (planner.py):
   GET  /planner                  planner page
@@ -100,8 +104,13 @@ class Collector:
         return etag, gz
 
     def status(self):
+        downstream = None
+        if getattr(self.args, "downstream_report", None):
+            ns, svc, port = parse_downstream_report(self.args.downstream_report)
+            downstream = {"namespace": ns, "service": svc, "port": port}
         with self.lock:
             return {
+                "downstream": downstream,
                 "state": self.state,
                 "last_error": self.last_error,
                 "next_run": self.next_run,
@@ -146,6 +155,36 @@ class Collector:
                 self.next_run = nxt.isoformat(timespec="seconds")
             self.wake.wait(self.interval)
             self.wake.clear()
+
+
+def parse_downstream_report(s):
+    """NAMESPACE/SERVICE:PORT of this chart's Service on the downstream clusters -> (namespace, service, port)."""
+    m = re.fullmatch(r"([a-z0-9.-]+)/([a-z0-9.-]+):(\d{1,5})", s or "")
+    if not m:
+        raise ValueError(f"--downstream-report must be NAMESPACE/SERVICE:PORT, got {s!r}")
+    return m.group(1), m.group(2), int(m.group(3))
+
+
+class RancherClusters:
+    """The clusters Rancher manages, read from the local cluster and cached for a minute (for /api/clusters)."""
+
+    TTL = 60
+
+    def __init__(self, args, loader=None):
+        if loader is None:
+            if args.rancher_local_self:
+                ctx, kubeconfig = (args.context[0] if args.context else None), None
+            else:
+                ctx = args.rancher_local_context
+                kubeconfig = os.path.expanduser(args.rancher_local_kubeconfig) if args.rancher_local_kubeconfig else None
+            loader = lambda: discover.rancher_cluster_list(ctx, kubeconfig)  # noqa: E731
+        self._load, self._clusters, self._at, self.lock = loader, None, 0.0, threading.Lock()
+
+    def list(self):
+        with self.lock:
+            if self._clusters is None or time.monotonic() - self._at > self.TTL:
+                self._clusters, self._at = self._load(), time.monotonic()
+            return self._clusters
 
 
 class PlannerBackend:
@@ -209,7 +248,7 @@ class PlannerBackend:
             return self.view(self.store.save(body.get("plan"), body["version"], body.get("restored_from")))
 
 
-def make_handler(collector, planner_backend=None, capacity_backend=None):
+def make_handler(collector, planner_backend=None, capacity_backend=None, rancher_clusters=None):
     # URL name -> planner backend; both are served by static/planner.html, which takes its mode from the API
     planners = {name: b for name, b in (("planner", planner_backend), ("capacity", capacity_backend)) if b}
 
@@ -288,6 +327,13 @@ def make_handler(collector, planner_backend=None, capacity_backend=None):
                            {"Content-Disposition": 'attachment; filename="allocations.yaml"'})
             elif path == "/api/report":
                 self._report()
+            elif path == "/api/clusters":
+                if rancher_clusters is None:
+                    return self._json(404, {"error": "not on the Rancher local cluster (no --downstream-report)"})
+                try:
+                    self._json(200, {"clusters": rancher_clusters.list()})
+                except discover.KubectlError as e:
+                    self._json(502, {"error": f"could not list the Rancher clusters: {discover.first_line(e)}"})
             elif path == "/healthz":
                 self._send(200, "ok", "text/plain")
             elif path.startswith("/download/") and path.endswith(".csv"):
@@ -378,6 +424,10 @@ def main():
     ap.add_argument("--capacity-planner", action="store_true",
                     help="also serve the capacity planner: the allocation planner without money, with a CPU and "
                          "memory envelope per project (same Rancher access as --planner)")
+    ap.add_argument("--downstream-report", metavar="NAMESPACE/SERVICE:PORT",
+                    help="Rancher local cluster only: where this dashboard's Service is on the downstream clusters "
+                         "(e.g. resource-report/resource-report-cluster-resource-report:80). The page then lists all "
+                         "Rancher clusters and shows each one's report through Rancher's proxy (fleet view)")
     ap.add_argument("--plan-configmaps", metavar="NAMESPACE/PREFIX",
                     help="keep the planners' plans in the ConfigMaps PREFIX-planner and PREFIX-capacity (in this "
                          "cluster; needs get/update on them) instead of files in --data-dir")
@@ -390,6 +440,14 @@ def main():
             ap.error(f"--{opt}: {e}")
     if args.plan_configmaps and "/" not in args.plan_configmaps:
         ap.error("--plan-configmaps must be NAMESPACE/PREFIX")
+    if args.downstream_report:
+        try:
+            parse_downstream_report(args.downstream_report)
+        except ValueError as e:
+            ap.error(str(e))
+        if not (args.rancher_local_self or args.rancher_local_context or args.rancher_local_kubeconfig):
+            ap.error("--downstream-report needs the Rancher local cluster: --rancher-local-self, "
+                     "--rancher-local-context or --rancher-local-kubeconfig")
     if (args.planner or args.capacity_planner) and not (
             args.rancher_local_self or args.rancher_local_context or args.rancher_local_kubeconfig):
         ap.error("--planner / --capacity-planner need the Rancher local cluster: --rancher-local-self, "
@@ -398,11 +456,12 @@ def main():
     collector = Collector(args)
     planner_backend = PlannerBackend(args, collector) if args.planner else None
     capacity_backend = PlannerBackend(args, collector, mode="capacity") if args.capacity_planner else None
+    rancher_clusters = RancherClusters(args) if args.downstream_report else None
     if not args.no_collect:
         threading.Thread(target=collector.loop, daemon=True).start()
 
     host, port = args.listen.rsplit(":", 1)
-    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend, capacity_backend))
+    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend, capacity_backend, rancher_clusters))
     discover.log(f"serving on http://{args.listen} (interval {args.interval}, data {args.data_dir})")
     try:
         httpd.serve_forever()

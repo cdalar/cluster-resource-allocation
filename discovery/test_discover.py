@@ -188,6 +188,25 @@ class Quotas(unittest.TestCase):
         self.assertEqual((empty["namespaces_with_quota"], empty["quota_cpu_hard"]), (0, 0.0))
 
 
+class RancherClusterList(unittest.TestCase):
+    def test_clusters_for_the_fleet_view(self):
+        from unittest import mock
+        import discover
+        items = [
+            {"metadata": {"name": "c-m-abc12"}, "spec": {"displayName": "onprem-prod-01"},
+             "status": {"provider": "rke2", "conditions": [{"type": "Ready", "status": "True"}]}},
+            {"metadata": {"name": "local"}, "spec": {"displayName": "local", "internal": True}, "status": {"provider": "k3s"}},
+            {"metadata": {"name": "c-m-def34"}, "spec": {"displayName": "aks-dev-01"},
+             "status": {"provider": "aks", "conditions": [{"type": "Ready", "status": "False"}]}},
+        ]
+        with mock.patch.object(discover, "kget", return_value=items) as kget:
+            out = discover.rancher_cluster_list("rancher-local", "/tmp/kc")
+        kget.assert_called_once_with("rancher-local", "clusters.management.cattle.io", all_namespaces=False, kubeconfig="/tmp/kc")
+        self.assertEqual([c["name"] for c in out], ["local", "aks-dev-01", "onprem-prod-01"])   # local first, then by name
+        self.assertEqual(out[0], {"id": "local", "name": "local", "ready": False, "provider": "k3s", "local": True})
+        self.assertEqual((out[1]["ready"], out[2]["ready"], out[2]["id"]), (False, True, "c-m-abc12"))
+
+
 class NodeFailure(unittest.TestCase):
     def test_n_plus_one_capacity_after_platform(self):
         from discover import summarize_cluster

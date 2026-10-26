@@ -80,6 +80,9 @@ spec:
             {{- if include "crr.planners" . }}
             - --plan-configmaps={{ .Release.Namespace }}/{{ include "crr.fullname" . }}
             {{- end }}
+            {{- with include "crr.downstreamReport" . }}
+            - --downstream-report={{ . }}
+            {{- end }}
             {{- if include "crr.isLocal" . }}
             - --rancher-local-self
             {{- else if .Values.rancher.localKubeconfigSecret.name }}

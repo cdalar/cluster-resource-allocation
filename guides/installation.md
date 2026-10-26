@@ -11,7 +11,7 @@ One Helm chart, `cluster-resource-report`, installed once per cluster with diffe
 
 | Cluster | Role | What runs there |
 |---|---|---|
-| **Rancher local cluster** (the Rancher server's own cluster) | `local` | Dashboard of the local cluster, allocation planner and/or capacity planner (for all clusters), name publisher (CronJob writing one Fleet Bundle) |
+| **Rancher local cluster** (the Rancher server's own cluster) | `local` | Dashboard of the local cluster, which also shows every downstream cluster's dashboard (loaded by your browser through Rancher's proxy), allocation planner and/or capacity planner (for all clusters), name publisher (CronJob writing one Fleet Bundle) |
 | **Downstream clusters** (Rancher-managed, on-prem or AKS) | `downstream` | Dashboard of that cluster; reads Project names from a ConfigMap Fleet delivers. Installed by hand, or by Fleet from the local cluster (Step 3, option A) |
 | **Clusters outside Rancher** (e.g. standalone AKS) | `standalone` | Dashboard of that cluster; namespaces grouped by a label instead of Rancher Projects |
 
@@ -393,7 +393,7 @@ In the Rancher UI, open a cluster. Its left-hand menu has:
 
 | Menu entry | Where | Opens |
 |---|---|---|
-| **Resource report** | every cluster | That cluster's dashboard |
+| **Resource report** | every cluster | That cluster's dashboard. On the local cluster also *All clusters*: an overview of every Rancher cluster with the chart, and a selector to open each one's dashboard (their reports come through Rancher's proxy with your login; `rancher.fleetView`) |
 | **Allocation planner** | local cluster, with `planner.enabled` | Budgets and quotas for all clusters |
 | **Capacity planner** | local cluster, with `capacityPlanner.enabled` | CPU / memory envelopes for all clusters |
 

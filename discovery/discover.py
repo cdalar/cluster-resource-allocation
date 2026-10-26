@@ -322,6 +322,19 @@ def load_rancher_projects(local_context=None, local_kubeconfig=None):
     return projects, clusters
 
 
+def rancher_cluster_list(local_context=None, local_kubeconfig=None):
+    """The clusters Rancher manages, for the dashboard's fleet view: id (c-m-...), display name, ready, provider, and
+    whether it is the local cluster (Rancher's own)."""
+    out = []
+    for c in kget(local_context, "clusters.management.cattle.io", all_namespaces=False, kubeconfig=local_kubeconfig):
+        md, spec, status = c["metadata"], c.get("spec") or {}, c.get("status") or {}
+        ready = any(k.get("type") == "Ready" and k.get("status") == "True" for k in status.get("conditions") or [])
+        out.append({"id": md["name"], "name": spec.get("displayName") or md["name"], "ready": ready,
+                    "provider": status.get("provider") or spec.get("provider") or "",
+                    "local": bool(spec.get("internal")) or md["name"] == "local"})
+    return sorted(out, key=lambda c: (not c["local"], c["name"].lower()))
+
+
 def names_from_configmap(cm):
     """Project and cluster name maps from the ConfigMap written by publish_rancher_names.py."""
     data = cm.get("data") or {}

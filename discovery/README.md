@@ -119,6 +119,14 @@ accept it and answers `304 Not Modified` to the dashboard's polls (every minute,
 nothing changed. Deploy it with the Helm chart in [`charts/cluster-resource-report`](../charts/cluster-resource-report/README.md),
 which uses the image built from this directory's `Dockerfile`.
 
+On the Rancher local cluster, `--downstream-report NAMESPACE/SERVICE:PORT` (where this dashboard's Service is on
+the downstream clusters) adds `/api/clusters`, the clusters Rancher manages. The page, when opened through
+Rancher's proxy (`/k8s/clusters/<id>/.../proxy/`), then loads every downstream cluster's own `/api/report` through
+the same proxy with the user's Rancher session and shows an *All clusters* overview (totals, capacity per
+cluster, a clusters table) plus each cluster's dashboard behind the cluster selector. The server never talks to
+downstream clusters and holds no token; the user sees the clusters Rancher lets them access. A downstream report
+that calls its cluster `in-cluster` (no names ConfigMap) is shown under its Rancher name.
+
 To look at a saved report locally without cluster access:
 
 ```bash

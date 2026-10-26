@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -103,6 +104,17 @@ class Server(unittest.TestCase):
         self.assertEqual(self.get("/planner")[0], 404)
         self.assertEqual(self.get("/api/planner")[0], 404)
         self.assertFalse(json.loads(self.get("/api/report")[2])["status"]["planner"])
+
+    def test_no_fleet_view_by_default(self):
+        self.assertEqual(self.get("/api/clusters")[0], 404)
+        self.assertIsNone(json.loads(self.get("/api/report")[2])["status"]["downstream"])
+
+    def test_parse_downstream_report(self):
+        self.assertEqual(server.parse_downstream_report("resource-report/resource-report-cluster-resource-report:80"),
+                         ("resource-report", "resource-report-cluster-resource-report", 80))
+        for bad in ("resource-report", "ns/svc", "ns/svc:http", ""):
+            with self.assertRaises(ValueError):
+                server.parse_downstream_report(bad)
 
     def test_parse_duration(self):
         self.assertEqual(server.parse_duration("15m"), 900)
@@ -309,3 +321,65 @@ class CapacityServer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FleetView(unittest.TestCase):
+    """/api/clusters on the Rancher local cluster, with a fake cluster list (no kubectl)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        args = server.discover.build_parser().parse_args(["--rancher-local-self"])
+        args.data_dir, args.interval, args.no_collect = cls.tmp.name, "30m", True
+        args.downstream_report = "resource-report/resource-report-cluster-resource-report:80"
+        cls.clusters = [{"id": "local", "name": "local", "ready": True, "provider": "k3s", "local": True},
+                        {"id": "c-m-abc12", "name": "onprem-prod-01", "ready": True, "provider": "rke2", "local": False}]
+        cls.calls, cls.fail = 0, False
+
+        def loader():
+            cls.calls += 1
+            if cls.fail:
+                raise discover.KubectlError("kubectl get clusters.management.cattle.io: forbidden")
+            return cls.clusters
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(
+            server.Collector(args), rancher_clusters=server.RancherClusters(args, loader=loader)))
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.tmp.cleanup()
+
+    def get(self, path):
+        try:
+            with urllib.request.urlopen(self.base + path) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    def test_clusters_listed_and_cached(self):
+        code, body = self.get("/api/clusters")
+        self.assertEqual((code, body["clusters"]), (200, self.clusters))
+        self.get("/api/clusters")
+        self.assertEqual(self.calls, 1)   # cached: one kubectl per minute at most
+        self.assertEqual(self.get("/api/report")[1]["status"]["downstream"],
+                         {"namespace": "resource-report", "service": "resource-report-cluster-resource-report", "port": 80})
+
+    def test_kubectl_error_is_a_502(self):
+        type(self).fail = True
+        try:
+            with mock.patch.object(server.RancherClusters, "TTL", 0):
+                code, body = self.get("/api/clusters")
+        finally:
+            type(self).fail = False
+        self.assertEqual(code, 502)
+        self.assertIn("forbidden", body["error"])
+
+    def test_option_needs_the_local_cluster(self):
+        with mock.patch.object(sys, "argv", ["server.py", "--downstream-report", "ns/svc:80"]), \
+                self.assertRaises(SystemExit):
+            server.main()
+        with mock.patch.object(sys, "argv", ["server.py", "--rancher-local-self", "--downstream-report", "nonsense"]), \
+                self.assertRaises(SystemExit):
+            server.main()

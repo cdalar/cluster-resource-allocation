@@ -150,6 +150,27 @@ true
 {{- end -}}
 {{- end }}
 
+{{/* NAMESPACE/SERVICE:PORT of this chart's Service on the downstream clusters, for the fleet view on the local
+     cluster: rancher.fleetView.service when set, else from deployDownstream.namespace / releaseName (the name the
+     downstream release gives its Service, see crr.fullname) and service.port (overridable in deployDownstream.values).
+     Empty when the fleet view is off or this is not the local cluster. */}}
+{{- define "crr.downstreamReport" -}}
+{{- if and (dig "fleetView" "enabled" true .Values.rancher) (include "crr.isLocal" .) -}}
+{{- $set := dig "fleetView" "service" "" .Values.rancher -}}
+{{- if $set -}}
+{{- $set -}}
+{{- else -}}
+{{- $d := .Values.rancher.deployDownstream | default dict -}}
+{{- $ns := $d.namespace | default "resource-report" -}}
+{{- $rel := $d.releaseName | default "resource-report" -}}
+{{- $name := include "crr.name" . -}}
+{{- $svc := ternary ($rel | trunc 63 | trimSuffix "-") (printf "%s-%s" $rel $name | trunc 63 | trimSuffix "-") (contains $name $rel) -}}
+{{- $port := dig "service" "port" .Values.service.port ($d.values | default dict) -}}
+{{- printf "%s/%s:%v" $ns $svc $port -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{/* PriorityClass of the dashboard pod: priorityClassName, else the chart's own (priorityClass.create), else none */}}
 {{- define "crr.priorityClassName" -}}
 {{- if .Values.priorityClassName -}}

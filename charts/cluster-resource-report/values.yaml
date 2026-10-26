@@ -104,6 +104,16 @@ rancher:
     # Local-only settings (rancher.isLocalCluster, publishNames, deployDownstream, planner, capacityPlanner) are
     # always switched off downstream.
     values: {}
+  # Rancher local cluster only (needs isLocalCluster): the local dashboard lists every Rancher cluster and shows
+  # each downstream cluster's own report next to the local one ("All clusters" overview, and a cluster selector).
+  # The browser loads the reports through Rancher's proxy with your Rancher session, so you see the clusters you
+  # may access in Rancher; the dashboard pod never talks to downstream clusters and no token is stored. Needs
+  # the chart on the downstream clusters: by deployDownstream (the default service below), or installed by hand.
+  fleetView:
+    enabled: true
+    # Where this chart's Service is on the downstream clusters. "" = derived from deployDownstream (namespace,
+    # releaseName) and service.port: resource-report/resource-report-cluster-resource-report:80.
+    service: ""                       # NAMESPACE/SERVICE:PORT
   # Downstream clusters: read the names from that ConfigMap (in namesConfigMap.namespace, default: the
   # release namespace). Grants get on exactly that ConfigMap. No token needed on the cluster.
   namesConfigMap:

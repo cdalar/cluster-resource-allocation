@@ -40,7 +40,11 @@ plan ConfigMap and one Fleet Bundle that publishes Rancher Project names to the 
 </tr>
 <tr>
 <td colspan="2"><a href="docs/images/quotas.png"><img src="docs/images/quotas.png" alt="Requests vs. ResourceQuota per namespace"></a><br>
-<b>Requests vs. ResourceQuota</b>: each namespace's (or project's) effective requests against its quota, with the namespaces near or over their quota first; namespaces without a quota are listed as unlimited.</td>
+<b>Requests vs. ResourceQuota</b>: each namespace's effective requests against its quota, with the namespaces near or over their quota first; namespaces without a quota are listed as unlimited.</td>
+</tr>
+<tr>
+<td colspan="2"><a href="docs/images/quotas-projects.png"><img src="docs/images/quotas-projects.png" alt="Requests vs. ResourceQuota per project"></a><br>
+<b>Per project</b>: the requests of the project's namespaces with a quota against the sum of those quotas; requests in namespaces without one are the outlined <code>+</code> segment.</td>
 </tr>
 <tr>
 <td colspan="2"><a href="docs/images/dashboard-dark.png"><img src="docs/images/dashboard-dark.png" alt="Dashboard in dark mode"></a><br>

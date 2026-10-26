@@ -11,7 +11,13 @@ The dashboard shows:
 - **CPU and memory charts per project:** requested vs used.
 - **Sortable project and namespace tables:** efficiency, peak requests and standards violations. Click a project
   to see its namespaces.
+- **Requests vs. ResourceQuota** per namespace and per project.
 - **CSV downloads** of the same data. Light and dark mode are supported.
+- **On the Rancher local cluster: all clusters.** The local dashboard lists every Rancher cluster and shows each
+  downstream cluster's own report next to the local one: an *All clusters* overview (totals, capacity per
+  cluster, a clusters table) and a selector to open any cluster's dashboard in place. Your browser loads the
+  reports through Rancher's proxy with your Rancher session (`rancher.fleetView`); the pod never talks to
+  downstream clusters and no token is stored. Each cluster still has its own dashboard.
 
 The page is self-contained, with no CDN or external assets, so it works in air-gapped clusters.
 
@@ -188,6 +194,12 @@ The app has **no login of its own**. Recommended ways to open it, in order:
    `https://<rancher-host>/k8s/clusters/<cluster-id>/api/v1/namespaces/resource-report/services/http:resource-report-cluster-resource-report:80/proxy/`
 2. **Port-forward:** `kubectl -n resource-report port-forward svc/resource-report-cluster-resource-report 8080:80`
 
+On the Rancher local cluster, the page opened through Rancher also shows the downstream clusters (`rancher.fleetView`,
+on by default): it asks this server for the Rancher cluster list (`/api/clusters`) and loads each cluster's report
+from `https://<rancher-host>/k8s/clusters/<its-id>/api/v1/namespaces/resource-report/services/http:resource-report-cluster-resource-report:80/proxy/api/report`,
+the same path as above, with your Rancher session. You see the clusters you may access in Rancher; a cluster
+without the chart is listed as *no dashboard*. Through a port-forward only the local cluster is shown.
+
 Anyone who can open the dashboard sees names and sizes of all namespaces and projects in the cluster.
 
 ## 4. Allocation planner (Rancher local cluster, on by default)
@@ -256,6 +268,8 @@ a logged-in browser save a plan through Rancher's proxy.
 | `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `Resource Allocation` | Menu entries in the Rancher UI that open the dashboard (and the planners) through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists. With a group, the side menu shows one entry that opens a page with a card per link; `""` puts each link in the side menu directly |
 | `rancher.navLink.icons.report` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
+| `rancher.fleetView.enabled` | `true` | Rancher local cluster only: the dashboard lists all Rancher clusters and shows each downstream cluster's report (loaded by the browser through Rancher's proxy; passes `--downstream-report`). Needs the chart on the downstream clusters |
+| `rancher.fleetView.service` | `""` | Where the chart's Service is on the downstream clusters, `NAMESPACE/SERVICE:PORT`; `""` = from `rancher.deployDownstream.namespace` / `.releaseName` and `service.port` (`resource-report/resource-report-cluster-resource-report:80`) |
 | `rancher.localKubeconfigSecret.name` / `.key` | `""` / `kubeconfig` | Secret with a kubeconfig for the Rancher local cluster (project/cluster names) |
 | `rancher.localContext` | `""` | Context in that kubeconfig |
 | `persistence.enabled` | `false` | Keep the last report on a PVC so a restarted pod shows data immediately (needs a storage class; not needed by the planners) |
@@ -289,6 +303,7 @@ ConfigMaps.
 | `/` | Dashboard |
 | `/api/report` | Latest report plus collector status (JSON; gzip when accepted, `304` for an unchanged `ETag`) |
 | `POST /api/refresh` | Trigger a collection |
+| `/api/clusters` | Rancher local cluster with `rancher.fleetView`: the clusters Rancher manages (id, name, ready), read from `clusters.management.cattle.io` and cached for a minute. The page then reads each downstream cluster's `/api/report` through Rancher's proxy itself |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/healthz` | Liveness and readiness |
 | `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml`, `/api/planner/history[/<n>]` | Allocation planner, with `planner.enabled` |

@@ -99,6 +99,12 @@ a { color: var(--accent-ink); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 16px; }
 .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; background: var(--surface-1); cursor: pointer; user-select: none; font-size: 13px; }
 .chip input { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 5px 10px; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--hover); font-weight: 600; }
+svg .quota-track { fill: var(--track); stroke: var(--axis); stroke-width: 1; }
+svg .note { fill: var(--text-muted); font-size: 11px; }
 svg { display: block; max-width: 100%; height: auto; }
 svg text { fill: var(--text-secondary); font-size: 12px; }
 svg .val { fill: var(--text-primary); font-variant-numeric: tabular-nums; }
@@ -191,6 +197,26 @@ tr.selected { background: var(--hover); }
 
   <div class="card section">
     <div class="section-head">
+      <div><h2>Requests vs. ResourceQuota</h2><div class="sub" id="quotaSub">Effective requests against the namespace quota (requests.cpu / requests.memory hard)</div></div>
+      <div class="actions">
+        <div class="seg" role="group" aria-label="Group by">
+          <button type="button" data-level="ns" aria-pressed="true">Namespaces</button>
+          <button type="button" data-level="project" aria-pressed="false">Projects</button>
+        </div>
+        <label class="chip"><input type="checkbox" id="quotaOnly" checked> Only with a quota</label>
+        <button id="quotaAll" type="button" hidden></button>
+      </div>
+    </div>
+    <div class="legend" id="quotaLegend" style="margin-bottom:10px"></div>
+    <div class="grid2" style="margin-bottom:0">
+      <div><h2 class="sub" style="font-weight:600">CPU · vCPU</h2><div id="quotaCpu"></div></div>
+      <div><h2 class="sub" style="font-weight:600">Memory · GiB</h2><div id="quotaMem"></div></div>
+    </div>
+    <div class="sub" id="quotaNote" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card section">
+    <div class="section-head">
       <div><h2>Projects</h2><div class="sub">Click a project to show its namespaces below</div></div>
     </div>
     <div class="table-wrap"><table id="projectsTable"></table></div>
@@ -206,7 +232,8 @@ tr.selected { background: var(--hover); }
 
   <p class="sub">Requests are effective pod requests (incl. init/sidecar containers and overhead), as counted by the scheduler and ResourceQuota.
   "Used" is P95 over the window when Prometheus is available, otherwise the current metrics-server snapshot.
-  Efficiency = used / requested.</p>
+  Efficiency = used / requested. Quota = the tightest ResourceQuota of the namespace (requests.cpu / requests.memory, or cpu / memory);
+  per project the sum over its namespaces that have one, compared with the requests of those namespaces. Quotas with scopes only count some pods and are not included.</p>
 </div>
 <div id="tooltip" role="tooltip"></div>
 
@@ -214,7 +241,9 @@ tr.selected { background: var(--hover); }
 "use strict";
 const $ = (s) => document.querySelector(s);
 const state = { data: null, status: null, cluster: null, cats: new Set(["tenant", "unassigned"]), q: "", project: null,
-                sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1] } };
+                sort: { projects: ["cpu_requests", -1], ns: ["cpu_requests", -1] },
+                quota: { level: "ns", only: true, all: false } };
+const QUOTA_ROWS = 20;   // rows per quota chart before "Show all"
 
 // ---------- formatting ----------
 // Fixed format, not the browser locale: "." as decimal point and a narrow space between thousands, so 5.574 cores
@@ -384,7 +413,22 @@ function renderTiles() {
       c.cpu_requests_pending > 0 ? "warning" : null),
     tile("Unassigned namespaces", f0.format(c.namespaces_unassigned), "", "not in any Rancher Project",
       c.namespaces_unassigned > 0 ? "warning" : null),
+    quotaTile(c),
   ].filter(Boolean));
+}
+
+// ResourceQuota coverage of the project namespaces (tenant + unassigned), and how full the quotas are
+function quotaTile(c) {
+  const ns = state.data.namespaces.filter((n) => n.cluster === c.cluster && n.category !== "system");
+  if (!ns.length || ns[0].quota_names === undefined) return null;   // report from before these fields existed
+  const withQ = ns.filter(hasQuota);
+  const sum = (rows, k) => rows.reduce((a, n) => a + (Number(n[k]) || 0), 0);
+  const cpuPct = quotaPct(sum(withQ, "cpu_requests"), sum(withQ, "quota_cpu_hard")), memPct = quotaPct(sum(withQ, "mem_requests_gib"), sum(withQ, "quota_mem_hard_gib"));
+  const over = withQ.filter((n) => quotaStatus(n.cpu_requests, hardOf(n, "quota_cpu_hard")) === "critical" || quotaStatus(n.mem_requests_gib, hardOf(n, "quota_mem_hard_gib")) === "critical").length;
+  const note = !withQ.length ? "no quota on any project namespace"
+    : `requests ${num(cpuPct, 0)}% of CPU, ${num(memPct, 0)}% of memory quota` + (over ? ` · ${f0.format(over)} over` : "");
+  return tile("Namespaces with a ResourceQuota", `${f0.format(withQ.length)} of ${f0.format(ns.length)}`, "", note,
+    over ? "serious" : withQ.length === ns.length ? "good" : "warning");
 }
 
 // N+1: what projects can have if the largest schedulable node fails, after platform components (system requests)
@@ -501,6 +545,125 @@ function renderCapacity() {
   box.replaceChildren(svg);
 }
 
+// ---------- requests vs. ResourceQuota ----------
+// quota hard values: "" (not set) in namespace rows; 0 with no quota'd namespace in project rows
+const hardOf = (r, key) => (r[key] === "" || r[key] === undefined || r[key] === null ? null : Number(r[key]));
+const hasQuota = (r) => (r.namespaces_with_quota !== undefined ? r.namespaces_with_quota > 0 : !!r.quota_names);
+// what the quota applies to: a namespace's requests, or per project the requests of its namespaces with a quota
+const quotedReq = (r, reqKey) => (r.namespaces_with_quota !== undefined && hasQuota(r)
+  ? r[reqKey === "cpu_requests" ? "cpu_requests_with_quota" : "mem_requests_with_quota_gib"] : r[reqKey]);
+const quotaPct = (req, hard) => (hard ? 100 * req / hard : null);
+// status of requests against a quota: over (new pods refused), near (>= 90 %), or fine
+function quotaStatus(req, hard) {
+  if (!hard) return null;
+  if (req > hard * (1 + 1e-9)) return "critical";
+  if (req >= 0.9 * hard) return "warning";
+  return null;
+}
+const QUOTA_FILL = { critical: "var(--status-critical)", warning: "var(--status-warning)" };
+function quotaRows() {
+  // the rows of both charts, in the same order: closest to its quota first, then the unlimited by requests
+  const level = state.quota.level;
+  let rows = level === "project" ? filteredProjects() : filteredNamespaces();
+  if (state.quota.only) rows = rows.filter(hasQuota);
+  const fill = (r) => Math.max(quotaPct(quotedReq(r, "cpu_requests"), hardOf(r, "quota_cpu_hard")) || 0,
+                               quotaPct(quotedReq(r, "mem_requests_gib"), hardOf(r, "quota_mem_hard_gib")) || 0);
+  rows = rows.slice().sort((a, b) => (hasQuota(b) - hasQuota(a)) || (fill(b) - fill(a)) || (b.cpu_requests - a.cpu_requests));
+  return rows;
+}
+function renderQuotaChart(target, rows, reqKey, hardKey, usedKey, unit) {
+  const box = $(target);
+  if (!rows.length) { box.replaceChildren(el("div", { class: "empty", text: "No ResourceQuota in the namespaces matching the filters" })); return; }
+  const level = state.quota.level;
+  const W = widthOf(box, 560);
+  // namespace rows carry the project name too ("crm-web · crm"), so the label column is wider there
+  const labelW = Math.min(level === "ns" ? 240 : 150, Math.round(W * 0.4)), valW = Math.min(130, Math.round(W * 0.24)), barH = 12, rowH = 26, axisH = 18;
+  const maxChars = Math.floor((labelW - 8) / 7.4);
+  const { max, step } = niceScale(Math.max(...rows.map((r) => Math.max(r[reqKey], hardOf(r, hardKey) || 0))));
+  const plotW = W - labelW - valW, H = rows.length * rowH + axisH, x0 = labelW;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": `${unit} requested vs. quota by ${level === "project" ? "project" : "namespace"}` });
+  for (let v = 0; v <= max + step / 2; v += step) {
+    const x = x0 + plotW * v / max;
+    svg.append(sv("line", { x1: x, x2: x, y1: 0, y2: rows.length * rowH, stroke: "var(--grid)", "stroke-width": 1 }));
+    const t = sv("text", { x, y: H - 4, "text-anchor": "middle", class: "tick" }); t.textContent = smart(v); svg.append(t);
+  }
+  svg.append(sv("line", { x1: x0, x2: x0, y1: 0, y2: rows.length * rowH, stroke: "var(--axis)", "stroke-width": 1 }));
+  rows.forEach((r, i) => {
+    const y = i * rowH + (rowH - barH) / 2;
+    const total = r[reqKey], req = quotedReq(r, reqKey), rest = total - req;   // rest: in namespaces without a quota
+    const hard = hardOf(r, hardKey), status = quotaStatus(req, hard);
+    const name = level === "project" ? r.project : r.namespace;
+    const projectOf = level === "ns" ? (r.project || "no project") : "";   // shown next to the namespace
+    const t = sv("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end" });
+    if (projectOf) {   // "namespace · project", the project muted; the namespace gets the room first
+      const pj = projectOf.length > 14 ? projectOf.slice(0, 13) + "…" : projectOf;
+      const room = Math.max(6, maxChars - pj.length - 3);
+      const ns = name.length > room ? name.slice(0, room - 1) + "…" : name;
+      const a = sv("tspan", {}); a.textContent = ns;
+      const b = sv("tspan", { class: "note" }); b.textContent = ` · ${pj}`;
+      t.append(a, b);
+    } else t.textContent = name.length > maxChars ? name.slice(0, maxChars - 1) + "…" : name;
+    svg.append(t);
+    if (hard) svg.append(sv("rect", { x: x0 + 0.5, y: y - 2.5, width: Math.max(hard / max * plotW - 1, 1), height: barH + 5, rx: 4, class: "quota-track" }));
+    const fill = QUOTA_FILL[status] || "var(--series-1)";
+    svg.append(sv("path", { d: barPath(x0, y, req / max * plotW, barH, 4), fill }));
+    if (rest > 1e-9) {   // outlined: requested, but no quota applies to it
+      const rx = x0 + req / max * plotW + 2, rw = Math.max(rest / max * plotW - 2, 1);
+      svg.append(sv("rect", { x: rx, y: y + 0.5, width: rw, height: barH - 1, rx: 3, fill: "none", stroke: fill, "stroke-width": 1, "stroke-dasharray": "3 2" }));
+    }
+    const v = sv("text", { x: W - 2, y: y + barH / 2 + 4, "text-anchor": "end", class: hard ? "val" : "note" });
+    v.textContent = hard ? `${smart(req)} / ${smart(hard)} · ${num(quotaPct(req, hard), 0)}%` + (status === "critical" ? " over" : status === "warning" ? " near" : "") +
+                           (rest > 1e-9 ? ` +${smart(rest)}` : "")
+                         : `${smart(total)} ${unit} · no quota`;
+    svg.append(v);
+    const hit = sv("rect", { x: 0, y: i * rowH, width: W, height: rowH, class: "hit" });
+    attachTip(hit, (e) => {
+      const tip = [[fill, hard && rest > 1e-9 ? "Requested under a quota" : "Requested", `${smart(req)} ${unit}`]];
+      if (rest > 1e-9) tip.push([null, "Requested without a quota", `${smart(rest)} ${unit} in ${f0.format(r.namespaces - r.namespaces_with_quota)} namespace(s)`]);
+      if (hard) {
+        tip.push(["var(--axis)", "Quota (hard)", `${smart(hard)} ${unit}`], [null, "Share of quota", `${num(quotaPct(req, hard), 0)}%`],
+                 [null, req > hard ? "Over by" : "Left", `${smart(Math.abs(hard - req))} ${unit}`]);
+        if (usedKey && r[usedKey] !== "" && r[usedKey] !== undefined) tip.push([null, "Used, as the quota counts it", `${smart(r[usedKey])} ${unit}`]);
+      } else tip.push([null, "Quota", level === "project" ? "none of its namespaces" : "none"]);
+      if (level === "project") tip.push([null, "Namespaces with quota", `${f0.format(r.namespaces_with_quota || 0)} of ${f0.format(r.namespaces)}`]);
+      else if (r.quota_names) tip.push([null, r.quota_rancher ? "Rancher Project quota" : "ResourceQuota", r.quota_names]);
+      showTip(e, projectOf ? `${name} · project ${projectOf}` : name, tip);
+    });
+    if (level === "project") hit.addEventListener("click", () => selectProject(projectKey(r)));
+    else if (r.project_id) hit.addEventListener("click", () => selectProject(nsProjectKey(r)));
+    svg.insertBefore(hit, svg.firstChild);
+  });
+  box.replaceChildren(svg);
+}
+function renderQuota() {
+  const all = quotaRows(), level = state.quota.level;
+  const rows = state.quota.all ? all : all.slice(0, QUOTA_ROWS);
+  legend("#quotaLegend", [["var(--series-1)", "Requested"], ["var(--track)", "Quota (hard)"],
+    ["var(--status-warning)", "≥ 90 % of quota (near)"], ["var(--status-critical)", "Over quota: new pods are refused"]]);
+  if (level === "project") $("#quotaLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border:1px dashed var(--series-1)" }), "Requested in namespaces without a quota (+)"));
+  document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.level === level)));
+  $("#quotaOnly").checked = state.quota.only;
+  const more = $("#quotaAll");
+  more.hidden = all.length <= QUOTA_ROWS;
+  more.textContent = state.quota.all ? `Show top ${QUOTA_ROWS}` : `Show all ${all.length}`;
+  renderQuotaChart("#quotaCpu", rows, "cpu_requests", "quota_cpu_hard", level === "ns" ? "quota_cpu_used" : null, "vCPU");
+  renderQuotaChart("#quotaMem", rows, "mem_requests_gib", "quota_mem_hard_gib", level === "ns" ? "quota_mem_used_gib" : null, "GiB");
+  const p = state.project && state.data.projects.find((x) => x.cluster === state.cluster && projectKey(x) === state.project);
+  $("#quotaSub").textContent = (p ? `Project ${p.project}: ` : "") + (level === "project"
+    ? "Per project: Σ requests of its namespaces with a quota against Σ of those quotas (requests.cpu / requests.memory hard)"
+    : "Effective requests of each namespace against its ResourceQuota (requests.cpu / requests.memory hard)");
+  const ns = filteredNamespaces(), withQ = ns.filter(hasQuota).length;
+  const note = [];
+  if (!ns.length) note.push("No namespaces match the filters.");
+  else if (!withQ) note.push(`None of the ${f0.format(ns.length)} namespaces matching the filters has a ResourceQuota: nothing limits their requests.`);
+  else if (withQ < ns.length) note.push(`${f0.format(ns.length - withQ)} of ${f0.format(ns.length)} namespaces matching the filters have no ResourceQuota` +
+    (state.quota.only ? " (untick \u201cOnly with a quota\u201d to see them)." : "."));
+  else note.push(`All ${f0.format(ns.length)} namespaces matching the filters have a ResourceQuota.`);
+  const over = ns.filter((n) => quotaStatus(n.cpu_requests, hardOf(n, "quota_cpu_hard")) === "critical" || quotaStatus(n.mem_requests_gib, hardOf(n, "quota_mem_hard_gib")) === "critical");
+  if (over.length) note.push(`${f0.format(over.length)} over quota (pending pods count against the quota; a quota below today's requests refuses new pods until it is raised).`);
+  $("#quotaNote").textContent = note.join(" ");
+}
+
 function renderProjectChart(target, legendTarget, reqKey, usedFn, unit) {
   const box = $(target);
   const colors = ["var(--series-1)", "var(--series-2)"];
@@ -547,6 +710,15 @@ function effCell(req, used) {
   if (pct < 30) td.append(el("span", { class: "flag", title: "Low: requests much higher than use" },
     el("span", { class: "dot", style: "background:var(--status-warning)" }), `${num(pct, 0)}% low`));
   else td.textContent = `${num(pct, 0)}%`;
+  return td;
+}
+// "48% of 5" with a status dot when near or over the quota; "–" without one
+function quotaCell(req, hard) {
+  if (!hard) return el("td", { class: "muted", text: "–" });
+  const status = quotaStatus(req, hard), td = el("td", { title: `${smart(req)} of ${smart(hard)}` });
+  const text = `${num(quotaPct(req, hard), 0)}% of ${smart(hard)}`;
+  if (status) td.append(el("span", { class: "flag" }, el("span", { class: "dot", style: `background:var(--status-${status})` }), text));
+  else td.textContent = text;
   return td;
 }
 function countCell(v, status) {
@@ -600,6 +772,9 @@ function renderProjectsTable() {
     { k: "category", h: "Category", l: true },
     { k: "namespaces", h: "NS", fmt: (r) => f0.format(r.namespaces) },
     ...commonCols(),
+    { k: "namespaces_with_quota", h: "Quota NS", title: "Namespaces with a ResourceQuota", fmt: (r) => r.namespaces_with_quota === undefined ? "–" : `${f0.format(r.namespaces_with_quota)}/${f0.format(r.namespaces)}` },
+    { k: "quota_cpu", h: "CPU quota", title: "Requests of the namespaces with a quota as share of Σ their requests.cpu quota", v: (r) => quotaPct(quotedReq(r, "cpu_requests"), hardOf(r, "quota_cpu_hard")) || 0, cell: (r) => quotaCell(quotedReq(r, "cpu_requests"), hardOf(r, "quota_cpu_hard")) },
+    { k: "quota_mem", h: "Mem quota", title: "Requests of the namespaces with a quota as share of Σ their requests.memory quota (GiB)", v: (r) => quotaPct(quotedReq(r, "mem_requests_gib"), hardOf(r, "quota_mem_hard_gib")) || 0, cell: (r) => quotaCell(quotedReq(r, "mem_requests_gib"), hardOf(r, "quota_mem_hard_gib")) },
   ];
   renderTable($("#projectsTable"), "projects", cols, filteredProjects(), (tr, r) => {
     tr.classList.add("clickable");
@@ -612,6 +787,8 @@ function renderNsTable() {
     { k: "namespace", h: "Namespace", l: true },
     { k: "project", h: "Project", l: true, fmt: (r) => r.project || "–" },
     ...commonCols(),
+    { k: "quota_cpu", h: "CPU quota", title: "Requests as share of the requests.cpu quota (hard)", v: (r) => quotaPct(r.cpu_requests, hardOf(r, "quota_cpu_hard")) || 0, cell: (r) => quotaCell(r.cpu_requests, hardOf(r, "quota_cpu_hard")) },
+    { k: "quota_mem", h: "Mem quota", title: "Requests as share of the requests.memory quota (hard, GiB)", v: (r) => quotaPct(r.mem_requests_gib, hardOf(r, "quota_mem_hard_gib")) || 0, cell: (r) => quotaCell(r.mem_requests_gib, hardOf(r, "quota_mem_hard_gib")) },
     { k: "resourcequotas", h: "Quota", title: "ResourceQuota objects", fmt: (r) => f0.format(r.resourcequotas) },
     { k: "limitranges", h: "LimitRange", fmt: (r) => f0.format(r.limitranges) },
     { k: "hpas", h: "HPA", fmt: (r) => f0.format(r.hpas) },
@@ -644,6 +821,7 @@ function render() {
   renderCapacity();
   renderProjectChart("#cpuChart", "#cpuLegend", "cpu_requests", cpuUsed, "vCPU");
   renderProjectChart("#memChart", "#memLegend", "mem_requests_gib", memUsed, "GiB");
+  renderQuota();
   renderProjectsTable();
   renderNsTable();
 }
@@ -690,6 +868,9 @@ document.querySelectorAll(".filters input[type=checkbox]").forEach((cb) => cb.ad
 }));
 $("#search").addEventListener("input", (e) => { state.q = e.target.value.trim().toLowerCase(); state.project = null; render(); });
 $("#clearProject").addEventListener("click", () => selectProject(null));
+document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => { state.quota.level = b.dataset.level; state.quota.all = false; render(); }));
+$("#quotaOnly").addEventListener("change", (e) => { state.quota.only = e.target.checked; render(); });
+$("#quotaAll").addEventListener("click", () => { state.quota.all = !state.quota.all; render(); });
 $("#theme").addEventListener("click", () => {
   const root = document.documentElement;
   const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

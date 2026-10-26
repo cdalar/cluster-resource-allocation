@@ -141,6 +141,53 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(out[0]["project"], "(no project) legacy")
 
 
+class Quotas(unittest.TestCase):
+    """ResourceQuota hard / used per namespace and the project sums (requests vs. quota on the dashboard)."""
+
+    def test_quota_summary(self):
+        from discover import quota_summary
+        quotas = [
+            {"metadata": {"name": "b-quota"}, "spec": {"hard": {"requests.cpu": "4", "requests.memory": "8Gi", "limits.memory": "16Gi",
+                                                               "pods": "50", "count/secrets": "10"}},
+             "status": {"used": {"requests.cpu": "1500m", "requests.memory": "2Gi", "limits.memory": "3Gi", "pods": "7"}}},
+            {"metadata": {"name": "a-tight", "labels": {"resourcequota.management.cattle.io/default-resource-quota": "true"}},
+             "spec": {"hard": {"cpu": "2"}}, "status": {"used": {"cpu": "1"}}},
+            {"metadata": {"name": "c-scoped"}, "spec": {"hard": {"pods": "1"}, "scopes": ["BestEffort"]}, "status": {}},
+        ]
+        s = quota_summary(quotas)
+        self.assertEqual(s["quota_names"], "a-tight, b-quota, c-scoped (scoped)")
+        self.assertTrue(s["quota_rancher"])
+        self.assertEqual((s["quota_cpu_hard"], s["quota_cpu_used"]), (2.0, 1.0))     # the tightest, with its own used
+        self.assertEqual((s["quota_mem_hard_gib"], s["quota_mem_used_gib"]), (8.0, 2.0))
+        self.assertEqual((s["quota_mem_limit_hard_gib"], s["quota_mem_limit_used_gib"]), (16.0, 3.0))
+        self.assertEqual((s["quota_pods_hard"], s["quota_pods_used"]), (50.0, 7.0))   # the scoped quota is not summed
+        self.assertEqual(s["quota_cpu_limit_hard"], "")
+        empty = quota_summary([], {"field.cattle.io/resourceQuota": "{}"})
+        self.assertEqual((empty["quota_names"], empty["quota_rancher"], empty["quota_cpu_hard"]), ("", False, ""))
+        self.assertTrue(quota_summary(quotas[:1], {"field.cattle.io/resourceQuota": "{}"})["quota_rancher"])
+        self.assertFalse(quota_summary(quotas[:1])["quota_rancher"])
+
+    def test_project_sums_only_the_namespaces_with_a_quota(self):
+        from discover import NS_QUOTA_FIELDS, PROJECT_FIELDS, NS_FIELDS
+        def ns(name, hard_cpu, hard_mem, quota_names):
+            r = {k: 0.0 for k in NS_NUMERIC}
+            r.update({k: "" for k in NS_QUOTA_FIELDS})
+            r.update(cluster="c1", category="tenant", project_id="c-1:p-1", project="payments", namespace=name,
+                     cpu_requests=1.0, quota_names=quota_names, quota_cpu_hard=hard_cpu, quota_mem_hard_gib=hard_mem)
+            return r
+        p = aggregate_projects([ns("a", 2.0, 4.0, "quota"), ns("b", 3.0, "", "cpu-only"), ns("c", "", "", "")])[0]
+        self.assertEqual(p["namespaces"], 3)
+        self.assertEqual(p["namespaces_with_quota"], 2)
+        self.assertEqual((p["quota_cpu_hard"], p["quota_mem_hard_gib"]), (5.0, 4.0))
+        self.assertEqual((p["cpu_requests"], p["cpu_requests_with_quota"]), (3.0, 2.0))
+        for k in ("namespaces_with_quota", "quota_cpu_hard", "quota_mem_hard_gib", "cpu_requests_with_quota"):
+            self.assertIn(k, PROJECT_FIELDS)
+        for k in NS_QUOTA_FIELDS:
+            self.assertIn(k, NS_FIELDS)
+        empty = aggregate_projects([ns("c", "", "", "")])[0]
+        self.assertEqual((empty["namespaces_with_quota"], empty["quota_cpu_hard"]), (0, 0.0))
+
+
 class NodeFailure(unittest.TestCase):
     def test_n_plus_one_capacity_after_platform(self):
         from discover import summarize_cluster

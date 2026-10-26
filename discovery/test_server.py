@@ -47,6 +47,7 @@ class Server(unittest.TestCase):
         code, headers, body = self.get("/")
         self.assertEqual(code, 200)
         self.assertIn(b"Cluster resource report", body)
+        self.assertIn(b"Requests vs. ResourceQuota", body)
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
 
     def test_report(self):

@@ -20,7 +20,7 @@ per stream, several namespaces each) and AKS clusters.
 
 | | |
 |---|---|
-| 📊 **Resource dashboard** | Installed on every cluster. Shows requests, limits and P95 usage per cluster, Rancher Project and namespace. Also shows the room left for projects if the largest node fails (N+1), and containers that break the resource standards. CSV export. |
+| 📊 **Resource dashboard** | Installed on every cluster. Shows requests, limits and P95 usage per cluster, Rancher Project and namespace, and requests against the ResourceQuota per namespace and per project (which namespaces have one, how full it is, which are over). Also shows the room left for projects if the largest node fails (N+1), and containers that break the resource standards. CSV export. |
 | 🧮 **Allocation planner** | Runs on the Rancher local cluster. For each project you set a monthly budget and a CPU and memory quota per cluster. The planner prices the quotas with unit rates and checks them against the budget and each cluster's limit for projects. It also has a what-if calculator for new applications. |
 | 📦 **Capacity planner** | The same planner without money. Each project gets a CPU and memory envelope, which you split into a quota per cluster. |
 | 📐 **Design & process** | Resource standards, the allocation model (budget → quota), technical design, process (RACI), rollout and ADRs. |
@@ -37,6 +37,10 @@ plan ConfigMap and one Fleet Bundle that publishes Rancher Project names to the 
 <b>Allocation planner</b>: the budget, planned cost and each cluster's limit for projects (allocatable − N largest nodes − platform reserve, capped by the headroom percentage).</td>
 <td width="50%"><a href="docs/images/capacity.png"><img src="docs/images/capacity.png" alt="Capacity planner"></a><br>
 <b>Capacity planner</b>: the same cluster checks, with CPU and memory envelopes per project instead of money.</td>
+</tr>
+<tr>
+<td colspan="2"><a href="docs/images/quotas.png"><img src="docs/images/quotas.png" alt="Requests vs. ResourceQuota per namespace"></a><br>
+<b>Requests vs. ResourceQuota</b>: each namespace's (or project's) effective requests against its quota, with the namespaces near or over their quota first; namespaces without a quota are listed as unlimited.</td>
 </tr>
 <tr>
 <td colspan="2"><a href="docs/images/dashboard-dark.png"><img src="docs/images/dashboard-dark.png" alt="Dashboard in dark mode"></a><br>

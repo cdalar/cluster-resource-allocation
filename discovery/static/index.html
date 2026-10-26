@@ -576,7 +576,8 @@ function renderQuotaChart(target, rows, reqKey, hardKey, usedKey, unit) {
   if (!rows.length) { box.replaceChildren(el("div", { class: "empty", text: "No ResourceQuota in the namespaces matching the filters" })); return; }
   const level = state.quota.level;
   const W = widthOf(box, 560);
-  const labelW = Math.min(150, Math.round(W * 0.34)), valW = Math.min(130, Math.round(W * 0.24)), barH = 12, rowH = 26, axisH = 18;
+  // namespace rows carry the project name too ("crm-web · crm"), so the label column is wider there
+  const labelW = Math.min(level === "ns" ? 240 : 150, Math.round(W * 0.4)), valW = Math.min(130, Math.round(W * 0.24)), barH = 12, rowH = 26, axisH = 18;
   const maxChars = Math.floor((labelW - 8) / 7.4);
   const { max, step } = niceScale(Math.max(...rows.map((r) => Math.max(r[reqKey], hardOf(r, hardKey) || 0))));
   const plotW = W - labelW - valW, H = rows.length * rowH + axisH, x0 = labelW;
@@ -592,8 +593,17 @@ function renderQuotaChart(target, rows, reqKey, hardKey, usedKey, unit) {
     const total = r[reqKey], req = quotedReq(r, reqKey), rest = total - req;   // rest: in namespaces without a quota
     const hard = hardOf(r, hardKey), status = quotaStatus(req, hard);
     const name = level === "project" ? r.project : r.namespace;
+    const projectOf = level === "ns" ? (r.project || "no project") : "";   // shown next to the namespace
     const t = sv("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end" });
-    t.textContent = name.length > maxChars ? name.slice(0, maxChars - 1) + "…" : name; svg.append(t);
+    if (projectOf) {   // "namespace · project", the project muted; the namespace gets the room first
+      const pj = projectOf.length > 14 ? projectOf.slice(0, 13) + "…" : projectOf;
+      const room = Math.max(6, maxChars - pj.length - 3);
+      const ns = name.length > room ? name.slice(0, room - 1) + "…" : name;
+      const a = sv("tspan", {}); a.textContent = ns;
+      const b = sv("tspan", { class: "note" }); b.textContent = ` · ${pj}`;
+      t.append(a, b);
+    } else t.textContent = name.length > maxChars ? name.slice(0, maxChars - 1) + "…" : name;
+    svg.append(t);
     if (hard) svg.append(sv("rect", { x: x0 + 0.5, y: y - 2.5, width: Math.max(hard / max * plotW - 1, 1), height: barH + 5, rx: 4, class: "quota-track" }));
     const fill = QUOTA_FILL[status] || "var(--series-1)";
     svg.append(sv("path", { d: barPath(x0, y, req / max * plotW, barH, 4), fill }));
@@ -617,7 +627,7 @@ function renderQuotaChart(target, rows, reqKey, hardKey, usedKey, unit) {
       } else tip.push([null, "Quota", level === "project" ? "none of its namespaces" : "none"]);
       if (level === "project") tip.push([null, "Namespaces with quota", `${f0.format(r.namespaces_with_quota || 0)} of ${f0.format(r.namespaces)}`]);
       else if (r.quota_names) tip.push([null, r.quota_rancher ? "Rancher Project quota" : "ResourceQuota", r.quota_names]);
-      showTip(e, name, tip);
+      showTip(e, projectOf ? `${name} · project ${projectOf}` : name, tip);
     });
     if (level === "project") hit.addEventListener("click", () => selectProject(projectKey(r)));
     else if (r.project_id) hit.addEventListener("click", () => selectProject(nsProjectKey(r)));
@@ -632,6 +642,7 @@ function renderQuota() {
     ["var(--status-warning)", "≥ 90 % of quota (near)"], ["var(--status-critical)", "Over quota: new pods are refused"]]);
   if (level === "project") $("#quotaLegend").append(el("span", {}, el("i", { class: "sw", style: "background:none;border:1px dashed var(--series-1)" }), "Requested in namespaces without a quota (+)"));
   document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.level === level)));
+  $("#quotaOnly").checked = state.quota.only;
   const more = $("#quotaAll");
   more.hidden = all.length <= QUOTA_ROWS;
   more.textContent = state.quota.all ? `Show top ${QUOTA_ROWS}` : `Show all ${all.length}`;

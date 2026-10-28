@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live resource view</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --track: #efeee9;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --accent-ink: #1c5cab;
+  --hover: rgba(11,11,11,0.04);
+  --use: rgba(11,11,11,0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --track: #262624;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05);
+    --use: rgba(255,255,255,0.6);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --track: #262624;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05);
+  --use: rgba(255,255,255,0.6);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.muted { color: var(--text-muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+button { cursor: pointer; }
+button:hover { background: var(--hover); }
+a { color: var(--accent-ink); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 5px 10px; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--hover); font-weight: 600; }
+.conn { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--text-muted); }
+.dot.live { background: var(--status-good); }
+.dot.polling { background: var(--status-warning); }
+.dot.down { background: var(--status-critical); }
+.banner { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); margin-bottom: 12px; font-size: 13px; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 14px; font-size: 14px; }
+.crumbs button { border: 0; background: none; padding: 2px 4px; color: var(--accent-ink); border-radius: 4px; }
+.crumbs button:hover { background: var(--hover); }
+.crumbs .here { font-weight: 600; padding: 2px 4px; }
+.crumbs .sep { color: var(--text-muted); }
+.kind { display: inline-block; font-size: 11px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-right: 6px; vertical-align: 1px; white-space: nowrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .unit { font-size: 13px; font-weight: 400; color: var(--text-secondary); }
+.tile .note { font-size: 12px; color: var(--text-muted); margin-top: 2px; min-height: 17px; }
+.tile .bar { margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 8px; border-radius: 2px; display: inline-block; }
+.sw.lim { width: 2px; height: 12px; background: var(--text-primary); }
+.section-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+/* bullet bar: track = the reference (allocatable), fill = requests, thin bar = usage, tick = limits */
+.bar { position: relative; height: 12px; background: var(--track); border-radius: 3px; overflow: visible; }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--series-1); border-radius: 3px 0 0 3px; }
+.bar .use { position: absolute; left: 0; top: 4px; height: 4px; background: var(--use); border-radius: 0 2px 2px 0; }
+.bar .lim { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-primary); }
+.bar .lim.over { background: var(--status-critical); }
+.bar .fill.over { background: var(--status-critical); }
+.nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.node { cursor: pointer; }
+.node:hover { background: var(--hover); }
+.node h3 { margin: 0; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.node .meta { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.node .row { display: grid; grid-template-columns: 52px 1fr 112px; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; }
+.node .row .v { text-align: right; font-variant-numeric: tabular-nums; }
+.warn { color: var(--status-critical); font-weight: 600; font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.badge i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; vertical-align: middle; }
+th:first-child, td:first-child, th.l, td.l { text-align: left; }
+th { font-weight: 600; color: var(--text-secondary); cursor: pointer; position: sticky; top: 0; background: var(--surface-1); }
+th[aria-sort]::after { content: " ▾"; color: var(--text-muted); }
+th[aria-sort="ascending"]::after { content: " ▴"; }
+td { font-variant-numeric: tabular-nums; }
+td.bar-cell { min-width: 150px; }
+td.bar-cell .bar { width: 100%; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr:hover { background: var(--hover); }
+.empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+.detail { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.detail b { color: var(--text-primary); font-weight: 500; }
+#tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; min-width: 180px; }
+#tooltip .t { color: var(--text-secondary); margin-bottom: 4px; }
+#tooltip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+#tooltip .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+#tooltip .k i { width: 12px; height: 3px; display: inline-block; }
+#tooltip b { font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .tile .value { font-size: 20px; } .node .row { grid-template-columns: 44px 1fr 96px; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header>
+    <div>
+      <h1>Live resource view</h1>
+      <div class="sub" id="meta">Loading…</div>
+      <div class="sub muted" id="status"></div>
+    </div>
+    <div class="actions">
+      <span class="sub">Group by</span>
+      <div class="seg" id="by">
+        <button type="button" data-by="node" aria-pressed="true">Nodes</button>
+        <button type="button" data-by="project" aria-pressed="false">Projects</button>
+      </div>
+      <a href=".">Resource report</a>
+      <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+  <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+  <div class="tiles" id="tiles"></div>
+  <div class="card">
+    <div class="section-head">
+      <div><h2 id="levelTitle"></h2><div class="sub" id="levelSub"></div></div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--series-1)"></i>Requests</span>
+        <span><i class="sw" style="background:var(--use); height:4px"></i>Used now</span>
+        <span><i class="sw lim"></i>Limits</span>
+        <span><i class="sw" style="background:var(--track); border:1px solid var(--axis)"></i>Allocatable</span>
+      </div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="tooltip" role="tooltip"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const GIB = 2 ** 30, MIB = 2 ** 20;
+const KINDS_ORDER = ["Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet", "ReplicationController", "StaticPod", "Pod"];
+const KIND_LABEL = { StaticPod: "Static pod", Pod: "Pod (no controller)" };
+
+// ---------- state ----------
+const S = { seq: -1, nodes: new Map(), ns: new Map(), pods: new Map(), usage: {}, nodeUsage: {}, status: null, cluster: null };
+// what is shown: group by node or project, then the chosen node / project (id) / namespace / workload ("Kind/name") / pod
+const view = { by: "node", node: null, project: null, ns: null, wl: null, pod: null, sort: null, scale: "alloc" };   // scale: bars against the allocatable, or the largest row
+const conn = { mode: "connecting", es: null, lastMsg: 0, lastUpdate: null, pollTimer: null, retryTimer: null, error: null };
+
+// ---------- formatting (same rules as the report page: "." decimal, narrow space for thousands) ----------
+const nf = (d) => { const f = new Intl.NumberFormat("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+  return { format: (n) => f.format(n).replace(/,/g, " ") }; };
+const f0 = nf(0), f1 = nf(1), f2 = nf(2);
+function smart(v) { return Math.abs(v) >= 100 ? f0.format(v) : Math.abs(v) >= 10 ? f1.format(v) : f2.format(v); }
+function cpu(v) { return v === null || v === undefined ? "–" : v > 0 && v < 0.01 ? "<0.01" : smart(v); }
+function mem(bytes) {
+  if (bytes === null || bytes === undefined) return "–";
+  if (bytes >= GIB) return `${smart(bytes / GIB)} Gi`;
+  if (bytes >= MIB) return `${f0.format(bytes / MIB)} Mi`;
+  return bytes > 0 ? `${f0.format(bytes / 1024)} Ki` : "0";
+}
+function pct(a, b) { return b > 0 ? `${f0.format(a / b * 100)} %` : "–"; }
+function plural(n, word) { return `${f0.format(n)} ${word}${n === 1 ? "" : "s"}`; }
+// "26.5 / 62.5 Gi": both in the unit of the larger value
+function memPair(a, b) { const unit = b >= GIB || a >= GIB ? GIB : MIB; return `${smart(a / unit)} / ${smart(b / unit)} ${unit === GIB ? "Gi" : "Mi"}`; }
+function ago(iso) {
+  if (!iso) return "–";
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s < 86400) return `${Math.round(s / 3600)} h`;
+  return `${Math.round(s / 86400)} d`;
+}
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else if (k === "onclick") e.addEventListener("click", v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c !== null && c !== undefined && c !== false) e.append(c);
+  return e;
+}
+
+// ---------- tooltip ----------
+const tip = $("#tooltip");
+function showTip(evt, title, rows) {
+  tip.replaceChildren(el("div", { class: "t", text: title }),
+    ...rows.map(([color, label, value]) => el("div", { class: "r" },
+      el("span", { class: "k" }, color ? el("i", { style: `background:${color}` }) : null, label), el("b", { text: value }))));
+  tip.style.display = "block";
+  moveTip(evt);
+}
+function moveTip(evt) {
+  let x, y;
+  if (evt.clientX !== undefined && evt.type !== "focus") { x = evt.clientX; y = evt.clientY; }
+  else { const b = evt.target.getBoundingClientRect(); x = b.left + b.width / 2; y = b.top; }
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(window.innerWidth - w - 8, x + 12) + "px";
+  tip.style.top = Math.max(8, y - h - 12) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+function attachTip(node, fn) {
+  node.setAttribute("tabindex", "0");
+  node.addEventListener("pointerenter", fn);
+  node.addEventListener("pointermove", moveTip);
+  node.addEventListener("pointerleave", hideTip);
+  node.addEventListener("focus", fn);
+  node.addEventListener("blur", hideTip);
+}
+
+// ---------- data: snapshot + changes ----------
+const podKey = (p) => `${p.ns}/${p.name}`;
+function applySnapshot(snap) {
+  S.seq = snap.seq;
+  S.nodes = new Map(snap.nodes.map((n) => [n.name, n]));
+  S.ns = new Map(snap.namespaces.map((n) => [n.name, n]));
+  S.pods = new Map(snap.pods.map((p) => [podKey(p), p]));
+  S.usage = snap.usage || {}; S.nodeUsage = snap.node_usage || {};
+  S.status = snap.status; S.cluster = snap.status && snap.status.cluster;
+  conn.lastUpdate = Date.now();
+  scheduleRender();
+}
+function applyChanges(d) {
+  if (d.reset) { resync(); return; }
+  for (const [kind, map] of [["nodes", S.nodes], ["namespaces", S.ns], ["pods", S.pods]]) {
+    for (const [k, v] of Object.entries(d[kind] || {})) { if (v === null) map.delete(k); else map.set(k, v); }
+  }
+  if (d.usage) { S.usage = d.usage; S.nodeUsage = d.node_usage || {}; }
+  if (d.status) { S.status = d.status; S.cluster = d.status.cluster || S.cluster; }
+  S.seq = d.seq;
+  conn.lastUpdate = Date.now();
+  scheduleRender();
+}
+
+// ---------- connection: snapshot, then Server-Sent Events; polling when the stream does not get through ----------
+const STALL_MS = 45000;   // the server sends a ping every 15 s; nothing for this long = the stream is stuck (proxy buffering)
+async function resync() {
+  closeStream();
+  try {
+    const res = await fetch("api/live/snapshot", { cache: "no-store" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    conn.error = null;
+    applySnapshot(body);
+    openStream();
+  } catch (e) {
+    conn.error = e.message; conn.mode = "down"; renderHeader();
+    conn.retryTimer = setTimeout(resync, 10000);
+  }
+}
+function openStream() {
+  if (!("EventSource" in window)) return startPolling();
+  conn.es = new EventSource(`api/live/stream?since=${S.seq}`);
+  conn.lastMsg = Date.now();
+  conn.es.addEventListener("changes", (e) => { conn.lastMsg = Date.now(); setMode("live"); applyChanges(JSON.parse(e.data)); });
+  conn.es.addEventListener("ping", () => { conn.lastMsg = Date.now(); setMode("live"); });
+  conn.es.addEventListener("open", () => { conn.lastMsg = Date.now(); setMode("live"); });
+  conn.es.addEventListener("error", () => { if (conn.es && conn.es.readyState === EventSource.CLOSED) startPolling(); else setMode("reconnecting"); });
+  conn.watchdog = setInterval(() => { if (Date.now() - conn.lastMsg > STALL_MS) startPolling(); }, 5000);
+}
+function closeStream() {
+  if (conn.es) { conn.es.close(); conn.es = null; }
+  clearInterval(conn.watchdog); clearTimeout(conn.pollTimer); clearTimeout(conn.retryTimer);
+}
+function startPolling() {
+  closeStream();
+  setMode("polling");
+  const poll = async () => {
+    try {
+      const res = await fetch(`api/live/changes?since=${S.seq}`, { cache: "no-store" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      conn.error = null;
+      applyChanges(body);
+      if (body.reset) return;
+    } catch (e) { conn.error = e.message; setMode("down"); }
+    conn.pollTimer = setTimeout(poll, 5000);
+  };
+  poll();
+  conn.retryTimer = setTimeout(() => { if (conn.mode === "polling") { clearTimeout(conn.pollTimer); openStream(); } }, 60000);
+}
+function setMode(m) { if (conn.mode !== m) { conn.mode = m; renderHeader(); } }
+
+// ---------- derived data ----------
+const nsOf = (name) => S.ns.get(name) || { name, project_id: "", project: "", category: "unassigned" };
+const projectKeyOf = (p) => nsOf(p.ns).project_id || "";
+function projectLabel(pid) {
+  if (!pid) return "Unassigned";
+  for (const n of S.ns.values()) if (n.project_id === pid) return n.project || pid;
+  return pid.split(":").pop();
+}
+const wlKey = (p) => `${p.owner_kind}/${p.owner}`;
+function podUsage(p) {
+  const u = S.usage[podKey(p)];
+  if (!u) return null;
+  let c = 0, m = 0, any = false;
+  for (const ct of p.containers) { const v = u[ct.name]; if (v) { c += v[0]; m += v[1]; any = true; } }
+  return any ? { cpu: c, mem: m } : null;
+}
+function scopedPods() {
+  const out = [];
+  for (const p of S.pods.values()) {
+    if (view.by === "node" && view.node && p.node !== view.node) continue;
+    if (view.project !== null && projectKeyOf(p) !== view.project) continue;
+    if (view.ns && p.ns !== view.ns) continue;
+    if (view.wl && wlKey(p) !== view.wl) continue;
+    if (view.pod && p.name !== view.pod) continue;
+    out.push(p);
+  }
+  return out;
+}
+function newAgg(key, label) {
+  return { key, label, pods: 0, pending: 0, cpu_req: 0, mem_req: 0, cpu_lim: 0, mem_lim: 0, cpu_use: 0, mem_use: 0, used_known: 0, restarts: 0, nodes: new Set() };
+}
+function addPod(a, p) {
+  a.pods += 1; if (p.phase !== "Running") a.pending += 1;
+  a.cpu_req += p.cpu_req; a.mem_req += p.mem_req; a.cpu_lim += p.cpu_lim; a.mem_lim += p.mem_lim;
+  const u = podUsage(p);
+  if (u) { a.cpu_use += u.cpu; a.mem_use += u.mem; a.used_known += 1; }
+  for (const c of p.containers) a.restarts += c.restarts || 0;
+  if (p.node) a.nodes.add(p.node);
+}
+function groupBy(pods, keyFn, labelFn) {
+  const m = new Map();
+  for (const p of pods) {
+    const k = keyFn(p);
+    let a = m.get(k);
+    if (!a) { a = newAgg(k, labelFn(p, k)); m.set(k, a); }
+    addPod(a, p);
+  }
+  return [...m.values()];
+}
+function total(pods) { const a = newAgg("*", "Total"); for (const p of pods) addPod(a, p); return a; }
+function level() {
+  if (view.by === "node" && !view.node) return "nodes";
+  if (view.project === null) return "projects";
+  if (!view.ns) return "namespaces";
+  if (!view.wl) return "workloads";
+  if (!view.pod) return "pods";
+  return "containers";
+}
+// the capacity the bars are drawn against: the chosen node's allocatable, else the cluster's (ready, schedulable nodes)
+function reference() {
+  if (view.by === "node" && view.node) {
+    const n = S.nodes.get(view.node);
+    return n ? { cpu: n.cpu_alloc, mem: n.mem_alloc, pods: n.pods_alloc, label: `allocatable of ${n.name}` } : { cpu: 0, mem: 0, pods: 0, label: "node" };
+  }
+  const r = { cpu: 0, mem: 0, pods: 0, nodes: 0, label: "allocatable of the schedulable nodes" };
+  for (const n of S.nodes.values()) if (n.ready && !n.unschedulable) { r.cpu += n.cpu_alloc; r.mem += n.mem_alloc; r.pods += n.pods_alloc; r.nodes += 1; }
+  return r;
+}
+const usageKnown = () => S.status && S.status.metrics && S.status.metrics.available;
+
+// ---------- navigation ----------
+function setView(changes) {
+  Object.assign(view, changes);
+  // a deeper choice is cleared when a higher level changes
+  const order = ["node", "project", "ns", "wl", "pod"];
+  const first = order.findIndex((k) => k in changes);
+  if (first >= 0) for (const k of order.slice(first + 1)) if (!(k in changes)) view[k] = null;
+  if (view.by === "project") view.node = null;
+  view.sort = null;
+  location.hash = hashOf();
+  render();
+}
+function hashOf() {
+  const parts = ["live"];
+  if (view.by === "project") parts.push("by=project");
+  if (view.node) parts.push(`node=${encodeURIComponent(view.node)}`);
+  if (view.project !== null) parts.push(`project=${encodeURIComponent(view.project || "-")}`);
+  if (view.ns) parts.push(`ns=${encodeURIComponent(view.ns)}`);
+  if (view.wl) { const [kind, ...name] = view.wl.split("/"); parts.push(`wl=${encodeURIComponent(kind)}`, encodeURIComponent(name.join("/"))); }
+  if (view.pod) parts.push(`pod=${encodeURIComponent(view.pod)}`);
+  return "#" + parts.join("/");
+}
+function readHash() {
+  const h = location.hash.replace(/^#/, "");
+  if (!h.startsWith("live")) return;
+  const segs = h.split("/").slice(1).map(decodeURIComponent);
+  const v = { by: "node", node: null, project: null, ns: null, wl: null, pod: null, sort: null };
+  for (let i = 0; i < segs.length; i++) {
+    const [k, ...rest] = segs[i].split("="); const val = rest.join("=");
+    if (k === "by") v.by = val === "project" ? "project" : "node";
+    else if (k === "node") v.node = val;
+    else if (k === "project") v.project = val === "-" ? "" : val;
+    else if (k === "ns") v.ns = val;
+    else if (k === "wl") { v.wl = `${val}/${segs[i + 1] || ""}`; i += 1; }
+    else if (k === "pod") v.pod = val;
+  }
+  if (v.by === "node" && !v.node && v.project !== null) v.by = "project";
+  Object.assign(view, v);
+}
+window.addEventListener("hashchange", () => { readHash(); render(); });
+
+// ---------- rendering ----------
+let renderTimer = null;
+function scheduleRender() { if (renderTimer) return; renderTimer = setTimeout(() => { renderTimer = null; render(); }, 250); }
+
+function renderHeader() {
+  const st = S.status;
+  const parts = [S.cluster ? `Cluster ${S.cluster}` : "This cluster"];
+  if (S.nodes.size) parts.push(`${f0.format(S.nodes.size)} nodes`);
+  if (S.pods.size) parts.push(`${f0.format(S.pods.size)} pods`);
+  const names = { connecting: "connecting", live: "live", reconnecting: "reconnecting", polling: "polling every 5 s", down: conn.error ? `disconnected: ${conn.error}` : "disconnected" };
+  const dotClass = { live: "live", polling: "polling", down: "down" }[conn.mode] || "";
+  $("#meta").replaceChildren(parts.join(" · ") + " · ",
+    el("span", { class: "conn" }, el("i", { class: `dot ${dotClass}` }), names[conn.mode] || conn.mode),
+    conn.lastUpdate ? ` · updated ${ago(new Date(conn.lastUpdate).toISOString())} ago` : "");
+  const notes = [];
+  if (st) {
+    for (const [k, w] of Object.entries(st.watch || {})) if (w.state !== "watching") notes.push(`${k}: ${w.state}${w.error ? ` (${w.error})` : ""}`);
+    if (st.metrics && st.metrics.available === false) notes.push(`usage n/a: metrics-server ${st.metrics.error || "unavailable"}`);
+    else if (st.usage_at) notes.push(`usage from metrics-server, ${ago(st.usage_at)} ago, every ${st.metrics.interval} s`);
+  }
+  $("#status").textContent = notes.join(" · ");
+  document.querySelectorAll("#by button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.by === view.by)));
+}
+
+function renderCrumbs() {
+  const c = $("#crumbs");
+  const items = [];
+  const root = view.by === "node" ? "All nodes" : "All projects";
+  items.push([root, {}]);
+  if (view.by === "node" && view.node) items.push([view.node, { node: view.node }]);
+  if (view.project !== null) items.push([projectLabel(view.project), { node: view.node, project: view.project }]);
+  if (view.ns) items.push([view.ns, { node: view.node, project: view.project, ns: view.ns }]);
+  if (view.wl) { const [kind, ...n] = view.wl.split("/"); items.push([`${KIND_LABEL[kind] || kind} ${n.join("/")}`, { node: view.node, project: view.project, ns: view.ns, wl: view.wl }]); }
+  if (view.pod) items.push([view.pod, { node: view.node, project: view.project, ns: view.ns, wl: view.wl, pod: view.pod }]);
+  c.replaceChildren(...items.flatMap(([label, target], i) => {
+    const last = i === items.length - 1;
+    const node = last ? el("span", { class: "here", text: label }) : el("button", { type: "button", text: label, onclick: () => setView(target) });
+    return i ? [el("span", { class: "sep", text: "›" }), node] : [node];
+  }));
+}
+
+// one bullet bar: requests filled, usage as a thin bar, limits as a tick; everything against `ref` (100 %)
+function bar(a, res, ref, title) {
+  const req = a[`${res}_req`], lim = a[`${res}_lim`], use = a.used_known ? a[`${res}_use`] : null;
+  const p = (v) => (ref > 0 ? Math.min(100, v / ref * 100) : 0);
+  const over = ref > 0 && lim > ref;
+  const b = el("div", { class: "bar", role: "img" },
+    el("div", { class: `fill${ref > 0 && req > ref ? " over" : ""}`, style: `width:${p(req)}%` }),
+    use !== null ? el("div", { class: "use", style: `width:${p(use)}%` }) : null,
+    lim > 0 ? el("div", { class: `lim${over ? " over" : ""}`, style: `left:calc(${p(lim)}% - 1px)` }) : null);
+  const fmt = res === "cpu" ? cpu : mem;
+  const unit = res === "cpu" ? "cores" : "";
+  attachTip(b, (e) => showTip(e, title, [
+    ["var(--series-1)", "Requests", `${fmt(req)} ${unit} (${pct(req, ref)})`],
+    ["var(--text-primary)", "Limits", lim > 0 ? `${fmt(lim)} ${unit} (${pct(lim, ref)})${over ? " · over allocatable" : ""}` : "none"],
+    ["var(--use)", "Used now", use !== null ? `${fmt(use)} ${unit} (${pct(use, ref)})` : "n/a"],
+    [null, "Allocatable", `${fmt(ref)} ${unit}`]]));
+  return b;
+}
+
+function renderTiles(pods, ref) {
+  const t = total(pods);
+  const tiles = [];
+  const tile = (label, value, unit, note, barEl) => el("div", { class: "card tile" },
+    el("div", { class: "label", text: label }), el("div", { class: "value" }, value, unit ? el("span", { class: "unit", text: ` ${unit}` }) : null),
+    el("div", { class: "note", text: note }), barEl);
+  const limNote = (res) => (ref[res] > 0 && t[`${res}_lim`] > 0 ? `limits ${pct(t[`${res}_lim`], ref[res])}` : "no limits");
+  tiles.push(tile("CPU requested", cpu(t.cpu_req), `/ ${cpu(ref.cpu)} cores`, `${pct(t.cpu_req, ref.cpu)} of allocatable · ${limNote("cpu")}`, bar(t, "cpu", ref.cpu, "CPU")));
+  tiles.push(tile("Memory requested", mem(t.mem_req), `/ ${mem(ref.mem)}`, `${pct(t.mem_req, ref.mem)} of allocatable · ${limNote("mem")}`, bar(t, "mem", ref.mem, "Memory")));
+  tiles.push(tile("CPU used now", t.used_known ? cpu(t.cpu_use) : "n/a", t.used_known ? "cores" : "",
+    t.used_known ? `${pct(t.cpu_use, ref.cpu)} of allocatable · ${pct(t.cpu_use, t.cpu_req)} of requests` : "metrics-server unavailable"));
+  tiles.push(tile("Memory used now", t.used_known ? mem(t.mem_use) : "n/a", "",
+    t.used_known ? `${pct(t.mem_use, ref.mem)} of allocatable · ${pct(t.mem_use, t.mem_req)} of requests` : "metrics-server unavailable"));
+  const podNote = [t.pending ? `${f0.format(t.pending)} not running` : null, t.restarts ? `${f0.format(t.restarts)} restarts` : null].filter(Boolean).join(" · ");
+  tiles.push(tile("Pods", f0.format(t.pods), ref.pods ? `/ ${f0.format(ref.pods)}` : "", podNote || (level() === "nodes" ? `on ${f0.format(ref.nodes || 0)} schedulable nodes` : "")));
+  $("#tiles").replaceChildren(...tiles);
+  // tiles without a bar keep the same height
+  for (const x of tiles) if (!x.querySelector(".bar")) x.append(el("div", { class: "bar", style: "visibility:hidden" }));
+}
+
+function renderNodes() {
+  const nodes = [...S.nodes.values()];
+  const byNode = new Map();
+  for (const p of S.pods.values()) if (p.node) { let a = byNode.get(p.node); if (!a) { a = newAgg(p.node, p.node); byNode.set(p.node, a); } addPod(a, p); }
+  const rows = nodes.map((n) => ({ n, a: byNode.get(n.name) || newAgg(n.name, n.name) }));
+  rows.sort((x, y) => (y.n.mem_alloc ? y.a.mem_req / y.n.mem_alloc : 0) - (x.n.mem_alloc ? x.a.mem_req / x.n.mem_alloc : 0) || x.n.name.localeCompare(y.n.name));
+  const unscheduled = [...S.pods.values()].filter((p) => !p.node);
+  $("#levelTitle").textContent = plural(nodes.length, "node");
+  $("#levelSub").textContent = "Requests, limits and usage against each node's allocatable · sorted by memory requested";
+  const cards = rows.map(({ n, a }) => {
+    const warnings = [];
+    if (n.cpu_alloc && a.cpu_lim > n.cpu_alloc) warnings.push(`CPU limits ${pct(a.cpu_lim, n.cpu_alloc)}`);
+    if (n.mem_alloc && a.mem_lim > n.mem_alloc) warnings.push(`memory limits ${pct(a.mem_lim, n.mem_alloc)}`);
+    const nu = S.nodeUsage[n.name];
+    const row = (label, res, ref, value) => el("div", { class: "row" }, el("span", { class: "muted", text: label }), bar(a, res, ref, `${n.name} · ${label}`), el("span", { class: "v", text: value }));
+    const state = !n.ready ? ["var(--status-critical)", "not ready"] : n.unschedulable ? ["var(--status-warning)", "cordoned"] : null;
+    return el("div", { class: "card node", role: "link", tabindex: "0", onclick: () => setView({ node: n.name }) },
+      el("h3", {}, el("span", { text: n.name }), el("span", { class: "sub", text: `${f0.format(a.pods)} / ${f0.format(n.pods_alloc)} pods` })),
+      el("div", { class: "meta" }, el("span", { text: n.roles.join(", ") }), n.instance_type ? el("span", { text: n.instance_type }) : null,
+        n.zone ? el("span", { text: n.zone }) : null,
+        state ? el("span", { class: "badge" }, el("i", { style: `background:${state[0]}` }), state[1]) : null,
+        nu ? el("span", { text: `node uses ${cpu(nu[0])} cores · ${mem(nu[1])}` }) : null),
+      row("CPU", "cpu", n.cpu_alloc, `${cpu(a.cpu_req)} / ${cpu(n.cpu_alloc)}`),
+      row("Memory", "mem", n.mem_alloc, memPair(a.mem_req, n.mem_alloc)),
+      warnings.length ? el("div", { class: "warn", style: "margin-top:8px", text: `⚠ ${warnings.join(", ")} of allocatable` }) : null);
+  });
+  const note = unscheduled.length ? el("div", { class: "sub", style: "margin-top:12px" },
+    `${plural(unscheduled.length, "pod")} ${unscheduled.length === 1 ? "is" : "are"} not scheduled on any node (${cpu(unscheduled.reduce((s, p) => s + p.cpu_req, 0))} cores, ${mem(unscheduled.reduce((s, p) => s + p.mem_req, 0))} requested). `,
+    el("a", { href: "#", onclick: (e) => { e.preventDefault(); setView({ by: "project", project: null }); } }, "See them by project")) : null;
+  $("#content").replaceChildren(nodes.length ? el("div", { class: "nodes" }, ...cards) : el("div", { class: "empty", text: "No nodes yet" }), note);
+  return unscheduled;
+}
+
+const COLS = {
+  name: { h: "Name", l: true },
+  pods: { h: "Pods", v: (a) => f0.format(a.pods), sort: (a) => a.pods },
+  cpu_req: { h: "CPU req", v: (a) => cpu(a.cpu_req), sort: (a) => a.cpu_req },
+  cpu_lim: { h: "CPU lim", v: (a) => (a.cpu_lim ? cpu(a.cpu_lim) : "–"), sort: (a) => a.cpu_lim },
+  cpu_use: { h: "CPU used", v: (a) => (a.used_known ? cpu(a.cpu_use) : "–"), sort: (a) => a.cpu_use },
+  cpu_bar: { h: "", bar: "cpu" },
+  mem_req: { h: "Mem req", v: (a) => mem(a.mem_req), sort: (a) => a.mem_req },
+  mem_lim: { h: "Mem lim", v: (a) => (a.mem_lim ? mem(a.mem_lim) : "–"), sort: (a) => a.mem_lim },
+  mem_use: { h: "Mem used", v: (a) => (a.used_known ? mem(a.mem_use) : "–"), sort: (a) => a.mem_use },
+  mem_bar: { h: "", bar: "mem" },
+};
+function renderTable(rows, ref, { cols, nameCell, onRow, defaultSort = "mem_req" }) {
+  const [sortKey, dir] = view.sort || [defaultSort, -1];
+  const sortFn = COLS[sortKey] && COLS[sortKey].sort;
+  rows.sort((a, b) => (sortFn ? (sortFn(a) - sortFn(b)) * dir : a.label.localeCompare(b.label) * dir) || a.label.localeCompare(b.label));
+  const thead = el("thead", {}, el("tr", {}, ...cols.map((k) => {
+    const c = COLS[k];
+    const th = el("th", { class: c.l ? "l" : "", text: c.h, scope: "col" });
+    if (c.sort || k === "name") {
+      if (sortKey === k) th.setAttribute("aria-sort", dir < 0 ? "descending" : "ascending");
+      th.addEventListener("click", () => { view.sort = [k, sortKey === k ? -dir : (k === "name" ? 1 : -1)]; render(); });
+    } else th.style.cursor = "default";
+    return th;
+  })));
+  const tbody = el("tbody", {}, ...rows.map((a) => {
+    const tr = el("tr", { class: onRow ? "clickable" : "" }, ...cols.map((k) => {
+      const c = COLS[k];
+      if (k === "name") return el("td", { class: "l" }, nameCell(a));
+      if (c.bar) return el("td", { class: "bar-cell" }, bar(a, c.bar, ref[c.bar], `${a.label} · ${c.bar === "cpu" ? "CPU" : "Memory"}`));
+      return el("td", { text: c.v(a) });
+    }));
+    if (onRow) { tr.addEventListener("click", () => onRow(a)); tr.tabIndex = 0; tr.addEventListener("keydown", (e) => { if (e.key === "Enter") onRow(a); }); }
+    return tr;
+  }));
+  return el("div", { class: "table-wrap" }, el("table", {}, thead, tbody));
+}
+const LIST_COLS = ["name", "pods", "cpu_req", "cpu_lim", "cpu_use", "cpu_bar", "mem_req", "mem_lim", "mem_use", "mem_bar"];
+
+function renderList(pods, ref, lvl) {
+  let rows, title, nameCell, onRow;
+  if (lvl === "projects") {
+    rows = groupBy(pods, projectKeyOf, (p, k) => projectLabel(k));
+    for (const a of rows) a.namespaces = new Set(pods.filter((p) => projectKeyOf(p) === a.key).map((p) => p.ns)).size;
+    title = plural(rows.length, "project");
+    nameCell = (a) => el("span", {}, a.label, el("span", { class: "muted", text: ` · ${f0.format(a.namespaces)} ns` }));
+    onRow = (a) => setView({ node: view.node, project: a.key });
+  } else if (lvl === "namespaces") {
+    rows = groupBy(pods, (p) => p.ns, (p) => p.ns);
+    title = plural(rows.length, "namespace");
+    nameCell = (a) => el("span", { text: a.label });
+    onRow = (a) => setView({ node: view.node, project: view.project, ns: a.key });
+  } else if (lvl === "workloads") {
+    rows = groupBy(pods, wlKey, (p) => p.owner);
+    for (const a of rows) a.kind = a.key.split("/")[0];
+    title = plural(rows.length, "workload");
+    nameCell = (a) => el("span", {}, el("span", { class: "kind", text: KIND_LABEL[a.kind] || a.kind }), a.label);
+    onRow = (a) => setView({ node: view.node, project: view.project, ns: view.ns, wl: a.key });
+  } else {   // pods
+    rows = groupBy(pods, podKey, (p) => p.name);
+    for (const a of rows) { const p = S.pods.get(a.key); a.pod = p; }
+    title = plural(rows.length, "pod");
+    nameCell = (a) => {
+      const p = a.pod;
+      const state = p.phase !== "Running" ? ["var(--status-warning)", p.phase] : p.containers.some((c) => !c.ready) ? ["var(--status-warning)", "not ready"] : null;
+      return el("span", {}, a.label, el("span", { class: "muted", text: view.by === "project" && p.node ? ` · ${p.node}` : "" }),
+        state ? el("span", { class: "badge", style: "margin-left:8px" }, el("i", { style: `background:${state[0]}` }), state[1]) : null,
+        a.restarts ? el("span", { class: "muted", text: ` · ${f0.format(a.restarts)} restarts` }) : null);
+    };
+    onRow = (a) => setView({ node: view.node, project: view.project, ns: view.ns, wl: view.wl, pod: a.label });
+  }
+  $("#levelTitle").textContent = title;
+  const cols = lvl === "pods" ? LIST_COLS.filter((c) => c !== "pods") : LIST_COLS;
+  // deep down, a workload is a sliver of the node: optionally draw the bars against the largest row instead
+  const largest = { cpu: Math.max(0, ...rows.map((a) => Math.max(a.cpu_req, a.cpu_lim, a.cpu_use))), mem: Math.max(0, ...rows.map((a) => Math.max(a.mem_req, a.mem_lim, a.mem_use))), label: "largest row" };
+  const barRef = view.scale === "max" ? largest : ref;
+  const scale = el("div", { class: "seg", style: "margin-left:8px", "aria-label": "Bar scale" },
+    el("button", { type: "button", text: "allocatable", "aria-pressed": String(view.scale !== "max"), onclick: () => { view.scale = "alloc"; render(); } }),
+    el("button", { type: "button", text: "largest row", "aria-pressed": String(view.scale === "max"), onclick: () => { view.scale = "max"; render(); } }));
+  $("#levelSub").replaceChildren(`Bars against the ${barRef.label}${usageKnown() ? "" : " · usage n/a (no metrics-server)"}`, scale);
+  $("#content").replaceChildren(rows.length ? renderTable(rows, barRef, { cols, nameCell, onRow }) : el("div", { class: "empty", text: "No pods here any more" }));
+}
+
+function renderContainers(pods) {
+  const p = pods[0];
+  if (!p) { $("#levelTitle").textContent = "Pod gone"; $("#levelSub").textContent = ""; $("#content").replaceChildren(el("div", { class: "empty", text: "This pod no longer exists" })); return; }
+  const u = S.usage[podKey(p)] || {};
+  const rows = p.containers.map((c) => {
+    const a = newAgg(c.name, c.name);
+    a.pods = 1; a.cpu_req = c.cpu_req; a.mem_req = c.mem_req; a.cpu_lim = c.cpu_lim; a.mem_lim = c.mem_lim; a.restarts = c.restarts;
+    if (u[c.name]) { a.cpu_use = u[c.name][0]; a.mem_use = u[c.name][1]; a.used_known = 1; }
+    a.c = c;
+    return a;
+  });
+  // bars relative to the largest value in this pod (a container is small against a node)
+  const ref = { cpu: Math.max(...rows.map((a) => Math.max(a.cpu_req, a.cpu_lim, a.cpu_use)), 0), mem: Math.max(...rows.map((a) => Math.max(a.mem_req, a.mem_lim, a.mem_use)), 0), label: "largest value in this pod" };
+  const ns = nsOf(p.ns);
+  $("#levelTitle").textContent = plural(rows.length, "container");
+  $("#levelSub").textContent = `Bars relative to the largest request, limit or usage in this pod${usageKnown() ? "" : " · usage n/a"}`;
+  const detail = el("div", { class: "detail" },
+    el("span", {}, "Namespace ", el("b", { text: p.ns }), ns.project ? ` · project ${ns.project}` : ""),
+    el("span", {}, "Node ", el("b", { text: p.node || "not scheduled" })),
+    el("span", {}, "Phase ", el("b", { text: p.phase })), el("span", {}, "QoS ", el("b", { text: p.qos || "–" })),
+    el("span", {}, "Owner ", el("b", { text: `${KIND_LABEL[p.owner_kind] || p.owner_kind} ${p.owner}` })),
+    p.started ? el("span", {}, "Started ", el("b", { text: `${ago(p.started)} ago` })) : null);
+  const nameCell = (a) => el("span", {}, a.label, el("span", { class: "muted", text: a.c.image ? ` · ${a.c.image}` : "" }),
+    !a.c.ready ? el("span", { class: "badge", style: "margin-left:8px" }, el("i", { style: "background:var(--status-warning)" }), "not ready") : null,
+    a.restarts ? el("span", { class: "muted", text: ` · ${f0.format(a.restarts)} restarts` }) : null);
+  $("#content").replaceChildren(detail, renderTable(rows, ref, { cols: LIST_COLS.filter((c) => c !== "pods"), nameCell, onRow: null }));
+}
+
+function render() {
+  renderHeader();
+  renderCrumbs();
+  const lvl = level();
+  const ref = reference();
+  const pods = scopedPods();
+  renderTiles(pods, ref);
+  if (lvl === "nodes") renderNodes();
+  else if (lvl === "containers") renderContainers(pods);
+  else renderList(pods, ref, lvl);
+  const b = $("#banner");
+  if (!S.nodes.size && !S.pods.size && S.status) {
+    const w = Object.values(S.status.watch || {});
+    b.hidden = false;
+    b.textContent = w.some((x) => x.state === "error") ? `Nothing to show yet: ${w.filter((x) => x.error).map((x) => x.error)[0]}` : "Waiting for the first list from the cluster…";
+  } else b.hidden = true;
+}
+
+// ---------- wiring ----------
+document.querySelectorAll("#by button").forEach((b) => b.addEventListener("click", () => setView({ by: b.dataset.by, node: null, project: null })));
+$("#theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("theme", root.dataset.theme); } catch (e) { /* storage unavailable */ }
+});
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+setInterval(renderHeader, 5000);   // "updated … ago" keeps moving
+readHash();
+renderHeader();
+resync();
+</script>
+</body>
+</html>

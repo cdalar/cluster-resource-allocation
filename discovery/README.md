@@ -127,6 +127,20 @@ cluster, a clusters table) plus each cluster's dashboard behind the cluster sele
 downstream clusters and holds no token; the user sees the clusters Rancher lets them access. A downstream report
 that calls its cluster `in-cluster` (no names ConfigMap) is shown under its Rancher name.
 
+**Live view** (`/live`, `live.py`; off with `--no-live`): the server follows nodes, namespaces and pods with
+Kubernetes watches (`kubectl get --raw '/api/v1/pods?watch=1...'`, one list then a stream of events per resource,
+repeated every 30 minutes and after errors) and reads metrics-server every `--live-metrics-interval` seconds
+(default 15; usage shows *n/a* without it). It keeps compact summaries in memory: each pod's effective requests and
+limits, its owner workload (Deployment through the ReplicaSet's `pod-template-hash`, StatefulSet, DaemonSet, Job,
+static pod, bare pod), node, phase and per-container figures; finished pods are dropped. The page drills Node →
+Rancher Project → Namespace → Workload → Pod → Container, or starts from the projects, with every level's
+requests, limits and usage against the allocatable (the node's, or the schedulable nodes'); the URL hash
+(`#live/node=.../project=.../ns=.../wl=<kind>/<name>/pod=...`) addresses a level. `/api/live/snapshot` is the whole
+state, `/api/live/changes?since=N` what changed after seq `N`, `/api/live/stream` the same as Server-Sent Events;
+the page falls back to polling when a proxy does not pass the stream. Project names come from the collector's
+report (so a new namespace shows its project id until the next collection). The live view follows one cluster:
+with several `--context`, pass `--no-live`.
+
 To look at a saved report locally without cluster access:
 
 ```bash

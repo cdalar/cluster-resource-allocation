@@ -71,6 +71,11 @@ spec:
             {{- if dig "namesConfigMap" "enabled" false .Values.rancher }}
             - --rancher-names-configmap={{ include "crr.namesNamespace" . }}/rancher-project-names
             {{- end }}
+            {{- if not (dig "enabled" true (.Values.live | default dict)) }}
+            - --no-live
+            {{- else }}
+            - --live-metrics-interval={{ dig "metricsInterval" 15 (.Values.live | default dict) }}
+            {{- end }}
             {{- if include "crr.planner" . }}
             - --planner
             {{- end }}

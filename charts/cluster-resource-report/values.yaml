@@ -131,6 +131,7 @@ rancher:
     # own image URL / data: URI (JPEG, PNG or SVG; Rancher suggests 21 px high, at most 20 KB).
     icons:
       report: ""
+      live: ""
       planner: ""
       capacity: ""
   # Downstream clusters, alternative: existing secret with a kubeconfig for the Rancher local (management) cluster, used to show
@@ -160,6 +161,14 @@ planner:
 # requirements and default as planner.enabled.
 capacityPlanner:
   enabled: true
+
+# Live view (/live, every cluster): Node -> Rancher Project -> Namespace -> Workload -> Pod -> Container, or from the
+# project side, with requests, limits and usage against the allocatable, updated as the cluster changes. The pod
+# follows nodes, namespaces and pods with Kubernetes watches (read-only; the ClusterRole gets `watch` on them) and
+# reads metrics.k8s.io every metricsInterval seconds (usage shows n/a without metrics-server).
+live:
+  enabled: true
+  metricsInterval: 15    # seconds between metrics-server usage snapshots (at least 5)
 
 # Keep the latest report across pod restarts on a PVC (needs a storage class). Without it, a new pod starts with
 # an empty dashboard until the first collection finishes. Not needed by the planners.

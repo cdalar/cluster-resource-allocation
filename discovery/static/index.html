@@ -148,6 +148,7 @@ tr.selected { background: var(--hover); }
       <select id="cluster" aria-label="Cluster" hidden></select>
       <button id="refresh" type="button">Collect now</button>
       <a id="cluster-link" href="#" target="_blank" rel="noopener" hidden>Open this cluster's dashboard</a>
+      <a id="live-link" href="live" hidden>Live view</a>
       <a id="planner-link" href="planner" hidden>Allocation planner</a>
       <a id="capacity-link" href="capacity" hidden>Capacity planner</a>
       <span class="sub">CSV:
@@ -439,6 +440,7 @@ function renderMeta() {
   $("#refresh").title = down ? "Collect now on the cluster's own dashboard" : "";
   $("#cluster-link").hidden = !down;
   if (down) $("#cluster-link").href = c.dashboard_url;
+  $("#live-link").hidden = !(st && st.live);
   $("#planner-link").hidden = !(st && st.planner);
   $("#capacity-link").hidden = !(st && st.capacity_planner);
 }

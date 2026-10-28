@@ -4,15 +4,16 @@ plus a usage snapshot from metrics-server every few seconds.
 
 Read-only, through kubectl only, like discover.py:
   - one `kubectl get --raw <path>` list per resource, then `kubectl get --raw '<path>?watch=1&resourceVersion=...'`,
-    a stream of one JSON watch event per line that kubectl copies to stdout as it arrives (nodes, namespaces, pods;
-    the list and watch are repeated every RESYNC seconds, and after any error);
+    a stream of one JSON watch event per line that kubectl copies to stdout as it arrives (nodes, namespaces, pods,
+    PodDisruptionBudgets; the list and watch are repeated every RESYNC seconds, and after any error);
   - `kubectl get --raw /apis/metrics.k8s.io/v1beta1/{pods,nodes}` every few seconds (skipped, with "n/a" on the
     page, when metrics-server is missing).
 
 The state is compact summaries, not the raw objects: pods carry their effective requests/limits (as the scheduler
 computes them, discover.pod_effective), their owner workload (Deployment through the ReplicaSet's pod-template-hash,
-StatefulSet, DaemonSet, Job, ReplicaSet, static pod, or the bare Pod), node, phase and per-container figures. Pods
-that finished (Succeeded/Failed) are dropped.
+StatefulSet, DaemonSet, Job, ReplicaSet, static pod, or the bare Pod), node, phase, per-container figures and the names of the PodDisruptionBudgets that
+select them (matched here from the pod labels, so the page can tell whether a workload survives a node failure).
+Pods that finished (Succeeded/Failed) are dropped.
 
 Changes are numbered (seq) and kept in a bounded log, so a page can follow them incrementally
 (LiveState.changes(since); the server streams them as Server-Sent Events) and reloads the whole snapshot when it
@@ -30,8 +31,9 @@ from datetime import datetime, timezone
 
 import discover
 
-# resource -> list/watch path (core API only, read-only: get/list/watch)
-WATCHED = {"nodes": "/api/v1/nodes", "namespaces": "/api/v1/namespaces", "pods": "/api/v1/pods"}
+# resource -> list/watch path (read-only: get/list/watch)
+WATCHED = {"nodes": "/api/v1/nodes", "namespaces": "/api/v1/namespaces", "pods": "/api/v1/pods",
+           "pdbs": "/apis/policy/v1/poddisruptionbudgets"}
 METRICS_PATH = "/apis/metrics.k8s.io/v1beta1"
 RESYNC = 1800          # seconds: a watch is closed by the server after this; the list is repeated then
 CHANGELOG = 20000      # change log entries kept for changes(since); older = the page reloads the snapshot
@@ -131,14 +133,46 @@ def pod_key(ns, name):
     return f"{ns}/{name}"
 
 
+def pdb_summary(pdb):
+    """A PodDisruptionBudget: its rule (minAvailable / maxUnavailable, number or percentage), selector and status."""
+    md, spec, status = pdb["metadata"], pdb.get("spec") or {}, pdb.get("status") or {}
+    return {"ns": md["namespace"], "name": md["name"],
+            "min_available": spec.get("minAvailable"), "max_unavailable": spec.get("maxUnavailable"),
+            "selector": spec.get("selector") or {},
+            "current_healthy": status.get("currentHealthy", 0), "desired_healthy": status.get("desiredHealthy", 0),
+            "disruptions_allowed": status.get("disruptionsAllowed", 0), "expected_pods": status.get("expectedPods", 0)}
+
+
+def selector_matches(selector, labels):
+    """Does a label selector (matchLabels + matchExpressions) select these labels? An empty selector selects nothing
+    (as for a PDB: a null selector matches no pods)."""
+    if not selector:
+        return False
+    for k, v in (selector.get("matchLabels") or {}).items():
+        if labels.get(k) != v:
+            return False
+    for e in selector.get("matchExpressions") or []:
+        k, op, values = e.get("key"), e.get("operator"), e.get("values") or []
+        if op == "In" and labels.get(k) not in values:
+            return False
+        if op == "NotIn" and labels.get(k) in values:
+            return False
+        if op == "Exists" and k not in labels:
+            return False
+        if op == "DoesNotExist" and k in labels:
+            return False
+    return True
+
+
 class LiveState:
     """In-memory nodes / namespaces / pods / usage, with a numbered change log. Thread-safe."""
 
     def __init__(self, args=None, metrics_interval=DEFAULT_METRICS_INTERVAL):
         self.args = args
         self.cond = threading.Condition()
-        self.nodes, self.namespaces, self.pods = {}, {}, {}
+        self.nodes, self.namespaces, self.pods, self.pdbs = {}, {}, {}, {}
         self.raw_namespaces = {}        # name -> namespace object (kept to recompute project names)
+        self.pod_labels = {}            # "ns/pod" -> labels, to match PodDisruptionBudgets when one changes
         self.usage, self.node_usage = {}, {}   # "ns/pod" -> {container: [cpu, mem]}; node -> [cpu, mem]
         self.usage_seq, self.usage_at = 0, None
         self.seq = 0
@@ -161,15 +195,34 @@ class LiveState:
         self.log.append((self.seq, kind, key, value))
 
     def _store(self, kind):
-        return {"nodes": self.nodes, "namespaces": self.namespaces, "pods": self.pods}[kind]
+        return {"nodes": self.nodes, "namespaces": self.namespaces, "pods": self.pods, "pdbs": self.pdbs}[kind]
+
+    def _pdbs_of(self, ns, labels):
+        return sorted(p["name"] for p in self.pdbs.values() if p["ns"] == ns and selector_matches(p["selector"], labels))
+
+    def _rematch_pdbs(self, ns):
+        """A PDB in `ns` changed: pods whose PDB list changes are re-emitted."""
+        for key, labels in self.pod_labels.items():
+            pod = self.pods.get(key)
+            if pod and pod["ns"] == ns:
+                pdbs = self._pdbs_of(ns, labels)
+                if pdbs != pod["pdbs"]:
+                    self._upsert("pods", key, dict(pod, pdbs=pdbs))
 
     def _summarize(self, kind, obj):
         """(key, summary) of a watched object, or (key, None) when it must not be kept (finished pod)."""
         if kind == "pods":
             key = pod_key(obj["metadata"]["namespace"], obj["metadata"]["name"])
             if (obj.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+                self.pod_labels.pop(key, None)
                 return key, None
-            return key, pod_summary(obj)
+            labels = obj["metadata"].get("labels") or {}
+            self.pod_labels[key] = labels
+            summary = pod_summary(obj)
+            summary["pdbs"] = self._pdbs_of(summary["ns"], labels)
+            return key, summary
+        if kind == "pdbs":
+            return pod_key(obj["metadata"]["namespace"], obj["metadata"]["name"]), pdb_summary(obj)
         if kind == "nodes":
             return obj["metadata"]["name"], node_summary(obj)
         return obj["metadata"]["name"], namespace_summary(obj, self.names, self.system_re, self.system_project_re,
@@ -184,7 +237,11 @@ class LiveState:
                     self.raw_namespaces.pop(key, None)
                 else:
                     self.raw_namespaces[key] = obj
+            if kind == "pods" and event_type == "DELETED":
+                self.pod_labels.pop(key, None)
             self._upsert(kind, key, None if event_type == "DELETED" else summary)
+            if kind == "pdbs":
+                self._rematch_pdbs(obj["metadata"]["namespace"])
             self.cond.notify_all()
 
     def _upsert(self, kind, key, summary):
@@ -209,6 +266,11 @@ class LiveState:
                 self._upsert(kind, key, summary)
             for key in [k for k in self._store(kind) if k not in seen]:
                 self._upsert(kind, key, None)
+                if kind == "pods":
+                    self.pod_labels.pop(key, None)
+            if kind == "pdbs":
+                for ns in {p["ns"] for p in self.pdbs.values()} | {k.split("/", 1)[0] for k in self.pod_labels}:
+                    self._rematch_pdbs(ns)
             self.cond.notify_all()
 
     def set_watch_status(self, kind, state, error=None):
@@ -266,13 +328,15 @@ class LiveState:
     def _status(self):
         return {"started": self.started, "cluster": self.cluster, "watch": {k: dict(v) for k, v in self.watch_status.items()},
                 "metrics": dict(self.metrics_status), "usage_at": self.usage_at,
-                "counts": {"nodes": len(self.nodes), "namespaces": len(self.namespaces), "pods": len(self.pods)}}
+                "counts": {"nodes": len(self.nodes), "namespaces": len(self.namespaces), "pods": len(self.pods),
+                           "pdbs": len(self.pdbs)}}
 
     def snapshot(self):
         with self.cond:
             return {"seq": self.seq, "at": now_iso(), "status": self._status(),
                     "nodes": list(self.nodes.values()), "namespaces": list(self.namespaces.values()),
-                    "pods": list(self.pods.values()), "usage": self.usage, "node_usage": self.node_usage}
+                    "pods": list(self.pods.values()), "pdbs": list(self.pdbs.values()),
+                    "usage": self.usage, "node_usage": self.node_usage}
 
     def snapshot_json(self):
         """(body, gzip body) of the snapshot, serialized once per seq (many pages may open at once)."""
@@ -288,7 +352,7 @@ class LiveState:
         return cached
 
     def changes(self, since):
-        """What changed after seq `since`: {"seq", "nodes"|"namespaces"|"pods": {key: summary or null}, "usage"?,
+        """What changed after seq `since`: {"seq", "nodes"|"namespaces"|"pods"|"pdbs": {key: summary or null}, "usage"?,
         "status"}, or {"reset": true} when `since` is older than the log (the page then reloads the snapshot)."""
         with self.cond:
             if since == self.seq:
@@ -296,11 +360,11 @@ class LiveState:
             oldest = self.log[0][0] if self.log else self.seq + 1
             if since > self.seq or since < oldest - 1:
                 return {"seq": self.seq, "reset": True}
-            out = {"seq": self.seq, "nodes": {}, "namespaces": {}, "pods": {}, "status": self._status()}
+            out = {"seq": self.seq, "nodes": {}, "namespaces": {}, "pods": {}, "pdbs": {}, "status": self._status()}
             for seq, kind, key, value in self.log:
-                if seq > since and kind in ("nodes", "namespaces", "pods"):
+                if seq > since and kind in ("nodes", "namespaces", "pods", "pdbs"):
                     out[kind][key] = value
-            for kind in ("nodes", "namespaces", "pods"):
+            for kind in ("nodes", "namespaces", "pods", "pdbs"):
                 if not out[kind]:
                     del out[kind]
             if self.usage_seq > since:

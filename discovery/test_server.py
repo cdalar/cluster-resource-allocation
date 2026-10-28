@@ -435,7 +435,7 @@ class LiveApi(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual([n["name"] for n in snap["nodes"]], ["n1"])
         self.assertEqual(snap["pods"][0]["cpu_req"], 0.25)
-        self.assertEqual(snap["status"]["counts"], {"nodes": 1, "namespaces": 0, "pods": 1})
+        self.assertEqual(snap["status"]["counts"], {"nodes": 1, "namespaces": 0, "pods": 1, "pdbs": 0})
         code, headers, gz = self.get("/api/live/snapshot", headers={"Accept-Encoding": "gzip"})
         self.assertEqual(headers["Content-Encoding"], "gzip")
         self.assertEqual(json.loads(gzip.decompress(gz))["seq"], snap["seq"])

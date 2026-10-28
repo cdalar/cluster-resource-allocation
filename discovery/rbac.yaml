@@ -7,10 +7,13 @@ rules:
 - apiGroups: [""]
   resources: [nodes, namespaces, pods, resourcequotas, limitranges]
   verbs: [get, list]
-# live view (server.py /live): follows nodes, namespaces and pods
+# live view (server.py /live): follows nodes, namespaces, pods and PodDisruptionBudgets
 - apiGroups: [""]
   resources: [nodes, namespaces, pods]
   verbs: [watch]
+- apiGroups: [policy]
+  resources: [poddisruptionbudgets]
+  verbs: [get, list, watch]
 - apiGroups: [autoscaling]
   resources: [horizontalpodautoscalers]
   verbs: [get, list]

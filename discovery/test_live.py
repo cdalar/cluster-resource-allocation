@@ -233,3 +233,48 @@ class FakeKubectl(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def pdb(name, match, min_available=None, max_unavailable=None, ns="payments-api"):
+    spec = {"selector": {"matchLabels": match}}
+    if min_available is not None:
+        spec["minAvailable"] = min_available
+    if max_unavailable is not None:
+        spec["maxUnavailable"] = max_unavailable
+    return {"metadata": {"name": name, "namespace": ns}, "spec": spec,
+            "status": {"currentHealthy": 2, "desiredHealthy": 1, "disruptionsAllowed": 1, "expectedPods": 2}}
+
+
+class DisruptionBudgets(unittest.TestCase):
+    def test_selector(self):
+        self.assertTrue(live.selector_matches({"matchLabels": {"app": "web"}}, {"app": "web", "tier": "x"}))
+        self.assertFalse(live.selector_matches({"matchLabels": {"app": "web"}}, {"app": "api"}))
+        self.assertFalse(live.selector_matches({}, {"app": "web"}))   # a PDB without a selector matches nothing
+        self.assertTrue(live.selector_matches({"matchExpressions": [{"key": "tier", "operator": "In", "values": ["a", "b"]},
+                                                                    {"key": "canary", "operator": "DoesNotExist"}]}, {"tier": "b"}))
+        self.assertFalse(live.selector_matches({"matchExpressions": [{"key": "tier", "operator": "NotIn", "values": ["b"]}]}, {"tier": "b"}))
+        self.assertFalse(live.selector_matches({"matchExpressions": [{"key": "tier", "operator": "Exists"}]}, {}))
+
+    def test_pods_carry_their_pdbs(self):
+        st = live.LiveState()
+        st.replace_all("pods", [pod("web-1", labels={"app": "web"}), pod("api-1", labels={"app": "api"})])
+        self.assertEqual(st.pods["payments-api/web-1"]["pdbs"], [])
+        seq = st.seq
+        st.apply("pdbs", "ADDED", pdb("web-pdb", {"app": "web"}, min_available=1))
+        d = st.changes(seq)
+        self.assertEqual(d["pdbs"]["payments-api/web-pdb"]["min_available"], 1)
+        self.assertEqual(list(d["pods"]), ["payments-api/web-1"])          # only the matching pod was re-emitted
+        self.assertEqual(d["pods"]["payments-api/web-1"]["pdbs"], ["web-pdb"])
+        # a new pod matches the existing PDB; a relist of the PDBs without it clears the pods again
+        st.apply("pods", "ADDED", pod("web-2", labels={"app": "web"}))
+        self.assertEqual(st.pods["payments-api/web-2"]["pdbs"], ["web-pdb"])
+        seq = st.seq
+        st.replace_all("pdbs", [pdb("other", {"app": "api"}, max_unavailable="25%")])
+        d = st.changes(seq)
+        self.assertIsNone(d["pdbs"]["payments-api/web-pdb"])
+        self.assertEqual({k: v["pdbs"] for k, v in d["pods"].items()},
+                         {"payments-api/web-1": [], "payments-api/web-2": [], "payments-api/api-1": ["other"]})
+        self.assertEqual(st.snapshot()["status"]["counts"]["pdbs"], 1)
+        # a deleted pod is forgotten for later matching
+        st.apply("pods", "DELETED", pod("api-1", labels={"app": "api"}))
+        self.assertNotIn("payments-api/api-1", st.pod_labels)

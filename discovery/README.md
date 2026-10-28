@@ -132,7 +132,10 @@ Kubernetes watches (`kubectl get --raw '/api/v1/pods?watch=1...'`, one list then
 repeated every 30 minutes and after errors) and reads metrics-server every `--live-metrics-interval` seconds
 (default 15; usage shows *n/a* without it). It keeps compact summaries in memory: each pod's effective requests and
 limits, its owner workload (Deployment through the ReplicaSet's `pod-template-hash`, StatefulSet, DaemonSet, Job,
-static pod, bare pod), node, phase and per-container figures; finished pods are dropped. The page drills Node →
+static pod, bare pod), node, phase, per-container figures and the PodDisruptionBudgets that select it; finished
+pods are dropped. A workload's pods per node (skew, as topology spread constraints count it) and an N+1 check (if
+the node with most of its pods fails, do the remaining pods satisfy its PodDisruptionBudget, or is it an outage?)
+are shown per workload. The page drills Node →
 Rancher Project → Namespace → Workload → Pod → Container, or starts from the projects, with every level's
 requests, limits and usage against the allocatable (the node's, or the schedulable nodes'); the URL hash
 (`#live/node=.../project=.../ns=.../wl=<kind>/<name>/pod=...`) addresses a level. `/api/live/snapshot` is the whole

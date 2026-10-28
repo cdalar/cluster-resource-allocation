@@ -383,3 +383,101 @@ class FleetView(unittest.TestCase):
         with mock.patch.object(sys, "argv", ["server.py", "--rancher-local-self", "--downstream-report", "nonsense"]), \
                 self.assertRaises(SystemExit):
             server.main()
+
+
+class LiveApi(unittest.TestCase):
+    """/live and /api/live/* with an in-memory live state (no cluster)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import live
+        cls.tmp = tempfile.TemporaryDirectory()
+        args = server.discover.build_parser().parse_args([])
+        args.data_dir, args.interval, args.no_collect = cls.tmp.name, "30m", True
+        cls.state = live.LiveState(args)
+        cls.state.replace_all("nodes", [{"metadata": {"name": "n1", "labels": {}}, "spec": {},
+                                         "status": {"allocatable": {"cpu": "4", "memory": "8Gi", "pods": "110"},
+                                                    "conditions": [{"type": "Ready", "status": "True"}]}}])
+        cls.state.replace_all("pods", [{"metadata": {"name": "web-1", "namespace": "shop", "uid": "u1"},
+                                        "spec": {"nodeName": "n1", "containers": [{"name": "web", "resources": {"requests": {"cpu": "250m"}}}]},
+                                        "status": {"phase": "Running"}}])
+        collector = server.Collector(args)
+        collector.live = cls.state
+        cls.collector = collector
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(collector, live_state=cls.state))
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.tmp.cleanup()
+
+    def get(self, path, headers=None):
+        req = urllib.request.Request(self.base + path, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.headers, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers, e.read()
+
+    def test_page_and_link(self):
+        code, headers, body = self.get("/live")
+        self.assertEqual(code, 200)
+        self.assertIn(b"Live resource view", body)
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        self.assertTrue(json.loads(self.get("/api/report")[2])["status"]["live"])   # the report page shows the link
+
+    def test_snapshot(self):
+        import gzip
+        code, headers, body = self.get("/api/live/snapshot")
+        snap = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertEqual([n["name"] for n in snap["nodes"]], ["n1"])
+        self.assertEqual(snap["pods"][0]["cpu_req"], 0.25)
+        self.assertEqual(snap["status"]["counts"], {"nodes": 1, "namespaces": 0, "pods": 1})
+        code, headers, gz = self.get("/api/live/snapshot", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(headers["Content-Encoding"], "gzip")
+        self.assertEqual(json.loads(gzip.decompress(gz))["seq"], snap["seq"])
+
+    def test_changes(self):
+        seq = self.state.seq
+        self.assertEqual(json.loads(self.get(f"/api/live/changes?since={seq}")[2])["seq"], seq)
+        self.assertTrue(json.loads(self.get("/api/live/changes")[2])["reset"])       # no since: start with the snapshot
+        self.assertTrue(json.loads(self.get("/api/live/changes?since=abc")[2])["reset"])
+
+    def test_stream(self):
+        seq = self.state.seq
+        with mock.patch.object(server, "LIVE_DEBOUNCE", 0), mock.patch.object(server, "LIVE_PING", 1):
+            req = urllib.request.Request(f"{self.base}/api/live/stream?since={seq}")
+            with urllib.request.urlopen(req, timeout=10) as r:
+                self.assertEqual(r.headers["Content-Type"], "text/event-stream")
+                self.assertEqual(r.readline(), b"retry: 5000\n")
+                r.readline()
+                self.assertEqual(r.readline(), b"event: ping\n")            # nothing changed within LIVE_PING
+                self.assertEqual(json.loads(r.readline()[len(b"data: "):]), {"seq": seq})
+                r.readline()
+                self.state.apply("pods", "DELETED", {"metadata": {"name": "web-1", "namespace": "shop"}, "spec": {}, "status": {}})
+                lines = [r.readline() for _ in range(3)]
+                self.assertEqual(lines[0], f"id: {seq + 1}\n".encode())
+                self.assertEqual(lines[1], b"event: changes\n")
+                delta = json.loads(lines[2][len(b"data: "):])
+                self.assertEqual(delta["pods"], {"shop/web-1": None})
+        # put the pod back for the other tests
+        self.state.apply("pods", "ADDED", {"metadata": {"name": "web-1", "namespace": "shop", "uid": "u1"},
+                                           "spec": {"nodeName": "n1", "containers": [{"name": "web", "resources": {"requests": {"cpu": "250m"}}}]},
+                                           "status": {"phase": "Running"}})
+
+    def test_off_without_state(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(server.Collector(self.collector.args)))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/live/snapshot")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(cm.exception.code, 404)
+            self.assertIn("live view is off", json.loads(cm.exception.read())["error"])
+            with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_port}/api/report", timeout=5) as r:
+                self.assertFalse(json.loads(r.read())["status"]["live"])
+        finally:
+            httpd.shutdown()

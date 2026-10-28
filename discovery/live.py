@@ -83,7 +83,7 @@ def pod_summary(pod):
     kind, owner = owner_of(pod)
     return {
         "ns": md["namespace"], "name": md["name"], "uid": md.get("uid"), "node": spec.get("nodeName") or "",
-        "phase": status.get("phase") or "", "qos": status.get("qosClass") or "",
+        "phase": "Terminating" if md.get("deletionTimestamp") else status.get("phase") or "", "qos": status.get("qosClass") or "",
         "owner_kind": kind, "owner": owner, "started": status.get("startTime"),
         "cpu_req": discover.pod_effective(spec, "requests", "cpu"),
         "mem_req": discover.pod_effective(spec, "requests", "memory"),

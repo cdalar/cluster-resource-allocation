@@ -20,6 +20,29 @@ spec:
     scheme: http
     port: {{ .Values.service.port | quote }}
     path: /
+{{- if dig "enabled" true (.Values.live | default dict) }}
+---
+apiVersion: ui.cattle.io/v1
+kind: NavLink
+metadata:
+  name: {{ include "crr.fullname" . }}-live
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  label: "Live view"
+  {{- with dig "navLink" "group" "" .Values.rancher }}
+  group: {{ . | quote }}
+  {{- end }}
+  iconSrc: {{ include "crr.navLinkIcon" (list . "live") | quote }}
+  description: Nodes, projects, namespaces, workloads and pods with requests, limits and usage, updated live
+  target: _blank
+  toService:
+    namespace: {{ .Release.Namespace }}
+    name: {{ include "crr.fullname" . }}
+    scheme: http
+    port: {{ .Values.service.port | quote }}
+    path: /live
+{{- end }}
 {{- if include "crr.planner" . }}
 ---
 apiVersion: ui.cattle.io/v1

@@ -7,11 +7,15 @@ rules:
 - apiGroups: [""]
   resources: [nodes, namespaces, pods, resourcequotas, limitranges]
   verbs: [get, list]
+# live view (server.py /live): follows nodes, namespaces and pods
+- apiGroups: [""]
+  resources: [nodes, namespaces, pods]
+  verbs: [watch]
 - apiGroups: [autoscaling]
   resources: [horizontalpodautoscalers]
   verbs: [get, list]
 - apiGroups: [metrics.k8s.io]
-  resources: [pods]
+  resources: [pods, nodes]
   verbs: [get, list]
 ---
 # Prometheus queries through the API server service proxy (Rancher Monitoring)

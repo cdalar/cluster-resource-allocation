@@ -13,6 +13,15 @@ Endpoints (all relative, so the app also works behind the Rancher/API server ser
                             Rancher's proxy (/k8s/clusters/<id>/...) with the browser's Rancher session -- this
                             server never talks to downstream clusters and holds no token.
 
+Live view (live.py; on unless --no-live or --no-collect): nodes, namespaces and pods of this cluster followed with
+Kubernetes watches, usage from metrics-server every --live-metrics-interval seconds:
+  GET  /live                     live page: Node -> Project -> Namespace -> Workload -> Pod -> Container (or from the
+                                 project side), requests / limits / usage against the allocatable
+  GET  /api/live/snapshot        the whole state (gzip when accepted): {"seq", nodes, namespaces, pods, usage, status}
+  GET  /api/live/changes?since=N what changed after seq N ({"reset": true} = reload the snapshot)
+  GET  /api/live/stream?since=N  the same as Server-Sent Events (event: changes, id: seq), a few seconds apart,
+                                 an "event: ping" every 15 s while nothing changes
+
 With --planner (Rancher local cluster only), also the allocation planner (planner.py):
   GET  /planner                  planner page
   GET  /api/planner              plan + Rancher inventory + checks
@@ -35,15 +44,19 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import discover
+import live
 import planner
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 CSV_NAMES = ("clusters", "projects", "namespaces")
 PAGE_CSP = "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:"
+LIVE_DEBOUNCE = 2.0    # seconds a change waits on the SSE stream for the rest of its burst
+LIVE_PING = 15         # seconds between SSE comments while nothing changes (keeps proxies from closing the stream)
 
 
 def versions():
@@ -72,6 +85,7 @@ class Collector:
         self.last_error = None
         self.next_run = None
         self.wake = threading.Event()
+        self.live = None   # live.LiveState when the live view is on: gets the Rancher Project names of each report
         self._load_saved()
 
     def _path(self, name):
@@ -89,6 +103,8 @@ class Collector:
         data = json.dumps(report).encode()
         with self.lock:
             self.report, self.report_json, self.last_error = report, data, None
+        if self.live is not None:
+            self.live.set_names_from_report(report)
 
     def encoded(self, body):
         """(ETag, gzip body) for a /api/report response body; computed once per distinct body, so the polling
@@ -118,6 +134,7 @@ class Collector:
                 "collect_enabled": not self.args.no_collect,
                 "planner": bool(getattr(self.args, "planner", False)),
                 "capacity_planner": bool(getattr(self.args, "capacity_planner", False)),
+                "live": self.live is not None,
                 "versions": versions(),
             }
 
@@ -248,9 +265,16 @@ class PlannerBackend:
             return self.view(self.store.save(body.get("plan"), body["version"], body.get("restored_from")))
 
 
-def make_handler(collector, planner_backend=None, capacity_backend=None, rancher_clusters=None):
+def make_handler(collector, planner_backend=None, capacity_backend=None, rancher_clusters=None, live_state=None):
     # URL name -> planner backend; both are served by static/planner.html, which takes its mode from the API
     planners = {name: b for name, b in (("planner", planner_backend), ("capacity", capacity_backend)) if b}
+
+    def since_of(query):
+        """?since=N (or the SSE Last-Event-ID header value passed in); -1 = nothing yet."""
+        try:
+            return int(query)
+        except (TypeError, ValueError):
+            return -1
 
     def planner_route(path):
         """(backend, what) for /<name>, /api/<name>, /api/<name>/export.yaml, /api/<name>/history and
@@ -327,6 +351,25 @@ def make_handler(collector, planner_backend=None, capacity_backend=None, rancher
                            {"Content-Disposition": 'attachment; filename="allocations.yaml"'})
             elif path == "/api/report":
                 self._report()
+            elif path == "/live":
+                self._page("live.html")
+            elif path.startswith("/api/live/"):
+                if live_state is None:
+                    return self._json(404, {"error": "live view is off (--no-live or --no-collect)"})
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                since = since_of((query.get("since") or [self.headers.get("Last-Event-ID")])[0])
+                if path == "/api/live/snapshot":
+                    body, gz = live_state.snapshot_json()
+                    headers = {"Vary": "Accept-Encoding"}
+                    if "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                        body, headers["Content-Encoding"] = gz, "gzip"
+                    self._send(200, body, "application/json", headers)
+                elif path == "/api/live/changes":
+                    self._json(200, live_state.changes(since))
+                elif path == "/api/live/stream":
+                    self._live_stream(since)
+                else:
+                    self._send(404, "not found", "text/plain")
             elif path == "/api/clusters":
                 if rancher_clusters is None:
                     return self._json(404, {"error": "not on the Rancher local cluster (no --downstream-report)"})
@@ -368,6 +411,40 @@ def make_handler(collector, planner_backend=None, capacity_backend=None, rancher
         def _page(self, name):
             with open(os.path.join(STATIC_DIR, name), "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8", {"Content-Security-Policy": PAGE_CSP})
+
+        def _live_stream(self, since):
+            """Server-Sent Events: the changes after `since`, each burst a few seconds after its first change
+            (event: changes, id: the new seq), and a comment every LIVE_PING seconds while nothing changes. A client
+            that fell behind the change log gets {"reset": true} and reloads the snapshot."""
+            self.send_response(200)
+            for k, v in (("Content-Type", "text/event-stream"), ("Cache-Control", "no-store"),
+                         ("X-Accel-Buffering", "no"), ("X-Content-Type-Options", "nosniff")):
+                self.send_header(k, v)
+            self.end_headers()
+            try:
+                self.wfile.write(b"retry: 5000\n\n")
+                self.wfile.flush()
+                while True:
+                    seq = live_state.wait(since, LIVE_PING)
+                    if seq <= since:
+                        # an event, not a comment: the page sees it (EventSource hides comments) and knows the
+                        # stream is alive; without one for 45 s it falls back to polling /api/live/changes
+                        self.wfile.write(f"event: ping\ndata: {json.dumps({'seq': seq})}\n\n".encode())
+                        self.wfile.flush()
+                        continue
+                    time.sleep(LIVE_DEBOUNCE)
+                    delta = live_state.changes(since)
+                    self.wfile.write(f"id: {delta['seq']}\nevent: changes\ndata: {json.dumps(delta)}\n\n".encode())
+                    self.wfile.flush()
+                    since = delta["seq"]
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return   # the page went away
+
+        def handle(self):
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def do_PUT(self):
             backend, what = planner_route(self.path.split("?", 1)[0])
@@ -428,6 +505,10 @@ def main():
                     help="Rancher local cluster only: where this dashboard's Service is on the downstream clusters "
                          "(e.g. resource-report/resource-report-cluster-resource-report:80). The page then lists all "
                          "Rancher clusters and shows each one's report through Rancher's proxy (fleet view)")
+    ap.add_argument("--no-live", action="store_true",
+                    help="no live view (/live): no watches on nodes, namespaces and pods and no metrics-server polling")
+    ap.add_argument("--live-metrics-interval", type=int, default=live.DEFAULT_METRICS_INTERVAL, metavar="SECONDS",
+                    help=f"live view: seconds between metrics-server usage snapshots (default: {live.DEFAULT_METRICS_INTERVAL})")
     ap.add_argument("--plan-configmaps", metavar="NAMESPACE/PREFIX",
                     help="keep the planners' plans in the ConfigMaps PREFIX-planner and PREFIX-capacity (in this "
                          "cluster; needs get/update on them) instead of files in --data-dir")
@@ -453,15 +534,28 @@ def main():
         ap.error("--planner / --capacity-planner need the Rancher local cluster: --rancher-local-self, "
                  "--rancher-local-context or --rancher-local-kubeconfig")
 
+    if args.live_metrics_interval < 5:
+        ap.error("--live-metrics-interval must be at least 5 seconds")
+    if len(args.context) > 1 and not (args.no_live or args.no_collect):
+        ap.error("the live view follows one cluster: with several --context use --no-live")
+
     collector = Collector(args)
     planner_backend = PlannerBackend(args, collector) if args.planner else None
     capacity_backend = PlannerBackend(args, collector, mode="capacity") if args.capacity_planner else None
     rancher_clusters = RancherClusters(args) if args.downstream_report else None
+    live_state = None
+    if not args.no_collect and not args.no_live:
+        live_state = live.LiveState(args, metrics_interval=args.live_metrics_interval)
+        collector.live = live_state
+        if collector.report:
+            live_state.set_names_from_report(collector.report)
+        live.start(live_state, context=args.context[0] if args.context else None)
     if not args.no_collect:
         threading.Thread(target=collector.loop, daemon=True).start()
 
     host, port = args.listen.rsplit(":", 1)
-    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend, capacity_backend, rancher_clusters))
+    httpd = ThreadingHTTPServer((host, int(port)), make_handler(collector, planner_backend, capacity_backend, rancher_clusters,
+                                                                live_state))
     discover.log(f"serving on http://{args.listen} (interval {args.interval}, data {args.data_dir})")
     try:
         httpd.serve_forever()

@@ -53,6 +53,12 @@ questions:
     type: boolean
     default: true
     group: Planners
+  - variable: live.enabled
+    label: Live view
+    description: Nodes, projects, namespaces, workloads and pods with requests, limits and usage, updated live (watches on nodes, namespaces and pods).
+    type: boolean
+    default: true
+    group: Collection
   - variable: prometheus.enabled
     label: Use Prometheus (Rancher Monitoring) for usage history
     type: boolean

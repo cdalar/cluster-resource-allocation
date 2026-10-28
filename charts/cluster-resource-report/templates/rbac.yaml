@@ -16,11 +16,17 @@ rules:
   - apiGroups: [""]
     resources: [nodes, namespaces, pods, resourcequotas, limitranges]
     verbs: [get, list]
+  {{- if dig "enabled" true (.Values.live | default dict) }}
+  # live view: follows nodes, namespaces and pods
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods]
+    verbs: [watch]
+  {{- end }}
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
     verbs: [get, list]
   - apiGroups: [metrics.k8s.io]
-    resources: [pods]
+    resources: [pods, nodes]
     verbs: [get, list]
   {{- if include "crr.isLocal" . }}
   # Rancher local cluster: Project and cluster display names

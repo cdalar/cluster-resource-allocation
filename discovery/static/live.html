@@ -114,6 +114,11 @@ td.bar-cell .bar { width: 100%; }
 tbody tr.clickable { cursor: pointer; }
 tbody tr:hover { background: var(--hover); }
 .empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+.spread { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--grid); }
+.spread-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 6px 24px; }
+.spread-row { display: grid; grid-template-columns: minmax(80px, 180px) 1fr 32px; gap: 8px; align-items: center; font-size: 12px; }
+.spread-row .v { text-align: right; font-variant-numeric: tabular-nums; }
+.spread-row .bar .lim { background: var(--text-muted); }
 .detail { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
 .detail b { color: var(--text-primary); font-weight: 500; }
 #tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; min-width: 180px; }
@@ -170,7 +175,7 @@ const KINDS_ORDER = ["Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSe
 const KIND_LABEL = { StaticPod: "Static pod", Pod: "Pod (no controller)" };
 
 // ---------- state ----------
-const S = { seq: -1, nodes: new Map(), ns: new Map(), pods: new Map(), usage: {}, nodeUsage: {}, status: null, cluster: null };
+const S = { seq: -1, nodes: new Map(), ns: new Map(), pods: new Map(), pdbs: new Map(), usage: {}, nodeUsage: {}, status: null, cluster: null };
 // what is shown: group by node or project, then the chosen node / project (id) / namespace / workload ("Kind/name") / pod
 const view = { by: "node", node: null, project: null, ns: null, wl: null, pod: null, sort: null, scale: "alloc" };   // scale: bars against the allocatable, or the largest row
 const conn = { mode: "connecting", es: null, lastMsg: 0, lastUpdate: null, pollTimer: null, retryTimer: null, error: null };
@@ -243,6 +248,7 @@ function applySnapshot(snap) {
   S.nodes = new Map(snap.nodes.map((n) => [n.name, n]));
   S.ns = new Map(snap.namespaces.map((n) => [n.name, n]));
   S.pods = new Map(snap.pods.map((p) => [podKey(p), p]));
+  S.pdbs = new Map((snap.pdbs || []).map((p) => [`${p.ns}/${p.name}`, p]));
   S.usage = snap.usage || {}; S.nodeUsage = snap.node_usage || {};
   S.status = snap.status; S.cluster = snap.status && snap.status.cluster;
   conn.lastUpdate = Date.now();
@@ -250,7 +256,7 @@ function applySnapshot(snap) {
 }
 function applyChanges(d) {
   if (d.reset) { resync(); return; }
-  for (const [kind, map] of [["nodes", S.nodes], ["namespaces", S.ns], ["pods", S.pods]]) {
+  for (const [kind, map] of [["nodes", S.nodes], ["namespaces", S.ns], ["pods", S.pods], ["pdbs", S.pdbs]]) {
     for (const [k, v] of Object.entries(d[kind] || {})) { if (v === null) map.delete(k); else map.set(k, v); }
   }
   if (d.usage) { S.usage = d.usage; S.nodeUsage = d.node_usage || {}; }
@@ -338,7 +344,7 @@ function scopedPods() {
   return out;
 }
 function newAgg(key, label) {
-  return { key, label, pods: 0, pending: 0, cpu_req: 0, mem_req: 0, cpu_lim: 0, mem_lim: 0, cpu_use: 0, mem_use: 0, used_known: 0, restarts: 0, nodes: new Set() };
+  return { key, label, pods: 0, pending: 0, cpu_req: 0, mem_req: 0, cpu_lim: 0, mem_lim: 0, cpu_use: 0, mem_use: 0, used_known: 0, restarts: 0, nodes: new Set(), byNode: new Map() };
 }
 function addPod(a, p) {
   a.pods += 1; if (p.phase !== "Running") a.pending += 1;
@@ -346,7 +352,63 @@ function addPod(a, p) {
   const u = podUsage(p);
   if (u) { a.cpu_use += u.cpu; a.mem_use += u.mem; a.used_known += 1; }
   for (const c of p.containers) a.restarts += c.restarts || 0;
-  if (p.node) a.nodes.add(p.node);
+  if (p.node) { a.nodes.add(p.node); a.byNode.set(p.node, (a.byNode.get(p.node) || 0) + 1); }
+}
+// how a workload's pods are spread over the schedulable nodes: counts per node (largest first, nodes without one
+// of its pods as 0) and the skew (largest - smallest), the measure topologySpreadConstraints use (maxSkew)
+function spread(a, kind) {
+  const nodes = [...S.nodes.values()].filter((n) => n.ready && !n.unschedulable).map((n) => n.name);
+  for (const n of a.byNode.keys()) if (!nodes.includes(n)) nodes.push(n);   // a pod on a cordoned node still counts
+  const rows = nodes.map((n) => [n, a.byNode.get(n) || 0]).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+  const counts = rows.map((r) => r[1]);
+  const skew = counts.length ? counts[0] - counts[counts.length - 1] : 0;
+  // uneven: one node holds clearly more than its even share (9 pods on 3 nodes: 8/1/0 yes, 4/3/2 no; a few pods on
+  // many nodes are never flagged for one node having two)
+  const even = nodes.length ? Math.ceil(a.pods / nodes.length) : 0;
+  const uneven = a.pods >= 2 && kind !== "DaemonSet" && kind !== "StaticPod" && skew > 1 && counts[0] > even + 1;
+  return { rows, counts, skew, uneven, used: a.nodes.size, total: nodes.length };
+}
+// "What if the node with most of this workload's pods fails?" The remaining pods against the strictest
+// PodDisruptionBudget that selects them (minAvailable, or expectedPods - maxUnavailable; percentages of the
+// PDB's expected pods), or, without one, whether any pod is left at all.
+function pdbRequired(p, pods) {
+  const expected = p.expected_pods || pods;
+  const num = (v) => (typeof v === "string" && v.endsWith("%") ? Math.ceil(parseFloat(v) / 100 * expected) : Number(v));
+  if (p.min_available !== null && p.min_available !== undefined) return num(p.min_available);
+  if (p.max_unavailable !== null && p.max_unavailable !== undefined) {
+    const v = p.max_unavailable;
+    return expected - (typeof v === "string" && v.endsWith("%") ? Math.floor(parseFloat(v) / 100 * expected) : Number(v));
+  }
+  return 0;
+}
+function nPlusOne(a, kind, pdbs) {
+  if (kind === "DaemonSet" || kind === "StaticPod" || a.pods === 0) return { level: null, text: "–", detail: "one pod per node by design" };
+  const sp = spread(a, kind);
+  const worst = sp.rows.length ? sp.rows[0] : ["", 0];
+  const remaining = a.pods - worst[1];
+  const required = pdbs.length ? Math.max(...pdbs.map((p) => pdbRequired(p, a.pods))) : null;
+  const rule = pdbs.map((p) => `${p.name}: ${p.min_available !== null && p.min_available !== undefined ? `minAvailable ${p.min_available}` : `maxUnavailable ${p.max_unavailable}`} (${f0.format(p.disruptions_allowed)} disruption${p.disruptions_allowed === 1 ? "" : "s"} allowed now)`).join("; ");
+  const base = `If ${worst[0] || "its node"} fails: ${f0.format(remaining)} of ${f0.format(a.pods)} pods left`;
+  if (remaining <= 0) return { level: "critical", text: "outage", detail: `${base} · outage${rule ? ` · ${rule}` : ""}` };
+  if (required !== null && remaining < required) return { level: "warning", text: `PDB breaks (${f0.format(remaining)} < ${f0.format(required)})`, detail: `${base}, below the budget's ${f0.format(required)} · ${rule}` };
+  if (required === null) return { level: "good", text: "stays up · no PDB", detail: `${base} · no PodDisruptionBudget selects these pods` };
+  return { level: "good", text: "ok", detail: `${base}, budget needs ${f0.format(required)} · ${rule}` };
+}
+function pdbsOf(pods) {
+  const names = new Set();
+  for (const p of pods) for (const n of p.pdbs || []) names.add(`${p.ns}/${n}`);
+  return [...names].map((k) => S.pdbs.get(k)).filter(Boolean);
+}
+// the whole workload (every node), for the spread and N+1 figures: the view may be inside one node
+function wholeWorkload(ns, wl) {
+  const a = newAgg(wl, wl);
+  const pods = [];
+  for (const p of S.pods.values()) if (p.ns === ns && wlKey(p) === wl) { addPod(a, p); pods.push(p); }
+  return { a, pods, pdbs: pdbsOf(pods) };
+}
+function spreadText(sp) {
+  const used = sp.counts.filter((c) => c > 0);
+  return `${used.length}${sp.total ? ` of ${sp.total}` : ""} · ${used.slice(0, 6).join("/")}${used.length > 6 ? "/…" : ""}`;
 }
 function groupBy(pods, keyFn, labelFn) {
   const m = new Map();
@@ -540,10 +602,22 @@ const COLS = {
   cpu_lim: { h: "CPU lim", v: (a) => (a.cpu_lim ? cpu(a.cpu_lim) : "–"), sort: (a) => a.cpu_lim },
   cpu_use: { h: "CPU used", v: (a) => (a.used_known ? cpu(a.cpu_use) : "–"), sort: (a) => a.cpu_use },
   cpu_bar: { h: "", bar: "cpu" },
+  nodes: { h: "Nodes", sort: (a) => a.nodes.size, cell: (a) => {
+    const sp = spread(a, a.kind);
+    const c = el("span", { text: a.kind ? spreadText(sp) : `${f0.format(sp.used)}${sp.total ? ` of ${sp.total}` : ""}` });
+    attachTip(c, (e) => showTip(e, `${a.label} · pods per node`, sp.rows.filter((r) => r[1] > 0 || sp.rows.length <= 8).map((r) => [null, r[0], f0.format(r[1])])));
+    return el("span", {}, c, sp.uneven ? el("span", { class: "badge", style: "margin-left:8px" }, el("i", { style: "background:var(--status-warning)" }), `uneven (skew ${sp.skew})`) : null);
+  } },
   mem_req: { h: "Mem req", v: (a) => mem(a.mem_req), sort: (a) => a.mem_req },
   mem_lim: { h: "Mem lim", v: (a) => (a.mem_lim ? mem(a.mem_lim) : "–"), sort: (a) => a.mem_lim },
   mem_use: { h: "Mem used", v: (a) => (a.used_known ? mem(a.mem_use) : "–"), sort: (a) => a.mem_use },
   mem_bar: { h: "", bar: "mem" },
+  n1: { h: "N+1", sort: (a) => ({ critical: 0, warning: 1, good: 2 }[a.n1 && a.n1.level] ?? 3), cell: (a) => {
+    const v = a.n1;
+    const c = el("span", { class: "badge" }, v.level ? el("i", { style: `background:var(--status-${v.level})` }) : null, v.text);
+    attachTip(c, (e) => showTip(e, `${a.label} · N+1`, [[null, v.detail, ""]]));
+    return c;
+  } },
 };
 function renderTable(rows, ref, { cols, nameCell, onRow, defaultSort = "mem_req" }) {
   const [sortKey, dir] = view.sort || [defaultSort, -1];
@@ -563,6 +637,7 @@ function renderTable(rows, ref, { cols, nameCell, onRow, defaultSort = "mem_req"
       const c = COLS[k];
       if (k === "name") return el("td", { class: "l" }, nameCell(a));
       if (c.bar) return el("td", { class: "bar-cell" }, bar(a, c.bar, ref[c.bar], `${a.label} · ${c.bar === "cpu" ? "CPU" : "Memory"}`));
+      if (c.cell) return el("td", { class: "l" }, c.cell(a));
       return el("td", { text: c.v(a) });
     }));
     if (onRow) { tr.addEventListener("click", () => onRow(a)); tr.tabIndex = 0; tr.addEventListener("keydown", (e) => { if (e.key === "Enter") onRow(a); }); }
@@ -570,7 +645,7 @@ function renderTable(rows, ref, { cols, nameCell, onRow, defaultSort = "mem_req"
   }));
   return el("div", { class: "table-wrap" }, el("table", {}, thead, tbody));
 }
-const LIST_COLS = ["name", "pods", "cpu_req", "cpu_lim", "cpu_use", "cpu_bar", "mem_req", "mem_lim", "mem_use", "mem_bar"];
+const LIST_COLS = ["name", "pods", "nodes", "n1", "cpu_req", "cpu_lim", "cpu_use", "cpu_bar", "mem_req", "mem_lim", "mem_use", "mem_bar"];
 
 function renderList(pods, ref, lvl) {
   let rows, title, nameCell, onRow;
@@ -587,7 +662,7 @@ function renderList(pods, ref, lvl) {
     onRow = (a) => setView({ node: view.node, project: view.project, ns: a.key });
   } else if (lvl === "workloads") {
     rows = groupBy(pods, wlKey, (p) => p.owner);
-    for (const a of rows) a.kind = a.key.split("/")[0];
+    for (const a of rows) { a.kind = a.key.split("/")[0]; const w = wholeWorkload(view.ns, a.key); a.n1 = nPlusOne(w.a, a.kind, w.pdbs); }
     title = plural(rows.length, "workload");
     nameCell = (a) => el("span", {}, el("span", { class: "kind", text: KIND_LABEL[a.kind] || a.kind }), a.label);
     onRow = (a) => setView({ node: view.node, project: view.project, ns: view.ns, wl: a.key });
@@ -605,7 +680,8 @@ function renderList(pods, ref, lvl) {
     onRow = (a) => setView({ node: view.node, project: view.project, ns: view.ns, wl: view.wl, pod: a.label });
   }
   $("#levelTitle").textContent = title;
-  const cols = lvl === "pods" ? LIST_COLS.filter((c) => c !== "pods") : LIST_COLS;
+  // the Nodes column only where the scope spans nodes (project view); inside one node every pod is on that node
+  const cols = LIST_COLS.filter((c) => !(lvl === "pods" && c === "pods") && !(c === "nodes" && (view.node || lvl === "pods")) && !(c === "n1" && lvl !== "workloads"));
   // deep down, a workload is a sliver of the node: optionally draw the bars against the largest row instead
   const largest = { cpu: Math.max(0, ...rows.map((a) => Math.max(a.cpu_req, a.cpu_lim, a.cpu_use))), mem: Math.max(0, ...rows.map((a) => Math.max(a.mem_req, a.mem_lim, a.mem_use))), label: "largest row" };
   const barRef = view.scale === "max" ? largest : ref;
@@ -613,7 +689,34 @@ function renderList(pods, ref, lvl) {
     el("button", { type: "button", text: "allocatable", "aria-pressed": String(view.scale !== "max"), onclick: () => { view.scale = "alloc"; render(); } }),
     el("button", { type: "button", text: "largest row", "aria-pressed": String(view.scale === "max"), onclick: () => { view.scale = "max"; render(); } }));
   $("#levelSub").replaceChildren(`Bars against the ${barRef.label}${usageKnown() ? "" : " · usage n/a (no metrics-server)"}`, scale);
-  $("#content").replaceChildren(rows.length ? renderTable(rows, barRef, { cols, nameCell, onRow }) : el("div", { class: "empty", text: "No pods here any more" }));
+  $("#content").replaceChildren(...[lvl === "pods" ? renderSpread() : null,
+    rows.length ? renderTable(rows, barRef, { cols, nameCell, onRow }) : el("div", { class: "empty", text: "No pods here any more" })].filter(Boolean));
+}
+
+// pods of this workload per node, over all nodes (also when the view is inside one node): 9 replicas on 3 nodes
+// should read 3/3/3, not 8/1/0
+function renderSpread() {
+  const [kind] = view.wl.split("/");
+  const { a, pdbs } = wholeWorkload(view.ns, view.wl);
+  const sp = spread(a, kind);
+  if (!sp.rows.length || a.pods < 1) return null;
+  const n1 = nPlusOne(a, kind, pdbs);
+  const max = Math.max(1, ...sp.counts);
+  const ideal = sp.total ? a.pods / sp.total : 0;
+  const last = sp.rows[sp.rows.length - 1];
+  const note = kind === "DaemonSet" ? "one pod per node by design"
+    : sp.uneven ? `uneven: ${sp.counts[0]} on ${sp.rows[0][0]}, ${last[1]} on ${last[0]} (skew ${sp.skew}; even would be about ${f1.format(ideal)} per node)`
+    : `even (skew ${sp.skew}, about ${f1.format(ideal)} per node)`;
+  return el("div", { class: "spread" },
+    el("div", { class: "section-head" }, el("div", {}, el("h2", { text: `${plural(a.pods, "pod")} on ${plural(sp.counts.filter((c) => c > 0).length, "node")} of ${sp.total}` }),
+      el("div", { class: `sub${sp.uneven ? " warn" : ""}`, text: (sp.uneven ? "⚠ " : "") + note }),
+      el("div", { class: "sub", style: "margin-top:4px" }, el("span", { class: "badge" }, n1.level ? el("i", { style: `background:var(--status-${n1.level})` }) : null, el("b", { text: "N+1: " }), n1.detail),
+        pdbs.length ? "" : (n1.level ? " · add a PodDisruptionBudget to protect it from voluntary disruptions (drains, upgrades)" : "")))),
+    el("div", { class: "spread-rows" }, ...sp.rows.map(([node, n]) => el("div", { class: "spread-row" },
+      el("span", { class: "muted", text: node }),
+      el("div", { class: "bar" }, n ? el("div", { class: `fill${sp.uneven && n === sp.counts[0] ? " over" : ""}`, style: `width:${n / max * 100}%` }) : null,
+        ideal > 0 ? el("div", { class: "lim", style: `left:calc(${Math.min(100, ideal / max * 100)}% - 1px)` }) : null),
+      el("span", { class: "v", text: f0.format(n) })))));
 }
 
 function renderContainers(pods) {

@@ -273,7 +273,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `Resource Allocation` | Menu entries in the Rancher UI that open the dashboard (and the planners) through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists. With a group, the side menu shows one entry that opens a page with a card per link; `""` puts each link in the side menu directly |
 | `rancher.navLink.icons.report` / `.live` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
-| `live.enabled` | `true` | Live view at `/live` (and its menu entry): the pod follows nodes, namespaces and pods with watches and polls metrics-server; `false` passes `--no-live` and grants no `watch` |
+| `live.enabled` | `true` | Live view at `/live` (and its menu entry): the pod follows nodes, namespaces, pods and PodDisruptionBudgets with watches and polls metrics-server; `false` passes `--no-live` and grants no `watch` |
 | `live.metricsInterval` | `15` | Seconds between metrics-server usage snapshots for the live view (at least 5) |
 | `rancher.fleetView.enabled` | `true` | Rancher local cluster only: the dashboard lists all Rancher clusters and shows each downstream cluster's report (loaded by the browser through Rancher's proxy; passes `--downstream-report`). Needs the chart on the downstream clusters |
 | `rancher.fleetView.service` | `""` | Where the chart's Service is on the downstream clusters, `NAMESPACE/SERVICE:PORT`; `""` = from `rancher.deployDownstream.namespace` / `.releaseName` and `service.port` (`resource-report/resource-report-cluster-resource-report:80`) |
@@ -291,7 +291,7 @@ These are created by the chart. The dashboard's are all read-only; the planners 
 ConfigMaps.
 
 - **ClusterRole:** `get`/`list` on nodes, namespaces, pods, resourcequotas, limitranges, HPAs and `metrics.k8s.io` pods
-  and nodes; with `live.enabled` also `watch` on nodes, namespaces and pods;
+  and nodes; with `live.enabled` also `watch` on nodes, namespaces and pods and `get`/`list`/`watch` on PodDisruptionBudgets;
   with `rancher.isLocalCluster` also on `projects`, `clusters` and `nodes.management.cattle.io` (node sizes for the planner's N+1 check).
 - **Role in the Prometheus namespace:** `get` on `services/proxy` for the configured Prometheus service only.
   It is only created when the service proxy is used.

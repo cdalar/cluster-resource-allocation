@@ -17,10 +17,13 @@ rules:
     resources: [nodes, namespaces, pods, resourcequotas, limitranges]
     verbs: [get, list]
   {{- if dig "enabled" true (.Values.live | default dict) }}
-  # live view: follows nodes, namespaces and pods
+  # live view: follows nodes, namespaces, pods and PodDisruptionBudgets
   - apiGroups: [""]
     resources: [nodes, namespaces, pods]
     verbs: [watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
   {{- end }}
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]

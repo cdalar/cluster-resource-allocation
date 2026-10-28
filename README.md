@@ -21,7 +21,7 @@ per stream, several namespaces each) and AKS clusters.
 | | |
 |---|---|
 | 📊 **Resource dashboard** | Installed on every cluster. Shows requests, limits and P95 usage per cluster, Rancher Project and namespace, and requests against the ResourceQuota per namespace and per project (which namespaces have one, how full it is, which are over). Also shows the room left for projects if the largest node fails (N+1), and containers that break the resource standards. CSV export. On the Rancher local cluster it also shows all downstream clusters: an overview and each cluster's dashboard, loaded through Rancher's proxy with your Rancher login (no token stored). |
-| 📡 **Live view** | Part of the dashboard, on every cluster. Drills from the nodes (or the Rancher Projects) down to namespaces, workloads, pods and containers, with requests, limits and current usage against the allocatable, and updates itself as pods come and go (Kubernetes watches, metrics-server). |
+| 📡 **Live view** | Part of the dashboard, on every cluster. Drills from the nodes (or the Rancher Projects) down to namespaces, workloads, pods and containers, with requests, limits and current usage against the allocatable, and updates itself as pods come and go (Kubernetes watches, metrics-server). Per workload: how its pods are spread over the nodes, and an N+1 check against its PodDisruptionBudget (if the node with most of its pods fails, is the budget still met, or is it an outage?). |
 | 🧮 **Allocation planner** | Runs on the Rancher local cluster. For each project you set a monthly budget and a CPU and memory quota per cluster. The planner prices the quotas with unit rates and checks them against the budget and each cluster's limit for projects. It also has a what-if calculator for new applications. |
 | 📦 **Capacity planner** | The same planner without money. Each project gets a CPU and memory envelope, which you split into a quota per cluster. |
 | 📐 **Design & process** | Resource standards, the allocation model (budget → quota), technical design, process (RACI), rollout and ADRs. |
@@ -56,6 +56,10 @@ plan ConfigMap and one Fleet Bundle that publishes Rancher Project names to the 
 <b>Live view</b>: every node with its requests, limits and current usage against the allocatable, sorted by memory requested; a node whose limits exceed its allocatable is flagged. Updated as the cluster changes.</td>
 <td width="50%"><a href="docs/images/live-workloads.png"><img src="docs/images/live-workloads.png" alt="Live view: workloads in a namespace"></a><br>
 <b>Drill-down</b>: node → project → namespace → workload → pod → container (or from the project side), each level against the same allocatable, so a Deployment's share of a node is read at a glance.</td>
+</tr>
+<tr>
+<td colspan="2"><a href="docs/images/live-spread.png"><img src="docs/images/live-spread.png" alt="Live view: a workload's pods per node and its N+1 check"></a><br>
+<b>Spread and N+1</b>: a workload's pods per node (7 of 8 on one node: uneven) and what a node failure means for its PodDisruptionBudget (1 pod left, budget needs 6: the PDB breaks).</td>
 </tr>
 <tr>
 <td colspan="2"><a href="docs/images/dashboard-dark.png"><img src="docs/images/dashboard-dark.png" alt="Dashboard in dark mode"></a><br>

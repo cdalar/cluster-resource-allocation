@@ -5,7 +5,8 @@ name: chart
 #   up to 0.6.2 the chart was named cluster-resource-report and lives at charts/cluster-resource-report)
 #   tag vX.Y.Z   -> chart version X.Y.Z (tag must match the chart version and appVersion)
 #   manual run   -> publishes the chart of an existing release tag (input `tag`), e.g. to republish it
-# Then copied to Docker Hub as <ns>/cluster-resource-report-chart (dockerhub.yml).
+# Then copied to Docker Hub as <ns>/cluster-resource-report-chart (dockerhub.yml), and a GitHub Release is created
+# for the tag with the chart tarball attached and notes generated from the merged pull requests (release job).
 on:
   push:
     tags: ["v*"]
@@ -71,3 +72,39 @@ jobs:
       tag: ${{ inputs.tag || github.ref_name }}
       what: chart
     secrets: inherit
+
+  release:
+    # The GitHub Release for the tag: the chart tarball as asset, notes from the pull requests since the previous
+    # release plus the image and chart coordinates. A manual run for a tag that already has a release leaves it alone.
+    needs: chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: azure/setup-helm@v5
+
+      - name: Package
+        run: helm package "$CHART_DIR" --destination dist
+
+      - name: Create the release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release $TAG exists; not touching it"; exit 0
+          fi
+          version="${TAG#v}"
+          owner="${{ github.repository_owner }}"
+          hub="${{ vars.DOCKERHUB_NAMESPACE || 'cdalar' }}"
+          cat > notes.md <<EOF
+          Image: \`ghcr.io/$owner/cluster-resource-report:$version\` (copy: \`docker.io/$hub/cluster-resource-report:$version\`)
+          Chart: \`helm install resource-report oci://ghcr.io/$owner/charts/cluster-resource-report-chart --version $version\` (copy: \`oci://registry-1.docker.io/$hub/cluster-resource-report-chart\`)
+
+          EOF
+          gh release create "$TAG" dist/*.tgz --repo "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag \
+            --notes-file notes.md --generate-notes

@@ -51,3 +51,5 @@ several namespaces each), plus some AKS clusters.
   on a tag, `image.yml` pushes the image and `.github/workflows/chart.yml` pushes the chart to
   `oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`; both then call `dockerhub.yml`, which copies them to
   Docker Hub (`cdalar/cluster-resource-report`, `cdalar/cluster-resource-report-chart`).
+  `chart.yml` also creates the GitHub Release for the tag (chart tarball attached, notes generated from the merged
+  pull requests); releases are never created by hand.

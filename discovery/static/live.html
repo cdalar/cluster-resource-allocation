@@ -592,7 +592,7 @@ function renderNodes() {
   const note = unscheduled.length ? el("div", { class: "sub", style: "margin-top:12px" },
     `${plural(unscheduled.length, "pod")} ${unscheduled.length === 1 ? "is" : "are"} not scheduled on any node (${cpu(unscheduled.reduce((s, p) => s + p.cpu_req, 0))} cores, ${mem(unscheduled.reduce((s, p) => s + p.mem_req, 0))} requested). `,
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); setView({ by: "project", project: null }); } }, "See them by project")) : null;
-  $("#content").replaceChildren(nodes.length ? el("div", { class: "nodes" }, ...cards) : el("div", { class: "empty", text: "No nodes yet" }), note);
+  $("#content").replaceChildren(...[nodes.length ? el("div", { class: "nodes" }, ...cards) : el("div", { class: "empty", text: "No nodes yet" }), note].filter(Boolean));
   return unscheduled;
 }
 

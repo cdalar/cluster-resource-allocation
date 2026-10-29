@@ -205,6 +205,11 @@ drills from the nodes (or the Rancher Projects) down to namespaces, workloads, p
 limits and current usage against the allocatable, and updates itself as pods come and go (Server-Sent Events, with a
 poll every 5 s when a proxy does not pass the stream).
 
+**Text reports** (with `live.enabled`): **Resource Allocation → Text reports** (or `/text`) shows the same state as
+plain tables: per node (optionally with one namespace's pods per node), per namespace, per workload in a namespace,
+and the top pods by memory or CPU request. `/api/live/text?report=nodes|namespaces|workloads|pods&ns=...&sort=mem|cpu`
+returns one as plain text.
+
 Anyone who can open the dashboard sees names and sizes of all namespaces and projects in the cluster.
 
 ## 4. Allocation planner (Rancher local cluster, on by default)
@@ -273,7 +278,7 @@ a logged-in browser save a plan through Rancher's proxy.
 | `planner.enabled` | `true` | Allocation planner at `/planner`; runs only with `rancher.isLocalCluster` or `rancher.localKubeconfigSecret`, skipped elsewhere; plan in a ConfigMap |
 | `rancher.navLink.enabled` / `.label` / `.group` | `true` / `Resource report` / `Resource Allocation` | Menu entries in the Rancher UI that open the dashboard (and the planners) through Rancher's proxy; only created where the NavLink CRD (`ui.cattle.io/v1`) exists. With a group, the side menu shows one entry that opens a page with a card per link; `""` puts each link in the side menu directly |
 | `rancher.navLink.icons.report` / `.live` / `.planner` / `.capacity` | `""` | Card images: `""` = the chart's icons (`icons/*.svg`, embedded), or an image URL / `data:` URI |
-| `live.enabled` | `true` | Live view at `/live` (and its menu entry): the pod follows nodes, namespaces, pods and PodDisruptionBudgets with watches and polls metrics-server; `false` passes `--no-live` and grants no `watch` |
+| `live.enabled` | `true` | Live view at `/live` and text reports at `/text` (and their menu entries): the pod follows nodes, namespaces, pods and PodDisruptionBudgets with watches and polls metrics-server; `false` passes `--no-live` and grants no `watch` |
 | `live.metricsInterval` | `15` | Seconds between metrics-server usage snapshots for the live view (at least 5) |
 | `rancher.fleetView.enabled` | `true` | Rancher local cluster only: the dashboard lists all Rancher clusters and shows each downstream cluster's report (loaded by the browser through Rancher's proxy; passes `--downstream-report`). Needs the chart on the downstream clusters |
 | `rancher.fleetView.service` | `""` | Where the chart's Service is on the downstream clusters, `NAMESPACE/SERVICE:PORT`; `""` = from `rancher.deployDownstream.namespace` / `.releaseName` and `service.port` (`resource-report/resource-report-cluster-resource-report:80`) |
@@ -314,6 +319,7 @@ ConfigMaps.
 | `/api/clusters` | Rancher local cluster with `rancher.fleetView`: the clusters Rancher manages (id, name, ready), read from `clusters.management.cattle.io` and cached for a minute. The page then reads each downstream cluster's `/api/report` through Rancher's proxy itself |
 | `/download/{projects,namespaces,clusters}.csv` | CSV export |
 | `/live`, `/api/live/snapshot`, `/api/live/changes?since=N`, `/api/live/stream` | Live view page, its whole state (gzip), the changes after seq `N`, and the same as Server-Sent Events, with `live.enabled` |
+| `/text`, `/api/live/text?report=nodes\|namespaces\|workloads\|pods&ns=...&sort=mem\|cpu&top=N` | Text reports page and one report as `text/plain`, with `live.enabled` |
 | `/healthz` | Liveness and readiness |
 | `/planner`, `/api/planner` (`GET`, `PUT`), `/api/planner/export.yaml`, `/api/planner/history[/<n>]` | Allocation planner, with `planner.enabled` |
 | `/capacity`, `/api/capacity` (`GET`, `PUT`), `/api/capacity/export.yaml`, `/api/capacity/history[/<n>]` | Capacity planner, with `capacityPlanner.enabled` |

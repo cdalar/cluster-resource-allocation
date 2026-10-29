@@ -21,6 +21,9 @@ Kubernetes watches, usage from metrics-server every --live-metrics-interval seco
   GET  /api/live/changes?since=N what changed after seq N ({"reset": true} = reload the snapshot)
   GET  /api/live/stream?since=N  the same as Server-Sent Events (event: changes, id: seq), a few seconds apart,
                                  an "event: ping" every 15 s while nothing changes
+  GET  /text                     plain-text reports from the same state (textreport.py)
+  GET  /api/live/text?report=nodes|namespaces|workloads|pods&ns=<namespace>&sort=mem|cpu&top=N
+                                 one report as text/plain (workloads needs ns; nodes and pods take it optionally)
 
 With --planner (Rancher local cluster only), also the allocation planner (planner.py):
   GET  /planner                  planner page
@@ -51,6 +54,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import discover
 import live
 import planner
+import textreport
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 CSV_NAMES = ("clusters", "projects", "namespaces")
@@ -353,6 +357,8 @@ def make_handler(collector, planner_backend=None, capacity_backend=None, rancher
                 self._report()
             elif path == "/live":
                 self._page("live.html")
+            elif path == "/text":
+                self._page("text.html")
             elif path.startswith("/api/live/"):
                 if live_state is None:
                     return self._json(404, {"error": "live view is off (--no-live or --no-collect)"})
@@ -368,6 +374,18 @@ def make_handler(collector, planner_backend=None, capacity_backend=None, rancher
                     self._json(200, live_state.changes(since))
                 elif path == "/api/live/stream":
                     self._live_stream(since)
+                elif path == "/api/live/text":
+                    first = lambda k, d=None: (query.get(k) or [d])[0]  # noqa: E731
+                    try:
+                        top = int(first("top", textreport.DEFAULT_TOP))
+                    except ValueError:
+                        return self._send(400, "top must be a number\n", "text/plain; charset=utf-8")
+                    try:
+                        text = textreport.render(live_state.snapshot(), first("report", "nodes"), first("ns"),
+                                                 first("sort", "mem"), top)
+                    except textreport.ReportError as e:
+                        return self._send(400, f"{e}\n", "text/plain; charset=utf-8")
+                    self._send(200, text, "text/plain; charset=utf-8")
                 else:
                     self._send(404, "not found", "text/plain")
             elif path == "/api/clusters":

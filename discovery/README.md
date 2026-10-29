@@ -144,6 +144,20 @@ the page falls back to polling when a proxy does not pass the stream. Project na
 report (so a new namespace shows its project id until the next collection). The live view follows one cluster:
 with several `--context`, pass `--no-live`.
 
+**Text reports** (`/text`, `textreport.py`; with the live view): the live state as plain fixed-width tables, the
+same ones people build with `kubectl get pods -A -o json | jq`, without another read of the cluster.
+`/api/live/text?report=...` returns one as `text/plain` (`curl`-friendly), with `sort=mem|cpu`:
+
+| `report` | Content |
+|---|---|
+| `nodes` (default) | Per node: pods, allocatable, requested and limit memory (`!` when limits exceed the allocatable), memory used now, CPU requested %. With `ns=<namespace>`, also that namespace's pods and memory request per node |
+| `namespaces` | Per namespace (with its Rancher Project): pods, memory requested / limits / used, CPU requested; cluster total last |
+| `workloads` | `ns=<namespace>` required: per workload, pods, nodes they run on, memory and CPU per pod and in total |
+| `pods` | The `top=N` (default 30) pods with most memory (or CPU) requested, with node, phase, limit and usage; optional `ns` |
+
+Pods counted are those the live view keeps (every pod that has not finished). The page refreshes every 15 s,
+and a namespace in the namespaces report opens its workloads.
+
 To look at a saved report locally without cluster access:
 
 ```bash

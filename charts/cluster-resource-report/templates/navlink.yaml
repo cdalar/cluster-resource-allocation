@@ -42,6 +42,27 @@ spec:
     scheme: http
     port: {{ .Values.service.port | quote }}
     path: /live
+---
+apiVersion: ui.cattle.io/v1
+kind: NavLink
+metadata:
+  name: {{ include "crr.fullname" . }}-text
+  labels:
+    {{- include "crr.labels" . | nindent 4 }}
+spec:
+  label: "Text reports"
+  {{- with dig "navLink" "group" "" .Values.rancher }}
+  group: {{ . | quote }}
+  {{- end }}
+  iconSrc: {{ include "crr.navLinkIcon" (list . "report") | quote }}
+  description: Plain-text tables of requests, limits and usage per node, namespace, workload and pod
+  target: _blank
+  toService:
+    namespace: {{ .Release.Namespace }}
+    name: {{ include "crr.fullname" . }}
+    scheme: http
+    port: {{ .Values.service.port | quote }}
+    path: /text
 {{- end }}
 {{- if include "crr.planner" . }}
 ---

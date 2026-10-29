@@ -37,7 +37,7 @@ several namespaces each), plus some AKS clusters.
   (`rancher.deployDownstream`). Never other workloads, quotas or Rancher objects.
   The dashboard page is self-contained (no CDN) for air-gapped clusters.
 - `allocation/` uses the Python standard library and `kubectl get` only (its own YAML subset reader) and writes files only, never to a cluster.
-- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner test_live`;
+- Run tests after changing the code: `cd discovery && python3 -m unittest -v test_discover test_server test_planner test_live test_textreport`;
   for `allocation/`: `cd allocation && python3 -m unittest -v test_generate`.
   After changing the chart: `helm lint charts/cluster-resource-report`.
 - `policies/remove-cpu-limits/` is Go built with TinyGo (`make test` for unit tests; `make e2e-tests` needs tinygo, kwctl, bats, jq).

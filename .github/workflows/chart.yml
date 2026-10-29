@@ -91,7 +91,9 @@ jobs:
       - uses: azure/setup-helm@v5
 
       - name: Package
-        run: helm package "$CHART_DIR" --destination dist
+        run: |
+          helm package "$CHART_DIR" --destination dist
+          python3 discovery/build_live_dashboard.py dist/live-dashboard.py
 
       - name: Create the release
         run: |
@@ -103,8 +105,9 @@ jobs:
           hub="${{ vars.DOCKERHUB_NAMESPACE || 'cdalar' }}"
           cat > notes.md <<EOF
           Image: \`ghcr.io/$owner/cluster-resource-report:$version\` (copy: \`docker.io/$hub/cluster-resource-report:$version\`)
+          Single file (no install): \`live-dashboard.py\` below, \`python3 live-dashboard.py --context <cluster>\`
           Chart: \`helm install resource-report oci://ghcr.io/$owner/charts/cluster-resource-report-chart --version $version\` (copy: \`oci://registry-1.docker.io/$hub/cluster-resource-report-chart\`)
 
           EOF
-          gh release create "$TAG" dist/*.tgz --repo "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag \
+          gh release create "$TAG" dist/*.tgz dist/live-dashboard.py --repo "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag \
             --notes-file notes.md --generate-notes

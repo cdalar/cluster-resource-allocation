@@ -147,6 +147,7 @@ flowchart LR
 | Tool | Purpose |
 |---|---|
 | [discovery](discovery/README.md) | Baseline of current requests, limits and usage per cluster / project / namespace (CLI) |
+| [live-dashboard.py](discovery/README.md#live-dashboard-without-installing-anything-single-file) | The live view and text reports as one Python file for a laptop or jump host with `kubectl`: nothing installed in the cluster, read-only; attached to every GitHub Release |
 | [cluster-resource-report chart](charts/cluster-resource-report/README.md) | In-cluster collector with web dashboard, installed per cluster; chart `cluster-resource-report-chart` on Docker Hub (`cdalar/cluster-resource-report-chart`) and GHCR (`oci://ghcr.io/cdalar/charts/cluster-resource-report-chart`), image `cdalar/cluster-resource-report` on both |
 | [Allocation planner](discovery/README.md#allocation-planner) ([user guide](guides/allocation-planner.md)) | Page next to the dashboard on the Rancher local cluster to plan budgets and quotas per project and cluster, check them against budget and headroom, and export allocation files (plans only, applies nothing); with a what-if calculator for a new application (fits, or nodes and Rancher licences to add, with N+1 and platform overhead) |
 | [Capacity planner](guides/allocation-planner.md#capacity-planner-without-money) | The allocation planner without money: a CPU and memory envelope per project, split into quota per cluster, with the same cluster checks |
@@ -159,7 +160,8 @@ flowchart LR
 ```
 docs/        design and process docs, ADRs, screenshots (docs/images/)
 guides/      user guides for the tools
-discovery/   discover.py (CLI), server.py + static/ (dashboard, planners), publish_rancher_names.py, tests
+discovery/   discover.py (CLI), server.py + static/ (dashboard, planners), build_live_dashboard.py (single-file live view),
+             publish_rancher_names.py, tests
 allocation/  generate.py (allocation files -> quotas), examples/, tests
 charts/      Helm chart cluster-resource-report
 policies/    Kubewarden policies (Go, TinyGo): remove-cpu-limits

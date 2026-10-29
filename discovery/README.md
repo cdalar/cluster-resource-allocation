@@ -164,6 +164,29 @@ To look at a saved report locally without cluster access:
 python3 server.py --no-collect --data-dir <dir-with-report.json> --listen 127.0.0.1:8080
 ```
 
+### Live dashboard without installing anything (single file)
+
+`build_live_dashboard.py` writes `build/live-dashboard.py`: the live view and the text reports as one Python file
+(standard library only, pages embedded), for a laptop or jump host that has `kubectl` and a kubeconfig. It is
+the way to look at a production or air-gapped cluster without the chart, Fleet or any object in the cluster: the
+file only runs the read-only watches and metrics-server reads described above, and writes nothing. Every GitHub
+Release carries it as `live-dashboard.py`.
+
+```bash
+python3 build_live_dashboard.py                       # -> build/live-dashboard.py (or download it from a release)
+python3 live-dashboard.py --context prod-01           # http://127.0.0.1:8080/ (live view), /text, /api/live/text?report=nodes
+python3 live-dashboard.py --context prod-01 --rancher-local-kubeconfig ~/Downloads/local.yaml   # with Project names
+```
+
+`--kubeconfig`, `--kubectl`, `--listen`, `--cluster-name`, `--live-metrics-interval`, `--system-ns-regex`,
+`--system-project-regex` and `--project-label` work as in `server.py`. Project names come from the Rancher local
+cluster (`--rancher-local-context`, `--rancher-local-kubeconfig`, `--rancher-local-self`) or the published
+ConfigMap (`--rancher-names-configmap`), re-read every 30 minutes; without them the page shows project ids. The
+kubeconfig's user needs the read verbs of [`rbac.yaml`](rbac.yaml) (nodes, namespaces, pods, PodDisruptionBudgets:
+get/list/watch; `metrics.k8s.io`: get). A Rancher-downloaded kubeconfig works as is, since it proxies through the
+Rancher server. The file is generated from `live.py`, `textreport.py`, the parts of `discover.py` they use and
+`static/live.html` / `static/text.html`; edit those and rebuild (`test_live_dashboard.py` builds and serves it).
+
 ## Project names on downstream clusters without a token
 
 Downstream clusters only carry project IDs. Instead of giving each cluster a token for the Rancher local cluster,

@@ -510,7 +510,7 @@ function renderCrumbs() {
   const c = $("#crumbs");
   const items = [];
   const root = view.by === "node" ? "All nodes" : "All projects";
-  items.push([root, {}]);
+  items.push([root, { node: null, project: null }]);
   if (view.by === "node" && view.node) items.push([view.node, { node: view.node }]);
   if (view.project !== null) items.push([projectLabel(view.project), { node: view.node, project: view.project }]);
   if (view.ns) items.push([view.ns, { node: view.node, project: view.project, ns: view.ns }]);

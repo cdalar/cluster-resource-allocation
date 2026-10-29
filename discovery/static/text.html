@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text reports</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --border: rgba(11,11,11,0.10); --accent-ink: #1c5cab; --hover: rgba(11,11,11,0.04); --status-critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --border: rgba(255,255,255,0.10); --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --border: rgba(255,255,255,0.10); --accent-ink: #86b6ef; --hover: rgba(255,255,255,0.05);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.actions, .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls { margin-bottom: 12px; }
+label { color: var(--text-secondary); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+button, select, input { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+input { width: 220px; }
+button { cursor: pointer; }
+button:hover { background: var(--hover); }
+a { color: var(--accent-ink); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; }
+pre { margin: 0; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+pre a { text-decoration: none; }
+pre a:hover { text-decoration: underline; }
+.error { color: var(--status-critical); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Text reports</h1>
+      <div class="sub">Requests, limits and usage as plain tables, from the live view's state. Namespace names are links.</div>
+    </div>
+    <div class="actions">
+      <a href="live">Live view</a>
+      <a href=".">Resource report</a>
+      <button id="theme" type="button" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div class="controls">
+    <label>Report
+      <select id="report">
+        <option value="nodes">Nodes</option>
+        <option value="namespaces">Namespaces</option>
+        <option value="workloads">Workloads in a namespace</option>
+        <option value="pods">Top pods</option>
+      </select>
+    </label>
+    <label>Namespace <input id="ns" list="ns-list" placeholder="optional for nodes / pods" autocomplete="off"></label>
+    <datalist id="ns-list"></datalist>
+    <label>Sort
+      <select id="sort"><option value="mem">Memory</option><option value="cpu">CPU</option></select>
+    </label>
+    <label id="top-wrap">Top <input id="top" type="number" min="1" max="1000" value="30" style="width:80px"></label>
+    <label><input id="auto" type="checkbox" checked style="width:auto"> Refresh every 15 s</label>
+    <button id="copy" type="button">Copy</button>
+    <a id="raw" href="#" target="_blank" rel="noopener">Plain text</a>
+  </div>
+
+  <div class="card"><pre id="out">Loading…</pre></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const NS_REPORTS = { workloads: true, nodes: true, pods: true };
+let timer = null, nsLoaded = false;
+
+function params() {
+  const p = new URLSearchParams({ report: $("#report").value, sort: $("#sort").value });
+  const ns = $("#ns").value.trim();
+  if (ns && NS_REPORTS[$("#report").value]) p.set("ns", ns);
+  if ($("#report").value === "pods") p.set("top", $("#top").value || "30");
+  return p;
+}
+
+function syncHash() {
+  history.replaceState(null, "", "#" + params().toString());
+}
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (p.get("report")) $("#report").value = p.get("report");
+  if (p.get("sort")) $("#sort").value = p.get("sort");
+  if (p.get("ns")) $("#ns").value = p.get("ns");
+  if (p.get("top")) $("#top").value = p.get("top");
+}
+
+function esc(s) {
+  return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+// In the namespaces report, the first column becomes a link that opens that namespace's workloads.
+function render(text, report) {
+  const lines = text.split("\n");
+  if (report !== "namespaces") return esc(text);
+  let body = false;
+  return lines.map(line => {
+    if (/^-+(\s+-+)*$/.test(line)) { body = !body ? true : false; return esc(line); }
+    const m = body && line.match(/^(\S+)(.*)$/);
+    if (!m || m[1] === "TOTAL") return esc(line);
+    return `<a href="#" data-ns="${esc(m[1])}">${esc(m[1])}</a>${esc(m[2])}`;
+  }).join("\n");
+}
+
+async function loadNamespaces() {
+  if (nsLoaded) return;
+  try {
+    const r = await fetch("api/live/text?report=namespaces");
+    if (!r.ok) return;
+    const t = await r.text(), names = [];
+    let body = false;
+    for (const line of t.split("\n")) {
+      if (/^-+(\s+-+)*$/.test(line)) { if (body) break; body = true; continue; }
+      if (body && line.trim()) names.push(line.split(/\s+/)[0]);
+    }
+    $("#ns-list").innerHTML = names.sort().map(n => `<option value="${esc(n)}">`).join("");
+    nsLoaded = true;
+  } catch (e) { /* the list is a convenience */ }
+}
+
+async function load() {
+  const report = $("#report").value;
+  $("#top-wrap").hidden = report !== "pods";
+  syncHash();
+  const url = "api/live/text?" + params().toString();
+  $("#raw").href = url;
+  if (report === "workloads" && !$("#ns").value.trim()) {
+    $("#out").textContent = "Pick a namespace (type it, or click one in the Namespaces report).";
+    return;
+  }
+  try {
+    const r = await fetch(url);
+    const t = await r.text();
+    if (!r.ok) {
+      $("#out").innerHTML = `<span class="error">${esc(r.status === 404 ? "The live view is off on this cluster (--no-live), so there are no text reports." : t)}</span>`;
+      return;
+    }
+    $("#out").innerHTML = render(t, report);
+  } catch (e) {
+    $("#out").innerHTML = `<span class="error">Could not load the report: ${esc(String(e))}</span>`;
+  }
+}
+
+function schedule() {
+  clearInterval(timer);
+  if ($("#auto").checked) timer = setInterval(load, 15000);
+}
+
+$("#out").addEventListener("click", e => {
+  const a = e.target.closest("a[data-ns]");
+  if (!a) return;
+  e.preventDefault();
+  $("#ns").value = a.dataset.ns;
+  $("#report").value = "workloads";
+  load();
+});
+for (const id of ["#report", "#sort", "#top"]) $(id).addEventListener("change", load);
+$("#ns").addEventListener("change", load);
+$("#ns").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
+$("#auto").addEventListener("change", schedule);
+$("#copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("#out").textContent); $("#copy").textContent = "Copied"; }
+  catch (e) { $("#copy").textContent = "Copy failed"; }
+  setTimeout(() => { $("#copy").textContent = "Copy"; }, 1500);
+});
+$("#theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("theme", root.dataset.theme); } catch (e) { /* storage unavailable */ }
+});
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+
+readHash();
+load();
+loadNamespaces();
+schedule();
+</script>
+</body>
+</html>

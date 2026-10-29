@@ -440,6 +440,19 @@ class LiveApi(unittest.TestCase):
         self.assertEqual(headers["Content-Encoding"], "gzip")
         self.assertEqual(json.loads(gzip.decompress(gz))["seq"], snap["seq"])
 
+    def test_text_reports(self):
+        code, headers, body = self.get("/text")
+        self.assertEqual((code, b"Text reports" in body), (200, True))
+        code, headers, body = self.get("/api/live/text?report=workloads&ns=shop&sort=cpu")
+        self.assertEqual(code, 200)
+        self.assertTrue(headers["Content-Type"].startswith("text/plain"))
+        self.assertIn("Pod/web-1", body.decode())
+        self.assertIn("250 m", body.decode())
+        self.assertIn("n1", self.get("/api/live/text")[2].decode())                   # default: nodes
+        self.assertEqual(self.get("/api/live/text?report=workloads")[0], 400)         # needs ns
+        self.assertEqual(self.get("/api/live/text?report=bogus")[0], 400)
+        self.assertEqual(self.get("/api/live/text?report=pods&top=x")[0], 400)
+
     def test_changes(self):
         seq = self.state.seq
         self.assertEqual(json.loads(self.get(f"/api/live/changes?since={seq}")[2])["seq"], seq)
